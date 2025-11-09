@@ -336,7 +336,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📸 Screenshots
 
-*Add your device photos and screenshots here*
+![sanzx official_board](https://github.com/user-attachments/assets/faf49c4c-f4d0-4add-8145-0e406226de92)
+
 
 ## 🔮 Future Plans
 
