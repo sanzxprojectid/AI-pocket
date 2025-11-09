@@ -363,7 +363,7 @@ This project is for educational purposes. Use Gemini API responsibly and within 
 
 ---
 
-**Made with ❤️ by Sanzx Project**
+**Made with ❤️ by Sanzx_Project.id**
 
 *Star ⭐ this repository if you find it useful!*
 
