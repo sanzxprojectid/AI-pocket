@@ -203,6 +203,7 @@ enum AppState {
   STATE_ESP_NOW_ADD_PEER,
   STATE_ESP_NOW_RENAME_PEER,
   STATE_ABOUT,
+  STATE_SNAKE_GAME,
   STATE_LOADING
 };
 
@@ -220,6 +221,22 @@ unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 200;
 int powerMenuSelection = 0;
 int settingsMenuSelection = 0;
+
+// Snake Game
+#define SNAKE_WIDTH 16
+#define SNAKE_HEIGHT 8
+struct SnakeSegment {
+  int x, y;
+};
+SnakeSegment snake[SNAKE_WIDTH * SNAKE_HEIGHT];
+int snakeLength;
+int foodX, foodY;
+enum Direction { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
+Direction snakeDir;
+bool gameOver;
+int score;
+int highScore;
+unsigned long lastSnakeMove;
 
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
@@ -258,6 +275,10 @@ const unsigned char ICON_DEV[] PROGMEM = {
   0x3C, 0x24, 0x04, 0x18, 0x04, 0x04, 0x3C, 0x00
 };
 
+const unsigned char ICON_SNAKE[] PROGMEM = {
+  0x00, 0x18, 0x24, 0x4C, 0x48, 0x70, 0x00, 0x00
+};
+
 // Forward declarations
 void showMainMenu();
 void showWiFiMenu();
@@ -281,6 +302,9 @@ void showESPNowPeers();
 void showESPNowAddPeer();
 void showESPNowRenamePeer();
 void showAbout();
+void initSnakeGame();
+void showSnakeGame();
+void updateSnakeGame();
 void showLoadingAnimation();
 void showProgressBar(String title, int percent);
 void displayWiFiNetworks();
@@ -580,6 +604,9 @@ void loop() {
           digitalWrite(LED_BUILTIN, devPattern < 2 || (devPattern > 4 && devPattern < 7));
         }
         break;
+      case STATE_SNAKE_GAME:
+        updateSnakeGame();
+        break;
       case STATE_MAIN_MENU:
       default:
         ledHeartbeat();
@@ -825,6 +852,137 @@ void showESPNowMenu() {
   display.print(peerCount);
   
   display.display();
+}
+
+// ========== SNAKE GAME ==========
+
+void initSnakeGame() {
+  preferences.begin("snake", true);
+  highScore = preferences.getInt("highScore", 0);
+  preferences.end();
+
+  snakeLength = 3;
+  snake[0] = {SNAKE_WIDTH / 2, SNAKE_HEIGHT / 2};
+  snake[1] = {SNAKE_WIDTH / 2 - 1, SNAKE_HEIGHT / 2};
+  snake[2] = {SNAKE_WIDTH / 2 - 2, SNAKE_HEIGHT / 2};
+
+  snakeDir = DIR_RIGHT;
+  gameOver = false;
+  score = 0;
+
+  foodX = random(SNAKE_WIDTH);
+  foodY = random(SNAKE_HEIGHT);
+
+  lastSnakeMove = millis();
+
+  showSnakeGame();
+}
+
+void showSnakeGame() {
+  display.clearDisplay();
+
+  // Draw border
+  display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  // Draw snake
+  for (int i = 0; i < snakeLength; i++) {
+    display.fillRect(snake[i].x * 8, snake[i].y * 8, 8, 8, SSD1306_WHITE);
+  }
+
+  // Draw food
+  display.fillCircle(foodX * 8 + 4, foodY * 8 + 4, 3, SSD1306_WHITE);
+
+  // Draw score
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(2, 2);
+  display.print("Score: ");
+  display.print(score);
+
+  display.setCursor(70, 2);
+  display.print("Hi: ");
+  display.print(highScore);
+
+  if (gameOver) {
+    display.setTextSize(2);
+    display.setCursor(20, 20);
+    display.print("GAME OVER");
+    display.setTextSize(1);
+    display.setCursor(10, 40);
+    display.print("SELECT to restart");
+  }
+
+  display.display();
+}
+
+void updateSnakeGame() {
+  if (gameOver) {
+    return;
+  }
+
+  if (millis() - lastSnakeMove > 200) {
+    lastSnakeMove = millis();
+
+    SnakeSegment newHead = snake[0];
+
+    switch (snakeDir) {
+      case DIR_UP:
+        newHead.y--;
+        break;
+      case DIR_DOWN:
+        newHead.y++;
+        break;
+      case DIR_LEFT:
+        newHead.x--;
+        break;
+      case DIR_RIGHT:
+        newHead.x++;
+        break;
+    }
+
+    // Wall collision
+    if (newHead.x < 0 || newHead.x >= SNAKE_WIDTH || newHead.y < 0 || newHead.y >= SNAKE_HEIGHT) {
+      gameOver = true;
+      if (score > highScore) {
+        highScore = score;
+        preferences.begin("snake", false);
+        preferences.putInt("highScore", highScore);
+        preferences.end();
+      }
+      showSnakeGame();
+      return;
+    }
+
+    // Self collision
+    for (int i = 0; i < snakeLength; i++) {
+      if (newHead.x == snake[i].x && newHead.y == snake[i].y) {
+        gameOver = true;
+        if (score > highScore) {
+          highScore = score;
+          preferences.begin("snake", false);
+          preferences.putInt("highScore", highScore);
+          preferences.end();
+        }
+        showSnakeGame();
+        return;
+      }
+    }
+
+    for (int i = snakeLength - 1; i > 0; i--) {
+      snake[i] = snake[i - 1];
+    }
+    snake[0] = newHead;
+
+    // Food collision
+    if (newHead.x == foodX && newHead.y == foodY) {
+      score++;
+      snakeLength++;
+      foodX = random(SNAKE_WIDTH);
+      foodY = random(SNAKE_HEIGHT);
+    }
+
+    showSnakeGame();
+  }
 }
 
 // ========== WIFI MENU ==========
@@ -1782,6 +1940,9 @@ void refreshCurrentScreen() {
     case STATE_ABOUT:
       showAbout();
       break;
+    case STATE_SNAKE_GAME:
+      showSnakeGame();
+      break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       drawKeyboard();
@@ -1910,7 +2071,7 @@ void drawWiFiSignalBars() {
 void handleUp() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection - 1 + 8) % 8;
+      menuSelection = (menuSelection - 1 + 9) % 9;
       showMainMenu();
       break;
     case STATE_WIFI_MENU:
@@ -1983,13 +2144,16 @@ void handleUp() {
         displayResponse();
       }
       break;
+    case STATE_SNAKE_GAME:
+      if (snakeDir != DIR_DOWN) snakeDir = DIR_UP;
+      break;
   }
 }
 
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection + 1) % 8;
+      menuSelection = (menuSelection + 1) % 9;
       showMainMenu();
       break;
     case STATE_WIFI_MENU:
@@ -2062,6 +2226,9 @@ void handleDown() {
         displayResponse();
       }
       break;
+    case STATE_SNAKE_GAME:
+      if (snakeDir != DIR_UP) snakeDir = DIR_DOWN;
+      break;
   }
 }
 
@@ -2091,6 +2258,9 @@ void handleLeft() {
         showDisplaySettings();
       }
       break;
+    case STATE_SNAKE_GAME:
+      if (snakeDir != DIR_RIGHT) snakeDir = DIR_LEFT;
+      break;
   }
 }
 
@@ -2119,6 +2289,9 @@ void handleRight() {
         preferences.end();
         showDisplaySettings();
       }
+      break;
+    case STATE_SNAKE_GAME:
+      if (snakeDir != DIR_LEFT) snakeDir = DIR_RIGHT;
       break;
   }
 }
@@ -2331,6 +2504,11 @@ void handleSelect() {
       menuSelection = 0;
       scrollOffset = 0;
       showMainMenu();
+      break;
+    case STATE_SNAKE_GAME:
+      if (gameOver) {
+        initSnakeGame();
+      }
       break;
   }
 }
@@ -3242,13 +3420,14 @@ void showMainMenu() {
     {"Battery Guard", ICON_BATTERY_GUARD},
     {"ESP-NOW", ICON_MESSAGE},
     {"Settings", ICON_SETTINGS},
+    {"Snake Game", ICON_SNAKE},
     {"About", ICON_DEV}
   };
   
   int startY = 10;
   int visibleItems = 5;
   int startIdx = max(0, menuSelection - 2);
-  int endIdx = min(8, startIdx + visibleItems);
+  int endIdx = min(9, startIdx + visibleItems);
   
   for (int i = startIdx; i < endIdx; i++) {
     int y = startY + (i - startIdx) * 10;
@@ -3322,7 +3501,12 @@ void handleMainMenuSelect() {
       currentState = STATE_SETTINGS_MENU;
       showSettingsMenu();
       break;
-    case 7: // About
+    case 7: // Snake Game
+      previousState = currentState;
+      currentState = STATE_SNAKE_GAME;
+      initSnakeGame();
+      break;
+    case 8: // About
       previousState = currentState;
       currentState = STATE_ABOUT;
       scrollOffset = 0;
