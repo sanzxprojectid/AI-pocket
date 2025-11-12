@@ -239,6 +239,7 @@ String selectedSSID = "";
 String aiResponse = "";
 int scrollOffset = 0;
 int menuSelection = 0;
+int mainMenuSelection = 0;
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 200;
 int powerMenuSelection = 0;
@@ -1428,7 +1429,8 @@ void connectToWiFi(String ssid, String password) {
     lastWiFiActivity = millis();
     
     currentState = STATE_MAIN_MENU;
-    menuSelection = 0;
+    menuSelection = mainMenuSelection;
+    menuTargetScrollY = mainMenuSelection * 22;
     showMainMenu();
   } else {
     ledError();
@@ -2320,8 +2322,8 @@ void drawWiFiSignalBars(int x_offset = 0) {
 void handleUp() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection - 1 + 10) % 10;
-      menuTargetScrollY = menuSelection * 22;
+      mainMenuSelection = (mainMenuSelection - 1 + 10) % 10;
+      menuTargetScrollY = mainMenuSelection * 22;
       menuTextScrollX = 0; // Reset text scroll
       lastMenuTextScrollTime = millis();
       break;
@@ -2407,8 +2409,8 @@ void handleUp() {
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      menuSelection = (menuSelection + 1) % 10;
-      menuTargetScrollY = menuSelection * 22;
+      mainMenuSelection = (mainMenuSelection + 1) % 10;
+      menuTargetScrollY = mainMenuSelection * 22;
       menuTextScrollX = 0; // Reset text scroll
       lastMenuTextScrollTime = millis();
       break;
@@ -2746,6 +2748,8 @@ void handleSelect() {
       break;
     case STATE_CHAT_RESPONSE:
       currentState = STATE_MAIN_MENU;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       userInput = "";
       aiResponse = "";
       scrollOffset = 0;
@@ -2753,7 +2757,8 @@ void handleSelect() {
       break;
     case STATE_ABOUT:
       currentState = STATE_MAIN_MENU;
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       scrollOffset = 0;
       showMainMenu();
       break;
@@ -3662,7 +3667,7 @@ void showMainMenu(int x_offset = 0) {
     float itemCenterY = halfScreen + (i * itemHeight) - menuScrollY;
 
     // Center of the text/icon block
-    int blockHeight = (i == menuSelection) ? 16 : 8;
+    int blockHeight = (i == mainMenuSelection) ? 16 : 8;
     float itemTopY = itemCenterY - (blockHeight / 2.0);
 
     // Only draw if visible
@@ -3671,7 +3676,7 @@ void showMainMenu(int x_offset = 0) {
     }
 
     // --- Visual Flair ---
-    if (i == menuSelection) {
+    if (i == mainMenuSelection) {
       // Draw a selector bar behind the selected item
       display.fillRoundRect(5 + x_offset, itemTopY - 3, SCREEN_WIDTH - 10, blockHeight + 6, 3, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK); // Text on top of selector is black
@@ -3682,7 +3687,7 @@ void showMainMenu(int x_offset = 0) {
     // --- Draw Icon and Text ---
     drawIcon(10, itemTopY, menuItems[i].icon, x_offset);
 
-    if (i == menuSelection) {
+    if (i == mainMenuSelection) {
       display.setTextSize(2);
       int textWidth = String(menuItems[i].text).length() * 12; // Size 2 font width approx 12
       int availableWidth = SCREEN_WIDTH - 35;
@@ -3714,7 +3719,7 @@ void updateMainMenu() {
 
   // Text scrolling logic
   if (millis() - lastMenuTextScrollTime > menuTextScrollSpeed) {
-    const char* selectedText = menuItems[menuSelection].text;
+    const char* selectedText = menuItems[mainMenuSelection].text;
     int textWidth = String(selectedText).length() * 12;
     int availableWidth = SCREEN_WIDTH - 35;
 
@@ -3735,7 +3740,7 @@ void updateMainMenu() {
 void handleMainMenuSelect() {
   TransitionType navTransition = TRANS_SLIDE_LEFT;
 
-  switch(menuSelection) {
+  switch(mainMenuSelection) {
     case 0: // Chat AI
       if (WiFi.status() == WL_CONNECTED) {
         menuSelection = 0;
@@ -3803,7 +3808,8 @@ void handleBackButton() {
     case STATE_BATTERY_GUARDIAN:
     case STATE_ESP_NOW_MENU:
     case STATE_ABOUT:
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       changeState(STATE_MAIN_MENU, backTransition);
       break;
       
@@ -3852,14 +3858,16 @@ void handleBackButton() {
       
     case STATE_API_SELECT:
     case STATE_CHAT_RESPONSE:
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       userInput = "";
       aiResponse = "";
       changeState(STATE_MAIN_MENU, backTransition);
       break;
       
     default:
-      menuSelection = 0;
+      menuSelection = mainMenuSelection;
+      menuTargetScrollY = mainMenuSelection * 22;
       changeState(STATE_MAIN_MENU, backTransition);
       break;
   }
