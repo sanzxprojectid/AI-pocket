@@ -120,10 +120,15 @@ struct Message {
 };
 Message inbox[MAX_MESSAGES];
 int inboxCount = 0;
-uint8_t peerAddresses[MAX_ESP_PEERS][6];
+
+struct PeerInfo {
+  uint8_t macAddr[6];
+  String name;
+};
+PeerInfo peers[MAX_ESP_PEERS];
 int peerCount = 0;
 String outgoingMessage = "";
-int selectedPeer = 0;
+int selectedPeer = 0; // This now refers to the index in the peers array
 
 // Breadcrumb navigation
 String breadcrumb = "";
@@ -188,7 +193,8 @@ enum AppState {
   STATE_ESP_NOW_SEND,
   STATE_ESP_NOW_INBOX,
   STATE_ESP_NOW_PEERS,
-  STATE_ESP_NOW_ADD_PEER, // New state for MAC address input
+  STATE_ESP_NOW_ADD_PEER,
+  STATE_ESP_NOW_PEER_OPTIONS, // New state for rename/delete menu
   STATE_LOADING
 };
 
@@ -267,6 +273,7 @@ void showESPNowMenu();
 void showESPNowSend();
 void showESPNowInbox();
 void showESPNowPeers();
+void showESPNowPeerOptions();
 void showLoadingAnimation();
 void showProgressBar(String title, int percent);
 void displayWiFiNetworks();
@@ -310,7 +317,10 @@ void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, 
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void initESPNow();
 void sendESPNowMessage(String message, uint8_t* targetMac);
-void addPeer(uint8_t* macAddr);
+void addPeer(uint8_t* macAddr, String name = "");
+void deletePeer(int index);
+void savePeers();
+void loadPeers();
 
 // LED Patterns
 void ledHeartbeat() {
@@ -358,7 +368,7 @@ void handleMacAddressKeyPress() {
       int MacValue[6];
       if (sscanf(mac.c_str(), "%x:%x:%x:%x:%x:%x", &MacValue[0], &MacValue[1], &MacValue[2], &MacValue[3], &MacValue[4], &MacValue[5]) == 6) {
         for(int i = 0; i < 6; ++i) macAddr[i] = (uint8_t)MacValue[i];
-        addPeer(macAddr);
+        addPeer(macAddr, ""); // Add with empty name initially
         showStatus("Peer added!", 1500);
         currentState = STATE_ESP_NOW_PEERS;
         menuSelection = 0;
@@ -463,6 +473,7 @@ void setup() {
   
   // Initialize ESP-NOW
   initESPNow();
+  loadPeers();
   
   // Auto-connect WiFi
   String savedSSID = preferences.getString("ssid", "");
@@ -744,8 +755,16 @@ void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status) {
   }
 }
 
-void addPeer(uint8_t* macAddr) {
+void addPeer(uint8_t* macAddr, String name) {
   if (peerCount >= MAX_ESP_PEERS) return;
+
+  // Cek apakah peer sudah ada
+  for (int i = 0; i < peerCount; i++) {
+    if (memcmp(peers[i].macAddr, macAddr, 6) == 0) {
+      showStatus("Peer already exists!", 1500);
+      return;
+    }
+  }
   
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, macAddr, 6);
@@ -753,8 +772,10 @@ void addPeer(uint8_t* macAddr) {
   peerInfo.encrypt = false;
   
   if (esp_now_add_peer(&peerInfo) == ESP_OK) {
-    memcpy(peerAddresses[peerCount], macAddr, 6);
+    memcpy(peers[peerCount].macAddr, macAddr, 6);
+    peers[peerCount].name = name;
     peerCount++;
+    savePeers(); // Simpan peer baru
     ledSuccess();
   } else {
     ledError();
@@ -763,6 +784,70 @@ void addPeer(uint8_t* macAddr) {
 
 void sendESPNowMessage(String message, uint8_t* targetMac) {
   esp_now_send(targetMac, (uint8_t*)message.c_str(), message.length());
+}
+
+void deletePeer(int index) {
+  if (index < 0 || index >= peerCount) return;
+
+  // Hapus dari ESP-NOW
+  if (esp_now_del_peer(peers[index].macAddr) != ESP_OK) {
+    ledError();
+    showStatus("Failed to delete\nfrom ESP-NOW", 2000);
+    return;
+  }
+
+  // Hapus dari array lokal
+  for (int i = index; i < peerCount - 1; i++) {
+    peers[i] = peers[i + 1];
+  }
+  peerCount--;
+
+  savePeers(); // Simpan perubahan
+  ledSuccess();
+  showStatus("Peer deleted!", 1500);
+
+  // Perbarui tampilan
+  if (menuSelection >= peerCount && peerCount > 0) {
+    menuSelection = peerCount - 1;
+  } else if (peerCount == 0) {
+    menuSelection = 0;
+  }
+  showESPNowPeers();
+}
+
+void savePeers() {
+  preferences.begin("esp-now-peers", false);
+  preferences.putInt("peer_count", peerCount);
+  for (int i = 0; i < peerCount; i++) {
+    String macKey = "peer_" + String(i) + "_mac";
+    String nameKey = "peer_" + String(i) + "_name";
+    preferences.putBytes(macKey.c_str(), peers[i].macAddr, 6);
+    preferences.putString(nameKey.c_str(), peers[i].name);
+  }
+  preferences.end();
+}
+
+void loadPeers() {
+  preferences.begin("esp-now-peers", true);
+  peerCount = preferences.getInt("peer_count", 0);
+  peerCount = min(peerCount, MAX_ESP_PEERS);
+  for (int i = 0; i < peerCount; i++) {
+    String macKey = "peer_" + String(i) + "_mac";
+    String nameKey = "peer_" + String(i) + "_name";
+    preferences.getBytes(macKey.c_str(), peers[i].macAddr, 6);
+    peers[i].name = preferences.getString(nameKey.c_str(), "");
+
+    // Daftarkan kembali peer ke ESP-NOW
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, peers[i].macAddr, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (esp_now_is_peer_exist(peers[i].macAddr)) {
+        esp_now_del_peer(peers[i].macAddr);
+    }
+    esp_now_add_peer(&peerInfo);
+  }
+  preferences.end();
 }
 
 void showESPNowMenu() {
@@ -808,6 +893,43 @@ void showESPNowMenu() {
   display.display();
 }
 
+void showESPNowPeerOptions() {
+  display.clearDisplay();
+  drawBatteryIndicator();
+  drawBreadcrumb();
+
+  display.setTextSize(1);
+  display.setCursor(20, 2);
+  display.print("PEER OPTIONS");
+
+  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+
+  // Tampilkan nama atau MAC dari rekan yang dipilih
+  display.setCursor(2, 15);
+  if (peers[selectedPeer].name.length() > 0) {
+    display.print(peers[selectedPeer].name);
+  } else {
+    display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                  peers[selectedPeer].macAddr[0], peers[selectedPeer].macAddr[1],
+                  peers[selectedPeer].macAddr[2], peers[selectedPeer].macAddr[3],
+                  peers[selectedPeer].macAddr[4], peers[selectedPeer].macAddr[5]);
+  }
+
+  const char* menuItems[] = {"Rename", "Delete", "Back"};
+  for (int i = 0; i < 3; i++) {
+    int y = 30 + i * 10;
+    display.setCursor(5, y);
+    if (i == menuSelection) {
+      display.print("> ");
+    } else {
+      display.print("  ");
+    }
+    display.print(menuItems[i]);
+  }
+
+  display.display();
+}
+
 void showESPNowSend() {
   display.clearDisplay();
   drawBatteryIndicator();
@@ -836,10 +958,14 @@ void showESPNowSend() {
         display.print("  ");
       }
       
-      display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
-                    peerAddresses[i][0], peerAddresses[i][1], 
-                    peerAddresses[i][2], peerAddresses[i][3],
-                    peerAddresses[i][4], peerAddresses[i][5]);
+      if (peers[i].name.length() > 0) {
+        display.print(peers[i].name);
+      } else {
+        display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                      peers[i].macAddr[0], peers[i].macAddr[1],
+                      peers[i].macAddr[2], peers[i].macAddr[3],
+                      peers[i].macAddr[4], peers[i].macAddr[5]);
+      }
     }
   }
   
@@ -907,37 +1033,70 @@ void showESPNowPeers() {
 
   display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
 
-  // Display existing peers
-  if (peerCount > 0) {
-    for (int i = 0; i < peerCount; i++) {
-      int y = 15 + i * 9;
-      display.setCursor(2, y);
-      display.printf("%d: %02X:%02X:%02X:%02X:%02X:%02X",
-                    i + 1,
-                    peerAddresses[i][0], peerAddresses[i][1],
-                    peerAddresses[i][2], peerAddresses[i][3],
-                    peerAddresses[i][4], peerAddresses[i][5]);
-    }
-  } else {
+  // The total number of selectable items is peerCount + menu items
+  int totalItems = peerCount + 2; // Add Peer, Back
+
+  // Display peers
+  if (peerCount == 0) {
     display.setCursor(30, 25);
-    display.print("No peers found");
-  }
-
-  // Draw menu options
-  const char* menuItems[] = {"Add Peer", "Back"};
-  int menuY = 45;
-  display.drawLine(0, menuY - 4, SCREEN_WIDTH, menuY - 4, SSD1306_WHITE);
-
-  for (int i = 0; i < 2; i++) {
-    int y = menuY + i * 10;
-    display.setCursor(5, y);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
+    display.print("No peers added");
+  } else {
+    for (int i = 0; i < peerCount; i++) {
+      int y = 15 + i * 10;
+      if (i == menuSelection) {
+        display.fillRect(0, y, SCREEN_WIDTH, 9, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+      display.setCursor(2, y + 1);
+      if (peers[i].name.length() > 0) {
+        display.print(peers[i].name);
+      } else {
+        display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+                      peers[i].macAddr[0], peers[i].macAddr[1],
+                      peers[i].macAddr[2], peers[i].macAddr[3],
+                      peers[i].macAddr[4], peers[i].macAddr[5]);
+      }
+      display.setTextColor(SSD1306_WHITE);
     }
-    display.print(menuItems[i]);
   }
+
+  // Display menu options below peers
+  int menuY = 15 + peerCount * 10 + 2;
+
+  // Menu item for "Add Peer"
+  int addPeerIndex = peerCount;
+  if (menuSelection == addPeerIndex) {
+    display.fillRect(0, menuY, SCREEN_WIDTH, 9, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setCursor(2, menuY + 1);
+  display.print("[Add Peer]");
+  display.setTextColor(SSD1306_WHITE);
+
+  // Potentially "Delete Peer" if a peer is selected
+  if (menuSelection < peerCount) {
+    int deleteIndex = peerCount + 1; // Appears after Add Peer
+    if (menuSelection == deleteIndex) { // This logic is tricky, let's simplify.
+      // We'll handle actions in handleSelect instead of drawing a dynamic menu
+    }
+  }
+
+  // Menu item for "Back"
+  int backIndex = peerCount + 1;
+  menuY += 10; // position back button below add peer
+  if (menuSelection == backIndex) {
+    display.fillRect(0, menuY, SCREEN_WIDTH, 9, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setCursor(2, menuY + 1);
+  display.print("[Back]");
+  display.setTextColor(SSD1306_WHITE);
 
   display.display();
 }
@@ -1748,15 +1907,19 @@ void handleBackButton() {
       
     case STATE_ESP_NOW_SEND:
     case STATE_ESP_NOW_INBOX:
+      currentState = STATE_ESP_NOW_MENU;
+      menuSelection = 0;
+      showESPNowMenu();
+      break;
     case STATE_ESP_NOW_PEERS:
       if (menuSelection == 0) { // Add Peer
         if (peerCount < MAX_ESP_PEERS) {
           previousState = currentState;
-          currentState = STATE_ESP_NOW_ADD_PEER; // Set state for MAC input
-          userInput = ""; // Clear userInput for the MAC address
+          currentState = STATE_ESP_NOW_ADD_PEER;
+          userInput = "";
           cursorX = 0;
           cursorY = 0;
-          currentKeyboardMode = MODE_UPPER; // Start with upper for MAC addresses
+          currentKeyboardMode = MODE_UPPER; // Start with uppercase/numbers for MAC
           drawKeyboard();
         } else {
           showStatus("Peer list is full!", 2000);
@@ -1769,9 +1932,15 @@ void handleBackButton() {
       }
       break;
       
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      currentState = STATE_ESP_NOW_PEERS;
+      menuSelection = selectedPeer; // Highlight the peer we were editing
+      showESPNowPeers();
+      break;
+
     case STATE_KEYBOARD:
     case STATE_ESP_NOW_ADD_PEER:
-      if (previousState == STATE_ESP_NOW_PEERS) {
+      if (previousState == STATE_ESP_NOW_PEERS || previousState == STATE_ESP_NOW_PEER_OPTIONS) {
         currentState = STATE_ESP_NOW_PEERS;
         menuSelection = 0;
         showESPNowPeers();
@@ -2847,6 +3016,9 @@ void refreshCurrentScreen() {
     case STATE_ESP_NOW_PEERS:
       showESPNowPeers();
       break;
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      showESPNowPeerOptions();
+      break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       drawKeyboard();
@@ -3014,8 +3186,11 @@ void handleUp() {
       }
       break;
     case STATE_ESP_NOW_PEERS:
-      menuSelection = (menuSelection - 1 + 2) % 2;
-      showESPNowPeers();
+      {
+        int totalItems = peerCount + 2; // Peers + Add Peer + Back
+        menuSelection = (menuSelection - 1 + totalItems) % totalItems;
+        showESPNowPeers();
+      }
       break;
     case STATE_WIFI_SCAN:
       if (networkCount > 0) {
@@ -3081,6 +3256,13 @@ void handleDown() {
       if (inboxCount > 0) {
         menuSelection = (menuSelection + 1) % inboxCount;
         showESPNowInbox();
+      }
+      break;
+    case STATE_ESP_NOW_PEERS:
+      {
+        int totalItems = peerCount + 2; // Peers + Add Peer + Back
+        menuSelection = (menuSelection + 1) % totalItems;
+        showESPNowPeers();
       }
       break;
     case STATE_WIFI_SCAN:
@@ -3211,7 +3393,7 @@ void handleSelect() {
             cursorY = 0;
             drawKeyboard();
           } else {
-            showStatus("No peers!\nAdd via Serial", 2000);
+            showStatus("No peers!\nAdd in Manage Peers", 2000);
             showESPNowMenu();
           }
           break;
@@ -3249,9 +3431,61 @@ void handleSelect() {
       }
       break;
     case STATE_ESP_NOW_PEERS:
-      currentState = STATE_ESP_NOW_MENU;
-      menuSelection = 0;
-      showESPNowMenu();
+      {
+        int addPeerIndex = peerCount;
+        int backIndex = peerCount + 1;
+
+        if (menuSelection < peerCount) {
+          // Buka menu opsi untuk peer yang dipilih
+          selectedPeer = menuSelection;
+          previousState = currentState;
+          currentState = STATE_ESP_NOW_PEER_OPTIONS;
+          menuSelection = 0; // Atur ulang pilihan untuk menu opsi
+          showESPNowPeerOptions();
+        } else if (menuSelection == addPeerIndex) {
+          // Tambah Peer
+          if (peerCount < MAX_ESP_PEERS) {
+            previousState = currentState;
+            currentState = STATE_ESP_NOW_ADD_PEER;
+            userInput = "";
+            cursorX = 0;
+            cursorY = 0;
+            currentKeyboardMode = MODE_UPPER;
+            drawKeyboard();
+          } else {
+            showStatus("Peer list is full!", 2000);
+            showESPNowPeers();
+          }
+        } else if (menuSelection == backIndex) {
+          // Kembali
+          currentState = STATE_ESP_NOW_MENU;
+          menuSelection = 0;
+          showESPNowMenu();
+        }
+      }
+      break;
+
+    case STATE_ESP_NOW_PEER_OPTIONS:
+      switch(menuSelection) {
+        case 0: // Ganti Nama
+          previousState = currentState;
+          currentState = STATE_KEYBOARD;
+          userInput = peers[selectedPeer].name; // Isi keyboard dengan nama saat ini
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          drawKeyboard();
+          break;
+        case 1: // Hapus
+          deletePeer(selectedPeer);
+          // deletePeer akan menangani pembaruan layar
+          break;
+        case 2: // Kembali
+          currentState = STATE_ESP_NOW_PEERS;
+          menuSelection = selectedPeer;
+          showESPNowPeers();
+          break;
+      }
       break;
     case STATE_WIFI_SCAN:
       if (networkCount > 0) {
@@ -3269,12 +3503,24 @@ void handleSelect() {
       }
       break;
     case STATE_KEYBOARD:
-      if (previousState == STATE_ESP_NOW_MENU || previousState == STATE_ESP_NOW_SEND) {
+      if (previousState == STATE_ESP_NOW_PEER_OPTIONS) {
+        const char* key = getCurrentKey();
+        if (strcmp(key, "OK") == 0) {
+          peers[selectedPeer].name = userInput;
+          savePeers();
+          showStatus("Peer renamed!", 1500);
+          currentState = STATE_ESP_NOW_PEERS;
+          menuSelection = selectedPeer;
+          showESPNowPeers();
+        } else {
+          handleKeyPress(); // Handle backspace, etc.
+        }
+      } else if (previousState == STATE_ESP_NOW_MENU || previousState == STATE_ESP_NOW_SEND) {
         // ESP-NOW message mode
         const char* key = getCurrentKey();
         if (strcmp(key, "OK") == 0 && userInput.length() > 0) {
           if (peerCount > 0) {
-            sendESPNowMessage(userInput, peerAddresses[selectedPeer]);
+            sendESPNowMessage(userInput, peers[selectedPeer].macAddr);
             userInput = "";
             currentState = STATE_ESP_NOW_MENU;
             showESPNowMenu();
