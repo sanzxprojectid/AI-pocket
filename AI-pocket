@@ -1445,7 +1445,7 @@ void forgetNetwork() {
   preferences.end();
   WiFi.disconnect();
   showStatus("Network forgotten!", 2000);
-  showWiFiMenu(0);
+  showWiFiMenu();
 }
 
 void checkWiFiTimeout() {
@@ -2880,9 +2880,9 @@ void showESPNowPeers(int x_offset) {
   display.setCursor(20 + x_offset, 2);
   display.print("MANAGE PEERS");
   
-  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
+  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
   
-  display.setCursor(5 + x_offset, 15);
+  display.setCursor(5, 15);
   display.print("Peers: ");
   display.print(peerCount);
   display.print("/");
@@ -2896,7 +2896,7 @@ void showESPNowPeers(int x_offset) {
   };
   
   for (int i = 0; i < 4; i++) {
-    display.setCursor(5 + x_offset, 27 + i * 10);
+    display.setCursor(5, 27 + i * 10);
     if (i == menuSelection) {
       display.print("> ");
     } else {
@@ -2904,23 +2904,24 @@ void showESPNowPeers(int x_offset) {
     }
     display.print(menuItems[i]);
   }
+
+  display.display();
 }
 
-void showESPNowAddPeer() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showESPNowAddPeer(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(25, 2);
+  display.setCursor(25 + x_offset, 2);
   display.print("ADD PEER");
   
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
   
-  display.setCursor(5, 16);
+  display.setCursor(5 + x_offset, 16);
   display.print("Enter MAC Address:");
   
-  display.setCursor(5, 26);
+  display.setCursor(5 + x_offset, 26);
   display.print(">");
   String displayMac = macInput;
   if (displayMac.length() > 16) {
@@ -2928,35 +2929,35 @@ void showESPNowAddPeer() {
   }
   display.print(displayMac);
   
-  display.setCursor(5, 38);
+  display.setCursor(5 + x_offset, 38);
   display.print("Format: XX:XX:XX...");
   
-  display.setCursor(5, 50);
+  display.setCursor(5 + x_offset, 50);
   display.print("Then enter name");
   
   display.display();
 }
 
-void showESPNowRenamePeer() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showESPNowRenamePeer(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(20, 2);
+  display.setCursor(20 + x_offset, 2);
   display.print("RENAME PEER");
   
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
   
   if (peerCount == 0) {
-    display.setCursor(20, 30);
+    display.setCursor(20 + x_offset, 30);
     display.print("No peers!");
   } else {
-    display.setCursor(5, 16);
+    display.setCursor(5 + x_offset, 16);
     display.print("Select peer:");
     
     for (int i = 0; i < min(peerCount, 3); i++) {
-      display.setCursor(10, 28 + i * 10);
+      int y = 28 + i * 10;
+      display.setCursor(10 + x_offset, y);
       if (i == selectedPeer) {
         display.print("> ");
       } else {
@@ -3013,13 +3014,12 @@ void checkBatteryHealth() {
   }
 }
 
-void showBatteryGuardian() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showBatteryGuardian(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(5, 12);
+  display.setCursor(5 + x_offset, 12);
   display.print("BATTERY GUARDIAN");
   
   drawIcon(108, 12, ICON_POWER);
@@ -3205,13 +3205,12 @@ void showZenMode(int x_offset) {
 
 // ========== DEVELOPER MODE ==========
 
-void showDeveloperMode() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showDeveloperMode(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(15, 2);
+  display.setCursor(15 + x_offset, 2);
   display.print("DEVELOPER MODE");
   
   drawIcon(2, 2, ICON_DEV);
@@ -3264,16 +3263,15 @@ void showDeveloperMode() {
 
 // ========== DISPLAY SETTINGS ==========
 
-void showDisplaySettings() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showDisplaySettings(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(10, 2);
+  display.setCursor(10 + x_offset, 2);
   display.print("DISPLAY SETTINGS");
   
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
   
   const char* menuItems[] = {
     "Font Size",
@@ -3282,7 +3280,8 @@ void showDisplaySettings() {
   };
   
   for (int i = 0; i < 3; i++) {
-    display.setCursor(5, 20 + i * 12);
+    int y = 20 + i * 12;
+    display.setCursor(5 + x_offset, y);
     if (i == menuSelection) {
       display.print("> ");
     } else {
@@ -3291,22 +3290,22 @@ void showDisplaySettings() {
     display.print(menuItems[i]);
     
     if (i == 0) {
-      display.setCursor(90, 20 + i * 12);
+      display.setCursor(90 + x_offset, y);
       display.print("[");
       display.print(fontSize);
       display.print("]");
     } else if (i == 1) {
-      display.setCursor(90, 20 + i * 12);
+      display.setCursor(90 + x_offset, y);
       display.print("[");
       display.print(animSpeed);
       display.print("]");
     }
   }
   
-  display.setCursor(5, 50);
+  display.setCursor(5 + x_offset, 50);
   display.print("Preview:");
   display.setTextSize(fontSize);
-  display.setCursor(55, 48);
+  display.setCursor(55 + x_offset, 48);
   display.print("ABC");
   
   display.display();
@@ -3329,55 +3328,54 @@ void updateSystemStats() {
   }
 }
 
-void showSystemInfo() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showSystemInfo(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(15, 2);
+  display.setCursor(15 + x_offset, 2);
   display.print("SYSTEM INFO");
   
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
   
-  display.setCursor(2, 15);
+  display.setCursor(2 + x_offset, 15);
   display.print("Free Heap:");
-  display.setCursor(70, 15);
+  display.setCursor(70 + x_offset, 15);
   display.print(freeHeap / 1024);
   display.print(" KB");
   
   if (lowMemoryWarning) {
-    display.setCursor(110, 15);
+    display.setCursor(110 + x_offset, 15);
     display.print("!");
   }
   
-  display.setCursor(2, 24);
+  display.setCursor(2 + x_offset, 24);
   display.print("Total:");
-  display.setCursor(70, 24);
+  display.setCursor(70 + x_offset, 24);
   display.print(totalHeap / 1024);
   display.print(" KB");
   
-  display.setCursor(2, 33);
+  display.setCursor(2 + x_offset, 33);
   display.print("CPU Freq:");
-  display.setCursor(70, 33);
+  display.setCursor(70 + x_offset, 33);
   display.print((int)cpuFreq);
   display.print(" MHz");
   
-  display.setCursor(2, 42);
+  display.setCursor(2 + x_offset, 42);
   display.print("CPU Temp:");
-  display.setCursor(70, 42);
+  display.setCursor(70 + x_offset, 42);
   display.print(cpuTemp, 1);
   display.print(" C");
   
-  display.setCursor(2, 51);
+  display.setCursor(2 + x_offset, 51);
   display.print("Loop/sec:");
-  display.setCursor(70, 51);
+  display.setCursor(70 + x_offset, 51);
   display.print(lastLoopCount);
   
   if (lowMemoryWarning && (millis() / 500) % 2 == 0) {
-    display.fillRect(0, 58, SCREEN_WIDTH, 6, SSD1306_WHITE);
+    display.fillRect(0 + x_offset, 58, SCREEN_WIDTH, 6, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
-    display.setCursor(25, 59);
+    display.setCursor(25 + x_offset, 59);
     display.print("LOW MEMORY");
     display.setTextColor(SSD1306_WHITE);
   }
@@ -3395,9 +3393,9 @@ void showSettingsMenu(int x_offset) {
   display.setCursor(25 + x_offset, 2);
   display.print("SETTINGS");
   
-  drawIcon(10, 2, ICON_SETTINGS, x_offset);
+  drawIcon(10, 2, ICON_SETTINGS);
   
-  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
+  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
   
   const char* menuItems[] = {
     "WiFi Auto-Off",
@@ -3414,7 +3412,7 @@ void showSettingsMenu(int x_offset) {
   
   for (int i = startIdx; i < endIdx; i++) {
     int y = 15 + (i - startIdx) * 10;
-    display.setCursor(5 + x_offset, y);
+    display.setCursor(5, y);
     
     if (i == settingsMenuSelection) {
       display.print("> ");
@@ -3920,10 +3918,9 @@ void handlePowerBaseSelect() {
   }
 }
 
-void showPowerVisual() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showPowerVisual(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   int battX = 20;
   int battY = 14;
@@ -3985,50 +3982,48 @@ void showPowerVisual() {
   display.display();
 }
 
-void showPowerStats() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showPowerStats(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(15, 2);
+  display.setCursor(15 + x_offset, 2);
   display.print("POWER STATS");
   
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(0 + x_offset, 12, SCREEN_WIDTH + x_offset, 12, SSD1306_WHITE);
   
-  display.setCursor(2, 16);
+  display.setCursor(2 + x_offset, 16);
   display.print("Voltage:");
-  display.setCursor(70, 16);
+  display.setCursor(70 + x_offset, 16);
   display.print(batteryVoltage, 3);
   display.print(" V");
   
-  display.setCursor(2, 26);
+  display.setCursor(2 + x_offset, 26);
   display.print("Battery:");
-  display.setCursor(70, 26);
+  display.setCursor(70 + x_offset, 26);
   display.print(batteryPercent);
   display.print(" %");
   
-  display.setCursor(2, 36);
+  display.setCursor(2 + x_offset, 36);
   display.print("Status:");
-  display.setCursor(70, 36);
+  display.setCursor(70 + x_offset, 36);
   display.print(isCharging ? "CHARGING" : "DISCHARGING");
   
-  display.setCursor(2, 46);
+  display.setCursor(2 + x_offset, 46);
   display.print("Power:");
-  display.setCursor(70, 46);
+  display.setCursor(70 + x_offset, 46);
   display.print(totalPowerDraw, 0);
   display.print(" mA");
-  
+
   display.display();
 }
 
-void showPowerGraph() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
+void showPowerGraph(int x_offset) {
+  drawBatteryIndicator(x_offset);
+  drawBreadcrumb(x_offset);
   
   display.setTextSize(1);
-  display.setCursor(25, 2);
+  display.setCursor(25 + x_offset, 2);
   display.print("POWER GRAPH");
   
   int graphX = 10;
