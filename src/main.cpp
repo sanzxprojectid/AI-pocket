@@ -345,7 +345,13 @@ void enterZenMode();
 void exitZenMode();
 const char* getCurrentKey();
 void toggleKeyboardMode();
-void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len);
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataReceived(const esp_now_recv_info *info, const uint8_t *incomingData, int len);
+#else
+void onESPNowDataReceived(const uint8_t *mac, const uint8_t *incomingData, int len);
+#endif
+
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void initESPNow();
 void sendESPNowMessage(String message, uint8_t* targetMac);
@@ -808,7 +814,12 @@ void initESPNow() {
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataReceived(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
+  const uint8_t* mac = info->src_addr;
+#else
+void onESPNowDataReceived(const uint8_t *mac, const uint8_t *incomingData, int len) {
+#endif
   if (inboxCount >= MAX_MESSAGES) {
     for (int i = 0; i < MAX_MESSAGES - 1; i++) {
       inbox[i] = inbox[i + 1];

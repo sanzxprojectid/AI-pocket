@@ -1,13 +1,16 @@
-name: PlatformIO Build
+name: PlatformIO Build & Release
 
-on: [push, pull_request]
+on:
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -22,8 +25,9 @@ jobs:
       - name: Build project
         run: pio run
 
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Release and Upload Firmware
+        uses: softprops/action-gh-release@v1
         with:
-          name: firmware
-          path: .pio/build/esp32-c3-devkitm-1/firmware.bin
+          files: .pio/build/esp32-c3-devkitm-1/firmware.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
