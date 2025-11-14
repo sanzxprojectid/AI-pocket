@@ -1890,7 +1890,7 @@ void handleMainMenuSelect() {
       currentState = STATE_ESP_NOW_MENU;
       showESPNowMenu();
       break;
-    case 6: // Settings
+    case 5: // Settings
       settingsMenuSelection = 0;
       previousState = currentState;
       currentState = STATE_SETTINGS_MENU;
