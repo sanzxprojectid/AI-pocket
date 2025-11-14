@@ -27,7 +27,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define BTN_BACK 2
 
 // LED Built-in
-#define LED_BUILTIN 8
+// #define LED_BUILTIN 8 // Defined in board variant
 
 // Battery monitoring
 #define BATTERY_PIN 0
@@ -243,6 +243,11 @@ const unsigned long debounceDelay = 200;
 int powerMenuSelection = 0;
 int settingsMenuSelection = 0;
 
+// Keyboard scroll variables
+int textInputScrollOffset = 0;
+unsigned long lastTextInputUpdate = 0;
+const int textInputScrollSpeed = 200; // ms per character scroll
+
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
   0x00, 0x3C, 0x42, 0x99, 0x24, 0x00, 0x18, 0x00
@@ -336,7 +341,7 @@ void enterZenMode();
 void exitZenMode();
 const char* getCurrentKey();
 void toggleKeyboardMode();
-void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, int len);
+void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len);
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void initESPNow();
 void sendESPNowMessage(String message, uint8_t* targetMac);
@@ -344,6 +349,13 @@ void addPeer(uint8_t* macAddr, String name = "");
 void deletePeer(int index);
 void savePeers();
 void loadPeers();
+
+// Button handlers
+void handleUp();
+void handleDown();
+void handleLeft();
+void handleRight();
+void handleSelect();
 
 // LED Patterns
 void ledHeartbeat() {
@@ -807,7 +819,7 @@ void initESPNow() {
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len) {
   if (inboxCount >= MAX_MESSAGES) {
     for (int i = 0; i < MAX_MESSAGES - 1; i++) {
       inbox[i] = inbox[i + 1];
@@ -816,9 +828,9 @@ void onESPNowDataReceived(const esp_now_recv_info_t *info, const uint8_t *data, 
   }
   
   Message newMsg;
-  strncpy(newMsg.text, (char*)data, min(len, 199));
+  strncpy(newMsg.text, (char*)incomingData, min(len, 199));
   newMsg.text[min(len, 199)] = '\0';
-  memcpy(newMsg.sender, info->src_addr, 6);
+  memcpy(newMsg.sender, mac, 6);
   newMsg.timestamp = millis();
   newMsg.read = false;
   
@@ -2934,11 +2946,11 @@ void sendToGemini() {
   if (httpResponseCode == 200) {
     String response = http.getString();
     
-    // FIXED: Use DynamicJsonDocument with proper size
-    DynamicJsonDocument responseDoc(16384);
+  // Use JsonDocument which is the new standard
+    JsonDocument responseDoc;
     DeserializationError error = deserializeJson(responseDoc, response);
     
-    if (!error && responseDoc.containsKey("candidates")) {
+    if (!error && responseDoc["candidates"]) {
       JsonArray candidates = responseDoc["candidates"];
       if (candidates.size() > 0) {
         JsonObject content = candidates[0]["content"];
