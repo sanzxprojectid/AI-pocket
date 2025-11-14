@@ -243,6 +243,11 @@ const unsigned long debounceDelay = 200;
 int powerMenuSelection = 0;
 int settingsMenuSelection = 0;
 
+// Keyboard text scrolling variables
+int textInputScrollOffset = 0;
+unsigned long lastTextInputUpdate = 0;
+const int textInputScrollSpeed = 150;
+
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
   0x00, 0x3C, 0x42, 0x99, 0x24, 0x00, 0x18, 0x00
