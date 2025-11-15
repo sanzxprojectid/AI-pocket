@@ -644,7 +644,7 @@ void loop() {
   
   // Loading animation
   if (currentState == STATE_LOADING) {
-    if (currentMillis - lastLoadingUpdate > animSpeed) {
+    if (currentMillis - lastLoadingUpdate > 100) {
       lastLoadingUpdate = currentMillis;
       loadingFrame = (loadingFrame + 1) % 8;
       showLoadingAnimation();
