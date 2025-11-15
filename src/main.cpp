@@ -10,7 +10,8 @@
 #include <esp_wifi.h>
 #include <time.h>
 
-#define OTA_FIRMWARE_URL "http://192.168.1.2/firmware.bin"
+#define GITHUB_REPO "sanzxprojectid/AI-pocket"
+#define FIRMWARE_ASSET_NAME "firmware.bin"
 
 // OLED Display settings
 #define SCREEN_WIDTH 128
@@ -2945,11 +2946,55 @@ void showOTAUpdate() {
 
 void performOTAUpdate() {
     currentState = STATE_OTA_UPDATE;
-    showOTAUpdate();
+    showStatus("Checking for\nupdates...", 1000);
 
     HTTPClient http;
-    http.begin(OTA_FIRMWARE_URL);
+    String apiUrl = "https://api.github.com/repos/" + String(GITHUB_REPO) + "/releases/latest";
+    http.begin(apiUrl);
+    http.addHeader("Accept", "application/vnd.github.v3+json");
+
     int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        showStatus("Failed to check\nfor updates", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        http.end();
+        return;
+    }
+
+    String payload = http.getString();
+    http.end();
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (error) {
+        showStatus("JSON parse error", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        return;
+    }
+
+    String firmwareUrl = "";
+    JsonArray assets = doc["assets"].as<JsonArray>();
+    for (JsonObject asset : assets) {
+        if (String(asset["name"].as<const char*>()) == FIRMWARE_ASSET_NAME) {
+            firmwareUrl = asset["browser_download_url"].as<String>();
+            break;
+        }
+    }
+
+    if (firmwareUrl == "") {
+        showStatus("No firmware found\nin latest release", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        return;
+    }
+
+    showStatus("Update found!\nStarting...", 1000);
+
+    http.begin(firmwareUrl);
+    httpCode = http.GET();
 
     if (httpCode != HTTP_CODE_OK) {
         showStatus("Update failed\nServer error", 2000);
