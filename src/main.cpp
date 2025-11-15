@@ -2,12 +2,15 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <Update.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <time.h>
+
+#define OTA_FIRMWARE_URL "http://192.168.1.2/firmware.bin"
 
 // OLED Display settings
 #define SCREEN_WIDTH 128
@@ -100,15 +103,6 @@ uint32_t loopCount = 0;
 unsigned long lastLoopCount = 0;
 unsigned long lastLoopTime = 0;
 
-// Zen Mode
-bool zenModeActive = false;
-unsigned long zenModeStartTime = 0;
-int zenBreathPhase = 0;
-
-// Developer Mode
-bool devModeEnabled = false;
-unsigned long devModeDebugTimer = 0;
-
 // ESP-NOW Messaging - FIXED STRUCTURE
 #define MAX_ESP_PEERS 5
 #define MAX_MESSAGES 10
@@ -149,10 +143,6 @@ int transitionFrame = 0;
 bool transitionActive = false;
 enum TransitionType { TRANS_NONE, TRANS_SLIDE_LEFT, TRANS_SLIDE_RIGHT, TRANS_FADE };
 TransitionType currentTransition = TRANS_NONE;
-
-// Display settings
-int fontSize = 1;
-int animSpeed = 100;
 
 // Keyboard layouts
 const char* keyboardLower[3][10] = {
@@ -209,16 +199,14 @@ enum AppState {
   STATE_API_SELECT,
   STATE_SYSTEM_INFO,
   STATE_SETTINGS_MENU,
-  STATE_DISPLAY_SETTINGS,
-  STATE_DEVELOPER_MODE,
-  STATE_ZEN_MODE,
   STATE_BATTERY_GUARDIAN,
   STATE_ESP_NOW_MENU,
   STATE_ESP_NOW_SEND,
   STATE_ESP_NOW_INBOX,
   STATE_ESP_NOW_PEERS,
   STATE_ESP_NOW_PEER_OPTIONS,
-  STATE_LOADING
+  STATE_LOADING,
+  STATE_OTA_UPDATE
 };
 
 AppState currentState = STATE_MAIN_MENU;
@@ -269,16 +257,8 @@ const unsigned char ICON_SETTINGS[] PROGMEM = {
   0x10, 0x38, 0x7C, 0xFE, 0x7C, 0x38, 0x10, 0x00
 };
 
-const unsigned char ICON_ZEN[] PROGMEM = {
-  0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C
-};
-
 const unsigned char ICON_MESSAGE[] PROGMEM = {
   0x7E, 0x81, 0xA5, 0x81, 0xBD, 0x81, 0x7E, 0x00
-};
-
-const unsigned char ICON_DEV[] PROGMEM = {
-  0x08, 0x14, 0x22, 0x41, 0x41, 0x22, 0x14, 0x08
 };
 
 // Forward declarations
@@ -293,10 +273,9 @@ void showPowerConsumption();
 void showAPISelect();
 void showSystemInfo();
 void showSettingsMenu();
-void showDisplaySettings();
-void showDeveloperMode();
-void showZenMode();
 void showBatteryGuardian();
+void showOTAUpdate();
+void performOTAUpdate();
 void showESPNowMenu();
 void showESPNowSend();
 void showESPNowInbox();
@@ -319,6 +298,7 @@ void handleBackButton();
 void connectToWiFi(String ssid, String password);
 void scanWiFiNetworks();
 void displayResponse();
+void showProgressBar(String title, int percent);
 void showStatus(String message, int delayMs);
 void forgetNetwork();
 void refreshCurrentScreen();
@@ -337,8 +317,6 @@ void drawIcon(int x, int y, const unsigned char* icon);
 void startTransition(TransitionType type);
 void sendToGemini();
 void checkWiFiTimeout();
-void enterZenMode();
-void exitZenMode();
 const char* getCurrentKey();
 void toggleKeyboardMode();
 void onESPNowDataReceived(const uint8_t * mac, const uint8_t *incomingData, int len);
@@ -377,10 +355,6 @@ void ledBreathing() {
   int breath = (millis() / 20) % 512;
   if (breath > 255) breath = 511 - breath;
   analogWrite(LED_BUILTIN, breath);
-}
-
-void ledZenMode() {
-  digitalWrite(LED_BUILTIN, (millis() / 60000) % 2);
 }
 
 void ledSuccess() {
@@ -535,9 +509,6 @@ void setup() {
   
   // Load settings
   wifiAutoOffEnabled = preferences.getBool("wifiAutoOff", false);
-  fontSize = preferences.getInt("fontSize", 1);
-  animSpeed = preferences.getInt("animSpeed", 100);
-  devModeEnabled = preferences.getBool("devMode", false);
   
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -594,25 +565,6 @@ void loop() {
   
   loopCount++;
   
-  // Zen Mode Logic
-  if (zenModeActive) {
-    ledZenMode();
-    
-    if (currentMillis % 4000 < 2000) {
-      zenBreathPhase = map(currentMillis % 2000, 0, 2000, 0, 100);
-    } else {
-      zenBreathPhase = map(currentMillis % 2000, 0, 2000, 100, 0);
-    }
-    
-    showZenMode();
-    
-    if (digitalRead(BTN_BACK) == LOW || digitalRead(BTN_SELECT) == LOW) {
-      delay(200);
-      exitZenMode();
-    }
-    return;
-  }
-  
   // Battery monitoring
   if (currentMillis - lastBatteryCheck > batteryCheckInterval) {
     updateBatteryLevel();
@@ -639,16 +591,7 @@ void loop() {
     checkWiFiTimeout();
   }
   
-  // Developer Mode Debug
-  if (devModeEnabled && currentState == STATE_DEVELOPER_MODE) {
-    if (currentMillis - devModeDebugTimer > 1000) {
-      devModeDebugTimer = currentMillis;
-      showDeveloperMode();
-    }
-  }
-  
   // Interactive LED Patterns
-  if (!zenModeActive) {
     switch(currentState) {
       case STATE_LOADING:
         ledPulse();
@@ -691,12 +634,6 @@ void loop() {
         {
           int pattern = (millis() / 200) % 6;
           digitalWrite(LED_BUILTIN, pattern < 3);
-        }
-        break;
-      case STATE_DEVELOPER_MODE:
-        {
-          int devPattern = (millis() / 100) % 10;
-          digitalWrite(LED_BUILTIN, devPattern < 2 || (devPattern > 4 && devPattern < 7));
         }
         break;
       case STATE_MAIN_MENU:
@@ -1005,6 +942,31 @@ void showESPNowMenu() {
   display.print("Peers:");
   display.print(peerCount);
   
+  display.display();
+}
+
+void showProgressBar(String title, int percent) {
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  int titleW = title.length() * 6;
+  display.setCursor((SCREEN_WIDTH - titleW) / 2, 15);
+  display.print(title);
+
+  int barX = 10;
+  int barY = 30;
+  int barW = SCREEN_WIDTH - 20;
+  int barH = 12;
+
+  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
+
+  int fillW = map(percent, 0, 100, 0, barW - 4);
+  display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+
+  display.setCursor(55, 47);
+  display.print(percent);
+  display.print("%");
+
   display.display();
 }
 
@@ -1395,175 +1357,6 @@ void showPowerConsumption() {
   display.display();
 }
 
-// ========== ZEN MODE ==========
-
-void enterZenMode() {
-  zenModeActive = true;
-  zenModeStartTime = millis();
-  
-  WiFi.disconnect();
-  WiFi.mode(WIFI_OFF);
-  
-  showZenMode();
-}
-
-void exitZenMode() {
-  zenModeActive = false;
-  ledSuccess();
-  showStatus("Zen Mode ended\nWelcome back!", 2000);
-  currentState = STATE_SETTINGS_MENU;
-  showSettingsMenu();
-}
-
-void showZenMode() {
-  display.clearDisplay();
-  
-  unsigned long zenDuration = (millis() - zenModeStartTime) / 1000;
-  int zenMinutes = zenDuration / 60;
-  int zenSeconds = zenDuration % 60;
-  
-  display.setTextSize(2);
-  String timeStr = "";
-  if (zenMinutes < 10) timeStr += "0";
-  timeStr += String(zenMinutes);
-  timeStr += ":";
-  if (zenSeconds < 10) timeStr += "0";
-  timeStr += String(zenSeconds);
-  
-  int textW = timeStr.length() * 12;
-  display.setCursor((SCREEN_WIDTH - textW) / 2, 15);
-  display.print(timeStr);
-  
-  display.setTextSize(1);
-  int centerX = SCREEN_WIDTH / 2;
-  int centerY = 45;
-  int baseRadius = 8;
-  int breathRadius = baseRadius + map(zenBreathPhase, 0, 100, 0, 6);
-  
-  display.drawCircle(centerX, centerY, breathRadius, SSD1306_WHITE);
-  if (zenBreathPhase > 30 && zenBreathPhase < 70) {
-    display.drawCircle(centerX, centerY, breathRadius - 2, SSD1306_WHITE);
-  }
-  
-  display.setCursor(2, 2);
-  display.print(batteryPercent);
-  display.print("%");
-  
-  display.setCursor(25, 58);
-  display.print("Breathe...");
-  
-  display.display();
-}
-
-// ========== DEVELOPER MODE ==========
-
-void showDeveloperMode() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
-  
-  display.setTextSize(1);
-  display.setCursor(15, 2);
-  display.print("DEVELOPER MODE");
-  
-  drawIcon(2, 2, ICON_DEV);
-  
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
-  display.setCursor(2, 14);
-  display.print("Heap: ");
-  display.print(freeHeap / 1024);
-  display.print("/");
-  display.print(totalHeap / 1024);
-  display.print("KB");
-  
-  display.setCursor(2, 23);
-  display.print("Min Heap: ");
-  display.print(minFreeHeap / 1024);
-  display.print("KB");
-  
-  if (lowMemoryWarning) {
-    display.print(" !");
-  }
-  
-  display.setCursor(2, 32);
-  display.print("CPU: ");
-  display.print((int)cpuFreq);
-  display.print("MHz ");
-  display.print(cpuTemp, 1);
-  display.print("C");
-  
-  display.setCursor(2, 41);
-  display.print("Loop: ");
-  display.print(lastLoopCount);
-  display.print("/s");
-  
-  display.setCursor(2, 50);
-  display.print("Battery: ");
-  display.print(batteryDrainRate, 2);
-  display.print("%/m");
-  
-  if (lowMemoryWarning && (millis() / 500) % 2 == 0) {
-    display.fillRect(0, 58, SCREEN_WIDTH, 6, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(20, 59);
-    display.print("LOW MEMORY!");
-    display.setTextColor(SSD1306_WHITE);
-  }
-  
-  display.display();
-}
-
-// ========== DISPLAY SETTINGS ==========
-
-void showDisplaySettings() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  drawBreadcrumb();
-  
-  display.setTextSize(1);
-  display.setCursor(10, 2);
-  display.print("DISPLAY SETTINGS");
-  
-  display.drawLine(0, 12, SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
-  const char* menuItems[] = {
-    "Font Size",
-    "Anim Speed",
-    "Save & Back"
-  };
-  
-  for (int i = 0; i < 3; i++) {
-    display.setCursor(5, 20 + i * 12);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(menuItems[i]);
-    
-    if (i == 0) {
-      display.setCursor(90, 20 + i * 12);
-      display.print("[");
-      display.print(fontSize);
-      display.print("]");
-    } else if (i == 1) {
-      display.setCursor(90, 20 + i * 12);
-      display.print("[");
-      display.print(animSpeed);
-      display.print("]");
-    }
-  }
-  
-  display.setCursor(5, 50);
-  display.print("Preview:");
-  display.setTextSize(fontSize);
-  display.setCursor(55, 48);
-  display.print("ABC");
-  
-  display.display();
-}
-
 // ========== SYSTEM INFO ==========
 
 void updateSystemStats() {
@@ -1653,16 +1446,14 @@ void showSettingsMenu() {
   
   const char* menuItems[] = {
     "WiFi Auto-Off",
-    "Display",
     "System Info",
-    "Developer Mode",
-    "Zen Mode",
+    "OTA Update",
     "Back"
   };
   
   int visibleItems = 5;
   int startIdx = max(0, settingsMenuSelection - 2);
-  int endIdx = min(6, startIdx + visibleItems);
+  int endIdx = min(7, startIdx + visibleItems);
   
   for (int i = startIdx; i < endIdx; i++) {
     int y = 15 + (i - startIdx) * 10;
@@ -1703,32 +1494,13 @@ void handleSettingsMenuSelect() {
       break;
     case 1:
       previousState = currentState;
-      currentState = STATE_DISPLAY_SETTINGS;
-      menuSelection = 0;
-      showDisplaySettings();
-      break;
-    case 2:
-      previousState = currentState;
       currentState = STATE_SYSTEM_INFO;
       showSystemInfo();
       break;
+    case 2:
+      performOTAUpdate();
+      break;
     case 3:
-      devModeEnabled = !devModeEnabled;
-      preferences.putBool("devMode", devModeEnabled);
-      ledSuccess();
-      if (devModeEnabled) {
-        showStatus("Developer Mode\nENABLED", 1500);
-        currentState = STATE_DEVELOPER_MODE;
-        showDeveloperMode();
-      } else {
-        showStatus("Developer Mode\nDISABLED", 1500);
-        showSettingsMenu();
-      }
-      break;
-    case 4:
-      enterZenMode();
-      break;
-    case 5:
       currentState = STATE_MAIN_MENU;
       menuSelection = mainMenuSelection;
       menuTargetScrollY = mainMenuSelection * 22;
@@ -1762,9 +1534,6 @@ void drawBreadcrumb() {
       crumb = "Main > Power";
       break;
     case STATE_SETTINGS_MENU:
-    case STATE_DISPLAY_SETTINGS:
-    case STATE_DEVELOPER_MODE:
-    case STATE_ZEN_MODE:
     case STATE_SYSTEM_INFO:
       crumb = "Main > Settings";
       break;
@@ -1974,9 +1743,7 @@ void handleBackButton() {
       showPowerBase();
       break;
       
-    case STATE_DISPLAY_SETTINGS:
     case STATE_SYSTEM_INFO:
-    case STATE_DEVELOPER_MODE:
       currentState = STATE_SETTINGS_MENU;
       settingsMenuSelection = 0;
       showSettingsMenu();
@@ -3163,12 +2930,6 @@ void refreshCurrentScreen() {
     case STATE_SETTINGS_MENU:
       showSettingsMenu();
       break;
-    case STATE_DISPLAY_SETTINGS:
-      showDisplaySettings();
-      break;
-    case STATE_DEVELOPER_MODE:
-      showDeveloperMode();
-      break;
     case STATE_BATTERY_GUARDIAN:
       showBatteryGuardian();
       break;
@@ -3194,7 +2955,78 @@ void refreshCurrentScreen() {
     case STATE_CHAT_RESPONSE:
       displayResponse();
       break;
+    case STATE_OTA_UPDATE:
+      showOTAUpdate();
+      break;
   }
+}
+
+void showOTAUpdate() {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(25, 5);
+    display.print("OTA Update");
+    display.display();
+}
+
+void performOTAUpdate() {
+    currentState = STATE_OTA_UPDATE;
+    showOTAUpdate();
+
+    HTTPClient http;
+    http.begin(OTA_FIRMWARE_URL);
+    int httpCode = http.GET();
+
+    if (httpCode != HTTP_CODE_OK) {
+        showStatus("Update failed\nServer error", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        http.end();
+        return;
+    }
+
+    int contentLength = http.getSize();
+    if (contentLength <= 0) {
+        showStatus("Update failed\nInvalid size", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        http.end();
+        return;
+    }
+
+    if (!Update.begin(contentLength)) {
+        showStatus("Update failed\nNo space", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        http.end();
+        return;
+    }
+
+    WiFiClient& client = http.getStream();
+    size_t written = 0;
+    byte buff[1024] = { 0 };
+
+    while (http.connected() && (contentLength > 0 || contentLength == -1)) {
+        size_t size = client.readBytes(buff, sizeof(buff));
+        if (size > 0) {
+            Update.write(buff, size);
+            written += size;
+            int progress = (int)((float)written / contentLength * 100);
+            showProgressBar("Updating...", progress);
+        }
+        delay(1);
+    }
+
+    if (!Update.end(true)) {
+        showStatus("Update failed!", 2000);
+        currentState = STATE_SETTINGS_MENU;
+        refreshCurrentScreen();
+        return;
+    }
+
+    showStatus("Update complete!\nRebooting...", 3000);
+    ESP.restart();
 }
 
 // FIXED: Battery level dengan pembacaan yang lebih stabil
@@ -3330,12 +3162,8 @@ void handleUp() {
       showPowerBase();
       break;
     case STATE_SETTINGS_MENU:
-      settingsMenuSelection = (settingsMenuSelection - 1 + 6) % 6;
+      settingsMenuSelection = (settingsMenuSelection - 1 + 4) % 4;
       showSettingsMenu();
-      break;
-    case STATE_DISPLAY_SETTINGS:
-      menuSelection = (menuSelection - 1 + 3) % 3;
-      showDisplaySettings();
       break;
     case STATE_API_SELECT:
       menuSelection = (menuSelection - 1 + 2) % 2;
@@ -3406,12 +3234,8 @@ void handleDown() {
       showPowerBase();
       break;
     case STATE_SETTINGS_MENU:
-      settingsMenuSelection = (settingsMenuSelection + 1) % 6;
+      settingsMenuSelection = (settingsMenuSelection + 1) % 4;
       showSettingsMenu();
-      break;
-    case STATE_DISPLAY_SETTINGS:
-      menuSelection = (menuSelection + 1) % 3;
-      showDisplaySettings();
       break;
     case STATE_API_SELECT:
       menuSelection = (menuSelection + 1) % 2;
