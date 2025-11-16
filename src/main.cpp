@@ -2,6 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <Update.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -2727,7 +2728,7 @@ void sendToGemini() {
   if (httpResponseCode == 200) {
     String response = http.getString();
     
-  // Use JsonDocument which is the new standard
+    // Use JsonDocument which is the new standard
     JsonDocument responseDoc;
     DeserializationError error = deserializeJson(responseDoc, response);
     
@@ -3064,12 +3065,12 @@ void performOTAUpdate() {
         return;
     }
 
-    WiFiClient& client = http.getStream();
+    WiFiClient& updateStream = http.getStream();
     size_t written = 0;
     byte buff[1024] = { 0 };
 
     while (http.connected() && (contentLength > 0 || contentLength == -1)) {
-        size_t size = client.readBytes(buff, sizeof(buff));
+        size_t size = updateStream.readBytes(buff, sizeof(buff));
         if (size > 0) {
             Update.write(buff, size);
             written += size;
