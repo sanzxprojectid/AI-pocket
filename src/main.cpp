@@ -169,6 +169,49 @@ FlappyBird game = {10, 32, 0, 80, 20, 0, false};
 unsigned long lastGameUpdate = 0;
 const int gameUpdateInterval = 30;
 
+// SPACE SHOOTER GAME
+struct SpaceEntity {
+  int x;
+  int y;
+  bool active;
+};
+
+struct SpaceShooterGame {
+  int playerX;
+  int playerY;
+  SpaceEntity bullets[5];
+  SpaceEntity enemies[5];
+  int score;
+  int level;
+  bool gameOver;
+  bool shieldActive;
+  unsigned long shieldTimer;
+  unsigned long lastEnemySpawn;
+};
+
+SpaceShooterGame spaceGame;
+unsigned long lastSpaceGameUpdate = 0;
+const int spaceGameUpdateInterval = 50;
+
+// SNAKE GAME
+#define SNAKE_MAX_LEN 50
+struct SnakeGame {
+  int x[SNAKE_MAX_LEN];
+  int y[SNAKE_MAX_LEN];
+  int length;
+  int dirX; // -1, 0, 1
+  int dirY; // -1, 0, 1
+  int foodX;
+  int foodY;
+  int score;
+  bool gameOver;
+  int speed;
+};
+
+SnakeGame snakeGame;
+unsigned long lastSnakeUpdate = 0;
+int snakeUpdateInterval = 150;
+
 enum AppState {
   STATE_WIFI_MENU,
   STATE_WIFI_SCAN,
@@ -191,7 +234,9 @@ enum AppState {
   STATE_ESP_NOW_PEERS,
   STATE_ESP_NOW_PEER_OPTIONS,
   STATE_LOADING,
-  STATE_GAME_FLAPPY
+  STATE_GAME_FLAPPY,
+  STATE_GAME_SHOOTER,
+  STATE_GAME_SNAKE
 };
 
 AppState currentState = STATE_MAIN_MENU;
@@ -248,6 +293,14 @@ const unsigned char ICON_MESSAGE[] PROGMEM = {
 
 const unsigned char ICON_GAME[] PROGMEM = {
   0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C
+};
+
+const unsigned char ICON_SHOOTER[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0xDB, 0xFF, 0x24, 0x5A, 0x81
+};
+
+const unsigned char ICON_SNAKE[] PROGMEM = {
+  0x38, 0x44, 0x24, 0x18, 0x04, 0x44, 0x38, 0x00
 };
 
 // Forward declarations
@@ -311,6 +364,12 @@ void initGame();
 void updateGame();
 void drawGame();
 void handleGameInput(int direction);
+void initSpaceShooter();
+void updateSpaceShooter();
+void drawSpaceShooter();
+void initSnakeGame();
+void updateSnakeGame();
+void drawSnakeGame();
 
 // Button handlers
 void handleUp();
@@ -569,6 +628,8 @@ void loop() {
       }
       break;
     case STATE_GAME_FLAPPY:
+    case STATE_GAME_SHOOTER:
+    case STATE_GAME_SNAKE:
       {
         int blink = (millis() / 100) % 3;
         digitalWrite(LED_BUILTIN, blink < 2);
@@ -598,6 +659,24 @@ void loop() {
     }
   }
   
+  // Space Shooter Update
+  if (currentState == STATE_GAME_SHOOTER) {
+    if (currentMillis - lastSpaceGameUpdate > spaceGameUpdateInterval) {
+      updateSpaceShooter();
+      drawSpaceShooter();
+      lastSpaceGameUpdate = currentMillis;
+    }
+  }
+
+  // Snake Update
+  if (currentState == STATE_GAME_SNAKE) {
+    if (currentMillis - lastSnakeUpdate > snakeGame.speed) {
+      updateSnakeGame();
+      drawSnakeGame();
+      lastSnakeUpdate = currentMillis;
+    }
+  }
+
   // Keyboard text scrolling animation
   if (currentState == STATE_KEYBOARD || currentState == STATE_PASSWORD_INPUT) {
     int maxChars = 0;
@@ -674,7 +753,17 @@ void loop() {
     // TTP223 Capacitive Touch Button
     if (digitalRead(TOUCH_LEFT) == HIGH) {
       if (currentState == STATE_GAME_FLAPPY) {
-        handleGameInput(-1); // Move bird up
+        handleGameInput(-1);
+      } else if (currentState == STATE_GAME_SHOOTER) {
+         // Bomb / Nuke
+         if (spaceGame.score >= 50) {
+             spaceGame.score -= 50;
+             for(int i=0; i<5; i++) spaceGame.enemies[i].active = false;
+             showStatus("NUKE!", 500);
+         }
+      } else if (currentState == STATE_GAME_SNAKE) {
+         // Slow down
+         snakeGame.speed = 250;
       } else {
         handleLeft();
       }
@@ -682,7 +771,17 @@ void loop() {
     }
     if (digitalRead(TOUCH_RIGHT) == HIGH) {
       if (currentState == STATE_GAME_FLAPPY) {
-        handleGameInput(1); // Move bird down
+        handleGameInput(1);
+      } else if (currentState == STATE_GAME_SHOOTER) {
+         // Shield
+         if(!spaceGame.shieldActive && spaceGame.score >= 20) {
+           spaceGame.score -= 20;
+           spaceGame.shieldActive = true;
+           spaceGame.shieldTimer = millis();
+         }
+      } else if (currentState == STATE_GAME_SNAKE) {
+         // Speed up
+         snakeGame.speed = 50;
       } else {
         handleRight();
       }
@@ -1920,6 +2019,8 @@ void showMainMenu() {
     {"Calculator", ICON_CALC},
     {"Power", ICON_POWER},
     {"Flappy Bird", ICON_GAME},
+    {"Space Shooter", ICON_SHOOTER},
+    {"Snake", ICON_SNAKE},
     {"ESP-NOW", ICON_MESSAGE},
     {"Settings", ICON_SETTINGS}
   };
@@ -2018,13 +2119,27 @@ void handleMainMenuSelect() {
       lastGameUpdate = millis();
       drawGame();
       break;
-    case 5: // ESP-NOW
+    case 5: // Space Shooter
+      initSpaceShooter();
+      previousState = currentState;
+      currentState = STATE_GAME_SHOOTER;
+      lastSpaceGameUpdate = millis();
+      drawSpaceShooter();
+      break;
+    case 6: // Snake
+      initSnakeGame();
+      previousState = currentState;
+      currentState = STATE_GAME_SNAKE;
+      lastSnakeUpdate = millis();
+      drawSnakeGame();
+      break;
+    case 7: // ESP-NOW
       espnowMenuSelection = 0;
       previousState = currentState;
       currentState = STATE_ESP_NOW_MENU;
       showESPNowMenu();
       break;
-    case 6: // Settings
+    case 8: // Settings
       settingsMenuSelection = 0;
       previousState = currentState;
       currentState = STATE_SETTINGS_MENU;
@@ -2460,6 +2575,12 @@ void handleUp() {
     case STATE_GAME_FLAPPY:
         handleGameInput(-1);
         break;
+    case STATE_GAME_SHOOTER:
+        if (spaceGame.playerY > 10) spaceGame.playerY -= 4;
+        break;
+    case STATE_GAME_SNAKE:
+        if (snakeGame.dirY != 1) { snakeGame.dirX = 0; snakeGame.dirY = -1; }
+        break;
   }
 }
 
@@ -2468,7 +2589,7 @@ void handleDown() {
 
   switch(currentState) {
     case STATE_MAIN_MENU:
-      if (menuSelection < 6) { // 7 items
+      if (menuSelection < 8) { // 9 items
         menuSelection++;
         menuTargetScrollY = menuSelection * 22;
         menuTextScrollX = 0;
@@ -2558,6 +2679,12 @@ void handleDown() {
     case STATE_GAME_FLAPPY:
         // Down does nothing or maybe duck?
         break;
+    case STATE_GAME_SHOOTER:
+        if (spaceGame.playerY < SCREEN_HEIGHT - 10) spaceGame.playerY += 4;
+        break;
+    case STATE_GAME_SNAKE:
+        if (snakeGame.dirY != -1) { snakeGame.dirX = 0; snakeGame.dirY = 1; }
+        break;
   }
 }
 
@@ -2578,6 +2705,15 @@ void handleLeft() {
         showCalculator();
       }
       break;
+    case STATE_GAME_FLAPPY:
+      handleGameInput(-1); // Jump
+      break;
+    case STATE_GAME_SHOOTER:
+        if (spaceGame.playerX > 0) spaceGame.playerX -= 4;
+        break;
+    case STATE_GAME_SNAKE:
+        if (snakeGame.dirX != 1) { snakeGame.dirX = -1; snakeGame.dirY = 0; }
+        break;
   }
 }
 
@@ -2598,6 +2734,15 @@ void handleRight() {
         showCalculator();
       }
       break;
+    case STATE_GAME_FLAPPY:
+      // No right action
+      break;
+    case STATE_GAME_SHOOTER:
+        if (spaceGame.playerX < SCREEN_WIDTH - 8) spaceGame.playerX += 4;
+        break;
+    case STATE_GAME_SNAKE:
+        if (snakeGame.dirX != -1) { snakeGame.dirX = 1; snakeGame.dirY = 0; }
+        break;
   }
 }
 
@@ -2716,6 +2861,21 @@ void handleSelect() {
     case STATE_GAME_FLAPPY:
       handleGameInput(-1); // Jump
       break;
+    case STATE_GAME_SHOOTER:
+      // Shoot is usually handled by select in other games or maybe button select?
+      // We can put shooting here
+      for(int i=0; i<5; i++) {
+        if(!spaceGame.bullets[i].active) {
+          spaceGame.bullets[i].x = spaceGame.playerX + 4;
+          spaceGame.bullets[i].y = spaceGame.playerY;
+          spaceGame.bullets[i].active = true;
+          break;
+        }
+      }
+      break;
+    case STATE_GAME_SNAKE:
+      // Maybe pause?
+      break;
   }
 }
 
@@ -2729,6 +2889,8 @@ void handleBackButton() {
     case STATE_SETTINGS_MENU:
     case STATE_ESP_NOW_MENU:
     case STATE_GAME_FLAPPY:
+    case STATE_GAME_SHOOTER:
+    case STATE_GAME_SNAKE:
       currentState = STATE_MAIN_MENU;
       menuSelection = mainMenuSelection;
       menuTargetScrollY = mainMenuSelection * 22;
@@ -2814,6 +2976,8 @@ void refreshCurrentScreen() {
     case STATE_PASSWORD_INPUT: drawKeyboard(); break;
     case STATE_CHAT_RESPONSE: displayResponse(); break;
     case STATE_GAME_FLAPPY: drawGame(); break;
+    case STATE_GAME_SHOOTER: drawSpaceShooter(); break;
+    case STATE_GAME_SNAKE: drawSnakeGame(); break;
     default: showMainMenu(); break;
   }
 }
@@ -2907,4 +3071,246 @@ void sendToGemini() {
   currentState = STATE_CHAT_RESPONSE;
   scrollOffset = 0;
   displayResponse();
+}
+
+// ==========================================
+// SPACE SHOOTER LOGIC
+// ==========================================
+
+void initSpaceShooter() {
+  spaceGame.playerX = SCREEN_WIDTH / 2;
+  spaceGame.playerY = SCREEN_HEIGHT - 10;
+  spaceGame.score = 0;
+  spaceGame.level = 1;
+  spaceGame.gameOver = false;
+  spaceGame.shieldActive = false;
+  spaceGame.lastEnemySpawn = 0;
+
+  for(int i=0; i<5; i++) {
+    spaceGame.bullets[i].active = false;
+    spaceGame.enemies[i].active = false;
+  }
+}
+
+void updateSpaceShooter() {
+  if (spaceGame.gameOver) return;
+
+  // Update Bullets
+  for(int i=0; i<5; i++) {
+    if(spaceGame.bullets[i].active) {
+      spaceGame.bullets[i].y -= 4;
+      if(spaceGame.bullets[i].y < 0) spaceGame.bullets[i].active = false;
+    }
+  }
+
+  // Spawn Enemies
+  if(millis() - spaceGame.lastEnemySpawn > (2000 / spaceGame.level)) {
+    for(int i=0; i<5; i++) {
+      if(!spaceGame.enemies[i].active) {
+        spaceGame.enemies[i].x = random(0, SCREEN_WIDTH - 8);
+        spaceGame.enemies[i].y = 0;
+        spaceGame.enemies[i].active = true;
+        spaceGame.lastEnemySpawn = millis();
+        break;
+      }
+    }
+  }
+
+  // Update Enemies
+  for(int i=0; i<5; i++) {
+    if(spaceGame.enemies[i].active) {
+      spaceGame.enemies[i].y += 1 + (spaceGame.level / 2);
+
+      // Collision with Player
+      if(spaceGame.enemies[i].x < spaceGame.playerX + 8 &&
+         spaceGame.enemies[i].x + 8 > spaceGame.playerX &&
+         spaceGame.enemies[i].y < spaceGame.playerY + 8 &&
+         spaceGame.enemies[i].y + 8 > spaceGame.playerY) {
+
+         if(!spaceGame.shieldActive) {
+           spaceGame.gameOver = true;
+           ledError();
+           showStatus("GAME OVER\nScore: " + String(spaceGame.score), 2000);
+           currentState = STATE_MAIN_MENU;
+           showMainMenu();
+           return;
+         } else {
+           // Shield destroys enemy
+           spaceGame.enemies[i].active = false;
+           spaceGame.score += 5;
+           ledQuickFlash();
+         }
+      }
+
+      // Collision with Bullets
+      for(int j=0; j<5; j++) {
+        if(spaceGame.bullets[j].active) {
+          if(spaceGame.bullets[j].x >= spaceGame.enemies[i].x &&
+             spaceGame.bullets[j].x <= spaceGame.enemies[i].x + 8 &&
+             spaceGame.bullets[j].y >= spaceGame.enemies[i].y &&
+             spaceGame.bullets[j].y <= spaceGame.enemies[i].y + 8) {
+
+             spaceGame.enemies[i].active = false;
+             spaceGame.bullets[j].active = false;
+             spaceGame.score += 10;
+             if(spaceGame.score % 100 == 0) spaceGame.level++;
+             ledQuickFlash();
+          }
+        }
+      }
+
+      if(spaceGame.enemies[i].y > SCREEN_HEIGHT) {
+        spaceGame.enemies[i].active = false;
+        // Penalty?
+      }
+    }
+  }
+
+  // Shield Timer
+  if(spaceGame.shieldActive && millis() - spaceGame.shieldTimer > 3000) {
+    spaceGame.shieldActive = false;
+  }
+}
+
+void drawSpaceShooter() {
+  display.clearDisplay();
+  drawBatteryIndicator();
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Lvl:");
+  display.print(spaceGame.level);
+  display.setCursor(50, 0);
+  display.print("Score:");
+  display.print(spaceGame.score);
+
+  display.drawLine(0, 8, SCREEN_WIDTH, 8, SSD1306_WHITE);
+
+  // Draw Player
+  if(spaceGame.shieldActive) {
+    display.drawCircle(spaceGame.playerX + 4, spaceGame.playerY + 4, 6, SSD1306_WHITE);
+  }
+  // Simple ship
+  display.fillTriangle(spaceGame.playerX + 4, spaceGame.playerY,
+                       spaceGame.playerX, spaceGame.playerY + 8,
+                       spaceGame.playerX + 8, spaceGame.playerY + 8, SSD1306_WHITE);
+
+  // Draw Bullets
+  for(int i=0; i<5; i++) {
+    if(spaceGame.bullets[i].active) {
+      display.drawLine(spaceGame.bullets[i].x, spaceGame.bullets[i].y,
+                       spaceGame.bullets[i].x, spaceGame.bullets[i].y + 2, SSD1306_WHITE);
+    }
+  }
+
+  // Draw Enemies
+  for(int i=0; i<5; i++) {
+    if(spaceGame.enemies[i].active) {
+      display.fillRect(spaceGame.enemies[i].x, spaceGame.enemies[i].y, 8, 8, SSD1306_WHITE);
+      // Eyes
+      display.drawPixel(spaceGame.enemies[i].x + 2, spaceGame.enemies[i].y + 2, SSD1306_BLACK);
+      display.drawPixel(spaceGame.enemies[i].x + 5, spaceGame.enemies[i].y + 2, SSD1306_BLACK);
+    }
+  }
+
+  display.display();
+}
+
+// ==========================================
+// SNAKE GAME LOGIC
+// ==========================================
+
+void spawnFood() {
+  bool valid = false;
+  while(!valid) {
+    snakeGame.foodX = random(0, SCREEN_WIDTH / 4) * 4;
+    snakeGame.foodY = random(3, SCREEN_HEIGHT / 4) * 4; // Avoid top bar
+    valid = true;
+    for(int i=0; i<snakeGame.length; i++) {
+      if(snakeGame.x[i] == snakeGame.foodX && snakeGame.y[i] == snakeGame.foodY) {
+        valid = false;
+        break;
+      }
+    }
+  }
+}
+
+void initSnakeGame() {
+  snakeGame.length = 3;
+  snakeGame.x[0] = 64; snakeGame.y[0] = 32;
+  snakeGame.x[1] = 60; snakeGame.y[1] = 32;
+  snakeGame.x[2] = 56; snakeGame.y[2] = 32;
+  snakeGame.dirX = 1;
+  snakeGame.dirY = 0;
+  snakeGame.score = 0;
+  snakeGame.gameOver = false;
+  snakeGame.speed = 150;
+  spawnFood();
+}
+
+void updateSnakeGame() {
+  if (snakeGame.gameOver) return;
+
+  // Move body
+  for (int i = snakeGame.length - 1; i > 0; i--) {
+    snakeGame.x[i] = snakeGame.x[i - 1];
+    snakeGame.y[i] = snakeGame.y[i - 1];
+  }
+
+  // Move head
+  snakeGame.x[0] += snakeGame.dirX * 4;
+  snakeGame.y[0] += snakeGame.dirY * 4;
+
+  // Wrap around
+  if (snakeGame.x[0] >= SCREEN_WIDTH) snakeGame.x[0] = 0;
+  if (snakeGame.x[0] < 0) snakeGame.x[0] = SCREEN_WIDTH - 4;
+  if (snakeGame.y[0] >= SCREEN_HEIGHT) snakeGame.y[0] = 12; // Below status bar
+  if (snakeGame.y[0] < 12) snakeGame.y[0] = SCREEN_HEIGHT - 4;
+
+  // Check self collision
+  for (int i = 1; i < snakeGame.length; i++) {
+    if (snakeGame.x[0] == snakeGame.x[i] && snakeGame.y[0] == snakeGame.y[i]) {
+      snakeGame.gameOver = true;
+      ledError();
+      showStatus("GAME OVER\nScore: " + String(snakeGame.score), 2000);
+      currentState = STATE_MAIN_MENU;
+      showMainMenu();
+      return;
+    }
+  }
+
+  // Check food collision
+  if (abs(snakeGame.x[0] - snakeGame.foodX) < 4 && abs(snakeGame.y[0] - snakeGame.foodY) < 4) {
+    snakeGame.score += 10;
+    if (snakeGame.length < SNAKE_MAX_LEN) {
+      snakeGame.length++;
+    }
+    snakeGame.speed = max(50, snakeGame.speed - 2);
+    spawnFood();
+    ledQuickFlash();
+  }
+}
+
+void drawSnakeGame() {
+  display.clearDisplay();
+  drawBatteryIndicator();
+
+  display.setTextSize(1);
+  display.setCursor(2, 0);
+  display.print("SNAKE");
+  display.setCursor(80, 0);
+  display.print("Sc:");
+  display.print(snakeGame.score);
+
+  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+
+  // Draw Snake
+  for(int i=0; i<snakeGame.length; i++) {
+    display.fillRect(snakeGame.x[i], snakeGame.y[i], 3, 3, SSD1306_WHITE);
+  }
+
+  // Draw Food
+  display.fillRect(snakeGame.foodX, snakeGame.foodY, 3, 3, SSD1306_WHITE);
+
+  display.display();
 }
