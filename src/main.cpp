@@ -266,7 +266,8 @@ enum AppState {
   STATE_GAME_SPACE_INVADERS,
   STATE_GAME_SIDE_SCROLLER,
   STATE_GAME_PONG,
-  STATE_GAME_SELECT
+  STATE_GAME_SELECT,
+  STATE_VIDEO_PLAYER
 };
 
 AppState currentState = STATE_MAIN_MENU;
@@ -304,6 +305,22 @@ const unsigned char ICON_CHAT[] PROGMEM = {
 const unsigned char ICON_GAME[] PROGMEM = {
   0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C
 };
+
+const unsigned char ICON_VIDEO[] PROGMEM = {
+  0x7E, 0x81, 0x81, 0xBD, 0xBD, 0x81, 0x81, 0x7E
+};
+
+// Video Player Data
+// ==========================================
+// PASTE YOUR VIDEO FRAME ARRAY HERE
+// Format: const unsigned char frame1[] PROGMEM = { ... };
+//         const unsigned char* videoFrames[] = { frame1, frame2, ... };
+// ==========================================
+const unsigned char* videoFrames[] = { NULL }; // Placeholder
+int videoTotalFrames = 0;
+int videoCurrentFrame = 0;
+unsigned long lastVideoFrameTime = 0;
+const int videoFrameDelay = 40; // 25 FPS
 
 // Forward declarations
 void showMainMenu();
@@ -349,6 +366,8 @@ void initPong();
 void updatePong();
 void drawPong();
 void handlePongInput();
+
+void drawVideoPlayer();
 
 // Button handlers
 void handleUp();
@@ -511,6 +530,10 @@ void loop() {
         break;
     }
     lastGameUpdate = currentMillis;
+  }
+
+  if (currentState == STATE_VIDEO_PLAYER) {
+    drawVideoPlayer();
   }
 
   // Main Menu Animation
@@ -1795,7 +1818,8 @@ void showMainMenu() {
   MenuItem menuItems[] = {
     {"Chat AI", ICON_CHAT},
     {"WiFi", ICON_WIFI},
-    {"Games", ICON_GAME}
+    {"Games", ICON_GAME},
+    {"Video", ICON_VIDEO}
   };
   
   int numItems = sizeof(menuItems) / sizeof(MenuItem);
@@ -1877,6 +1901,36 @@ void handleMainMenuSelect() {
       currentState = STATE_GAME_SELECT;
       showGameSelect();
       break;
+    case 3: // Video Player
+      videoCurrentFrame = 0;
+      currentState = STATE_VIDEO_PLAYER;
+      break;
+  }
+}
+
+void drawVideoPlayer() {
+  // Simple frame timing
+  if (millis() - lastVideoFrameTime > videoFrameDelay) {
+    lastVideoFrameTime = millis();
+
+    display.clearDisplay();
+
+    if (videoTotalFrames > 0 && videoFrames[0] != NULL) {
+      display.drawBitmap(0, 0, videoFrames[videoCurrentFrame], SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+
+      videoCurrentFrame++;
+      if (videoCurrentFrame >= videoTotalFrames) {
+        videoCurrentFrame = 0;
+      }
+    } else {
+      display.setCursor(10, 20);
+      display.setTextSize(1);
+      display.println("No Video Data");
+      display.setCursor(10, 35);
+      display.println("Add frames to code");
+    }
+
+    display.display();
   }
 }
 
@@ -2192,10 +2246,9 @@ void handleUp() {
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
-      if (cursorY > 0) {
-        cursorY--;
-        drawKeyboard();
-      }
+      cursorY--;
+      if (cursorY < 0) cursorY = 2; // Wrap to bottom
+      drawKeyboard();
       break;
     case STATE_CHAT_RESPONSE:
       if (scrollOffset > 0) {
@@ -2215,7 +2268,7 @@ void handleUp() {
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      if (menuSelection < 2) {
+      if (menuSelection < 3) {
         menuSelection++;
         menuTargetScrollY = menuSelection * 22;
         menuTextScrollX = 0;
@@ -2251,10 +2304,9 @@ void handleDown() {
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
-      if (cursorY < 2) {
-        cursorY++;
-        drawKeyboard();
-      }
+      cursorY++;
+      if (cursorY > 2) cursorY = 0; // Wrap to top
+      drawKeyboard();
       break;
     case STATE_CHAT_RESPONSE:
       scrollOffset += 10;
@@ -2273,10 +2325,9 @@ void handleLeft() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
-      if (cursorX > 0) {
-        cursorX--;
-        drawKeyboard();
-      }
+      cursorX--;
+      if (cursorX < 0) cursorX = 9; // Wrap to right
+      drawKeyboard();
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -2291,10 +2342,9 @@ void handleRight() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
-      if (cursorX < 9) {
-        cursorX++;
-        drawKeyboard();
-      }
+      cursorX++;
+      if (cursorX > 9) cursorX = 0; // Wrap to left
+      drawKeyboard();
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -2438,6 +2488,10 @@ void handleBackButton() {
       currentState = STATE_GAME_SELECT;
       menuSelection = 0;
       showGameSelect();
+      break;
+    case STATE_VIDEO_PLAYER:
+      currentState = STATE_MAIN_MENU;
+      showMainMenu();
       break;
   }
 }
