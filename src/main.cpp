@@ -181,36 +181,54 @@ struct SpaceShooterGame {
   int playerY;
   SpaceEntity bullets[5];
   SpaceEntity enemies[5];
+  // Boss data
+  bool bossActive;
+  int bossX;
+  int bossY;
+  int bossHP;
+  int bossDir; // 1 or -1
+  unsigned long lastBossShot;
+
   int score;
   int level;
   bool gameOver;
+
+  // Powerups
+  int powerUpLevel; // 0=single, 1=double
+
   bool shieldActive;
   unsigned long shieldTimer;
   unsigned long lastEnemySpawn;
+  unsigned long ledTimer;
 };
 
 SpaceShooterGame spaceGame;
 unsigned long lastSpaceGameUpdate = 0;
-const int spaceGameUpdateInterval = 50;
+const int spaceGameUpdateInterval = 40;
 
-// SNAKE GAME
-#define SNAKE_MAX_LEN 50
-struct SnakeGame {
-  int x[SNAKE_MAX_LEN];
-  int y[SNAKE_MAX_LEN];
-  int length;
-  int dirX; // -1, 0, 1
-  int dirY; // -1, 0, 1
-  int foodX;
-  int foodY;
-  int score;
-  bool gameOver;
-  int speed;
+// PLATFORMER GAME
+struct Rect {
+  int x, y, w, h;
 };
 
-SnakeGame snakeGame;
-unsigned long lastSnakeUpdate = 0;
-int snakeUpdateInterval = 150;
+struct PlatformerGame {
+  float playerX;
+  float playerY;
+  float velocityY;
+  float velocityX;
+  bool grounded;
+  int levelOffset;
+  int score;
+  bool gameOver;
+  // Simple level data
+  Rect platforms[10];
+  int platformCount;
+  Rect coins[5];
+};
+
+PlatformerGame platformerGame;
+unsigned long lastPlatformerUpdate = 0;
+const int platformerUpdateInterval = 30;
 
 enum AppState {
   STATE_WIFI_MENU,
@@ -236,7 +254,7 @@ enum AppState {
   STATE_LOADING,
   STATE_GAME_FLAPPY,
   STATE_GAME_SHOOTER,
-  STATE_GAME_SNAKE
+  STATE_GAME_PLATFORMER
 };
 
 AppState currentState = STATE_MAIN_MENU;
@@ -299,8 +317,8 @@ const unsigned char ICON_SHOOTER[] PROGMEM = {
   0x18, 0x3C, 0x7E, 0xDB, 0xFF, 0x24, 0x5A, 0x81
 };
 
-const unsigned char ICON_SNAKE[] PROGMEM = {
-  0x38, 0x44, 0x24, 0x18, 0x04, 0x44, 0x38, 0x00
+const unsigned char ICON_PLATFORMER[] PROGMEM = {
+  0x00, 0x18, 0x3C, 0x5A, 0x18, 0x24, 0x42, 0x00
 };
 
 // Forward declarations
@@ -367,9 +385,9 @@ void handleGameInput(int direction);
 void initSpaceShooter();
 void updateSpaceShooter();
 void drawSpaceShooter();
-void initSnakeGame();
-void updateSnakeGame();
-void drawSnakeGame();
+void initPlatformer();
+void updatePlatformer();
+void drawPlatformer();
 
 // Button handlers
 void handleUp();
@@ -629,7 +647,7 @@ void loop() {
       break;
     case STATE_GAME_FLAPPY:
     case STATE_GAME_SHOOTER:
-    case STATE_GAME_SNAKE:
+    case STATE_GAME_PLATFORMER:
       {
         int blink = (millis() / 100) % 3;
         digitalWrite(LED_BUILTIN, blink < 2);
@@ -668,12 +686,12 @@ void loop() {
     }
   }
 
-  // Snake Update
-  if (currentState == STATE_GAME_SNAKE) {
-    if (currentMillis - lastSnakeUpdate > snakeGame.speed) {
-      updateSnakeGame();
-      drawSnakeGame();
-      lastSnakeUpdate = currentMillis;
+  // Platformer Update
+  if (currentState == STATE_GAME_PLATFORMER) {
+    if (currentMillis - lastPlatformerUpdate > platformerUpdateInterval) {
+      updatePlatformer();
+      drawPlatformer();
+      lastPlatformerUpdate = currentMillis;
     }
   }
 
@@ -761,9 +779,9 @@ void loop() {
              for(int i=0; i<5; i++) spaceGame.enemies[i].active = false;
              showStatus("NUKE!", 500);
          }
-      } else if (currentState == STATE_GAME_SNAKE) {
-         // Slow down
-         snakeGame.speed = 250;
+      } else if (currentState == STATE_GAME_PLATFORMER) {
+         // Dash Left
+         platformerGame.velocityX = -5;
       } else {
         handleLeft();
       }
@@ -779,9 +797,9 @@ void loop() {
            spaceGame.shieldActive = true;
            spaceGame.shieldTimer = millis();
          }
-      } else if (currentState == STATE_GAME_SNAKE) {
-         // Speed up
-         snakeGame.speed = 50;
+      } else if (currentState == STATE_GAME_PLATFORMER) {
+         // Dash Right
+         platformerGame.velocityX = 5;
       } else {
         handleRight();
       }
@@ -2020,7 +2038,7 @@ void showMainMenu() {
     {"Power", ICON_POWER},
     {"Flappy Bird", ICON_GAME},
     {"Space Shooter", ICON_SHOOTER},
-    {"Snake", ICON_SNAKE},
+    {"Platformer", ICON_PLATFORMER},
     {"ESP-NOW", ICON_MESSAGE},
     {"Settings", ICON_SETTINGS}
   };
@@ -2126,12 +2144,12 @@ void handleMainMenuSelect() {
       lastSpaceGameUpdate = millis();
       drawSpaceShooter();
       break;
-    case 6: // Snake
-      initSnakeGame();
+    case 6: // Platformer
+      initPlatformer();
       previousState = currentState;
-      currentState = STATE_GAME_SNAKE;
-      lastSnakeUpdate = millis();
-      drawSnakeGame();
+      currentState = STATE_GAME_PLATFORMER;
+      lastPlatformerUpdate = millis();
+      drawPlatformer();
       break;
     case 7: // ESP-NOW
       espnowMenuSelection = 0;
@@ -2578,8 +2596,11 @@ void handleUp() {
     case STATE_GAME_SHOOTER:
         if (spaceGame.playerY > 10) spaceGame.playerY -= 4;
         break;
-    case STATE_GAME_SNAKE:
-        if (snakeGame.dirY != 1) { snakeGame.dirX = 0; snakeGame.dirY = -1; }
+    case STATE_GAME_PLATFORMER:
+        if (platformerGame.grounded) {
+            platformerGame.velocityY = -4; // Jump
+            platformerGame.grounded = false;
+        }
         break;
   }
 }
@@ -2682,8 +2703,8 @@ void handleDown() {
     case STATE_GAME_SHOOTER:
         if (spaceGame.playerY < SCREEN_HEIGHT - 10) spaceGame.playerY += 4;
         break;
-    case STATE_GAME_SNAKE:
-        if (snakeGame.dirY != -1) { snakeGame.dirX = 0; snakeGame.dirY = 1; }
+    case STATE_GAME_PLATFORMER:
+        // Duck?
         break;
   }
 }
@@ -2711,8 +2732,8 @@ void handleLeft() {
     case STATE_GAME_SHOOTER:
         if (spaceGame.playerX > 0) spaceGame.playerX -= 4;
         break;
-    case STATE_GAME_SNAKE:
-        if (snakeGame.dirX != 1) { snakeGame.dirX = -1; snakeGame.dirY = 0; }
+    case STATE_GAME_PLATFORMER:
+        platformerGame.velocityX = -2;
         break;
   }
 }
@@ -2740,8 +2761,8 @@ void handleRight() {
     case STATE_GAME_SHOOTER:
         if (spaceGame.playerX < SCREEN_WIDTH - 8) spaceGame.playerX += 4;
         break;
-    case STATE_GAME_SNAKE:
-        if (snakeGame.dirX != -1) { snakeGame.dirX = 1; snakeGame.dirY = 0; }
+    case STATE_GAME_PLATFORMER:
+        platformerGame.velocityX = 2;
         break;
   }
 }
@@ -2862,8 +2883,7 @@ void handleSelect() {
       handleGameInput(-1); // Jump
       break;
     case STATE_GAME_SHOOTER:
-      // Shoot is usually handled by select in other games or maybe button select?
-      // We can put shooting here
+      // Shoot
       for(int i=0; i<5; i++) {
         if(!spaceGame.bullets[i].active) {
           spaceGame.bullets[i].x = spaceGame.playerX + 4;
@@ -2873,8 +2893,8 @@ void handleSelect() {
         }
       }
       break;
-    case STATE_GAME_SNAKE:
-      // Maybe pause?
+    case STATE_GAME_PLATFORMER:
+      // Action?
       break;
   }
 }
@@ -2890,7 +2910,7 @@ void handleBackButton() {
     case STATE_ESP_NOW_MENU:
     case STATE_GAME_FLAPPY:
     case STATE_GAME_SHOOTER:
-    case STATE_GAME_SNAKE:
+    case STATE_GAME_PLATFORMER:
       currentState = STATE_MAIN_MENU;
       menuSelection = mainMenuSelection;
       menuTargetScrollY = mainMenuSelection * 22;
@@ -2977,7 +2997,7 @@ void refreshCurrentScreen() {
     case STATE_CHAT_RESPONSE: displayResponse(); break;
     case STATE_GAME_FLAPPY: drawGame(); break;
     case STATE_GAME_SHOOTER: drawSpaceShooter(); break;
-    case STATE_GAME_SNAKE: drawSnakeGame(); break;
+    case STATE_GAME_PLATFORMER: drawPlatformer(); break;
     default: showMainMenu(); break;
   }
 }
@@ -3074,7 +3094,7 @@ void sendToGemini() {
 }
 
 // ==========================================
-// SPACE SHOOTER LOGIC
+// SPACE SHOOTER LOGIC (UPGRADED)
 // ==========================================
 
 void initSpaceShooter() {
@@ -3085,6 +3105,10 @@ void initSpaceShooter() {
   spaceGame.gameOver = false;
   spaceGame.shieldActive = false;
   spaceGame.lastEnemySpawn = 0;
+  spaceGame.bossActive = false;
+  spaceGame.bossHP = 0;
+  spaceGame.powerUpLevel = 0;
+  spaceGame.ledTimer = 0;
 
   for(int i=0; i<5; i++) {
     spaceGame.bullets[i].active = false;
@@ -3095,6 +3119,13 @@ void initSpaceShooter() {
 void updateSpaceShooter() {
   if (spaceGame.gameOver) return;
 
+  // LED Effect
+  if (millis() - spaceGame.ledTimer < 100) {
+    digitalWrite(LED_BUILTIN, HIGH);
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+
   // Update Bullets
   for(int i=0; i<5; i++) {
     if(spaceGame.bullets[i].active) {
@@ -3103,17 +3134,56 @@ void updateSpaceShooter() {
     }
   }
 
-  // Spawn Enemies
-  if(millis() - spaceGame.lastEnemySpawn > (2000 / spaceGame.level)) {
-    for(int i=0; i<5; i++) {
-      if(!spaceGame.enemies[i].active) {
-        spaceGame.enemies[i].x = random(0, SCREEN_WIDTH - 8);
-        spaceGame.enemies[i].y = 0;
-        spaceGame.enemies[i].active = true;
-        spaceGame.lastEnemySpawn = millis();
-        break;
+  // Boss Logic
+  if (spaceGame.score > 0 && spaceGame.score % 200 == 0 && !spaceGame.bossActive) {
+      spaceGame.bossActive = true;
+      spaceGame.bossHP = 10 + spaceGame.level * 5;
+      spaceGame.bossX = SCREEN_WIDTH / 2;
+      spaceGame.bossY = 10;
+      spaceGame.bossDir = 1;
+      showStatus("BOSS!", 1000);
+  }
+
+  if (spaceGame.bossActive) {
+      spaceGame.bossX += spaceGame.bossDir;
+      if (spaceGame.bossX > SCREEN_WIDTH - 20 || spaceGame.bossX < 0) {
+          spaceGame.bossDir *= -1;
       }
-    }
+
+      // Boss collision with player bullet
+      for(int j=0; j<5; j++) {
+        if(spaceGame.bullets[j].active) {
+          if(spaceGame.bullets[j].x >= spaceGame.bossX &&
+             spaceGame.bullets[j].x <= spaceGame.bossX + 20 &&
+             spaceGame.bullets[j].y >= spaceGame.bossY &&
+             spaceGame.bullets[j].y <= spaceGame.bossY + 10) {
+
+             spaceGame.bullets[j].active = false;
+             spaceGame.bossHP--;
+             spaceGame.ledTimer = millis(); // Flash LED
+             if (spaceGame.bossHP <= 0) {
+                 spaceGame.bossActive = false;
+                 spaceGame.score += 50;
+                 spaceGame.level++;
+                 spaceGame.powerUpLevel = 1; // Upgrade weapon
+                 showStatus("VICTORY!", 1000);
+             }
+          }
+        }
+      }
+  } else {
+      // Spawn Enemies
+      if(millis() - spaceGame.lastEnemySpawn > (2000 / spaceGame.level)) {
+        for(int i=0; i<5; i++) {
+          if(!spaceGame.enemies[i].active) {
+            spaceGame.enemies[i].x = random(0, SCREEN_WIDTH - 8);
+            spaceGame.enemies[i].y = 0;
+            spaceGame.enemies[i].active = true;
+            spaceGame.lastEnemySpawn = millis();
+            break;
+          }
+        }
+      }
   }
 
   // Update Enemies
@@ -3135,10 +3205,9 @@ void updateSpaceShooter() {
            showMainMenu();
            return;
          } else {
-           // Shield destroys enemy
            spaceGame.enemies[i].active = false;
            spaceGame.score += 5;
-           ledQuickFlash();
+           spaceGame.ledTimer = millis();
          }
       }
 
@@ -3153,15 +3222,13 @@ void updateSpaceShooter() {
              spaceGame.enemies[i].active = false;
              spaceGame.bullets[j].active = false;
              spaceGame.score += 10;
-             if(spaceGame.score % 100 == 0) spaceGame.level++;
-             ledQuickFlash();
+             spaceGame.ledTimer = millis();
           }
         }
       }
 
       if(spaceGame.enemies[i].y > SCREEN_HEIGHT) {
         spaceGame.enemies[i].active = false;
-        // Penalty?
       }
     }
   }
@@ -3190,7 +3257,6 @@ void drawSpaceShooter() {
   if(spaceGame.shieldActive) {
     display.drawCircle(spaceGame.playerX + 4, spaceGame.playerY + 4, 6, SSD1306_WHITE);
   }
-  // Simple ship
   display.fillTriangle(spaceGame.playerX + 4, spaceGame.playerY,
                        spaceGame.playerX, spaceGame.playerY + 8,
                        spaceGame.playerX + 8, spaceGame.playerY + 8, SSD1306_WHITE);
@@ -3199,15 +3265,30 @@ void drawSpaceShooter() {
   for(int i=0; i<5; i++) {
     if(spaceGame.bullets[i].active) {
       display.drawLine(spaceGame.bullets[i].x, spaceGame.bullets[i].y,
-                       spaceGame.bullets[i].x, spaceGame.bullets[i].y + 2, SSD1306_WHITE);
+                       spaceGame.bullets[i].x, spaceGame.bullets[i].y + 3, SSD1306_WHITE);
+      if (spaceGame.powerUpLevel > 0) {
+          // Double shot visual
+          display.drawLine(spaceGame.bullets[i].x - 2, spaceGame.bullets[i].y + 1,
+                           spaceGame.bullets[i].x - 2, spaceGame.bullets[i].y + 3, SSD1306_WHITE);
+          display.drawLine(spaceGame.bullets[i].x + 2, spaceGame.bullets[i].y + 1,
+                           spaceGame.bullets[i].x + 2, spaceGame.bullets[i].y + 3, SSD1306_WHITE);
+      }
     }
+  }
+
+  // Draw Boss
+  if (spaceGame.bossActive) {
+      display.fillRect(spaceGame.bossX, spaceGame.bossY, 20, 10, SSD1306_WHITE);
+      // HP Bar
+      display.drawRect(spaceGame.bossX, spaceGame.bossY - 2, 20, 2, SSD1306_WHITE);
+      int fill = map(spaceGame.bossHP, 0, 10 + spaceGame.level * 5, 0, 18);
+      display.fillRect(spaceGame.bossX + 1, spaceGame.bossY - 2, fill, 2, SSD1306_WHITE);
   }
 
   // Draw Enemies
   for(int i=0; i<5; i++) {
     if(spaceGame.enemies[i].active) {
       display.fillRect(spaceGame.enemies[i].x, spaceGame.enemies[i].y, 8, 8, SSD1306_WHITE);
-      // Eyes
       display.drawPixel(spaceGame.enemies[i].x + 2, spaceGame.enemies[i].y + 2, SSD1306_BLACK);
       display.drawPixel(spaceGame.enemies[i].x + 5, spaceGame.enemies[i].y + 2, SSD1306_BLACK);
     }
@@ -3217,100 +3298,134 @@ void drawSpaceShooter() {
 }
 
 // ==========================================
-// SNAKE GAME LOGIC
+// PLATFORMER LOGIC
 // ==========================================
 
-void spawnFood() {
-  bool valid = false;
-  while(!valid) {
-    snakeGame.foodX = random(0, SCREEN_WIDTH / 4) * 4;
-    snakeGame.foodY = random(3, SCREEN_HEIGHT / 4) * 4; // Avoid top bar
-    valid = true;
-    for(int i=0; i<snakeGame.length; i++) {
-      if(snakeGame.x[i] == snakeGame.foodX && snakeGame.y[i] == snakeGame.foodY) {
-        valid = false;
-        break;
-      }
-    }
-  }
+void initPlatformer() {
+    platformerGame.playerX = 10;
+    platformerGame.playerY = SCREEN_HEIGHT - 20;
+    platformerGame.velocityX = 0;
+    platformerGame.velocityY = 0;
+    platformerGame.grounded = false;
+    platformerGame.score = 0;
+    platformerGame.levelOffset = 0;
+    platformerGame.gameOver = false;
+
+    // Level Design (x, y, w, h)
+    platformerGame.platformCount = 6;
+    platformerGame.platforms[0] = {0, SCREEN_HEIGHT - 5, SCREEN_WIDTH * 2, 5}; // Floor
+    platformerGame.platforms[1] = {40, SCREEN_HEIGHT - 20, 30, 5};
+    platformerGame.platforms[2] = {90, SCREEN_HEIGHT - 35, 30, 5};
+    platformerGame.platforms[3] = {140, SCREEN_HEIGHT - 20, 30, 5}; // Scrollable
+    platformerGame.platforms[4] = {190, SCREEN_HEIGHT - 45, 40, 5};
+    platformerGame.platforms[5] = {250, SCREEN_HEIGHT - 15, 20, 5};
+
+    // Coins
+    platformerGame.coins[0] = {50, SCREEN_HEIGHT - 30, 4, 4};
+    platformerGame.coins[1] = {100, SCREEN_HEIGHT - 45, 4, 4};
+    platformerGame.coins[2] = {150, SCREEN_HEIGHT - 30, 4, 4};
+    platformerGame.coins[3] = {200, SCREEN_HEIGHT - 55, 4, 4};
+    platformerGame.coins[4] = {260, SCREEN_HEIGHT - 25, 4, 4};
 }
 
-void initSnakeGame() {
-  snakeGame.length = 3;
-  snakeGame.x[0] = 64; snakeGame.y[0] = 32;
-  snakeGame.x[1] = 60; snakeGame.y[1] = 32;
-  snakeGame.x[2] = 56; snakeGame.y[2] = 32;
-  snakeGame.dirX = 1;
-  snakeGame.dirY = 0;
-  snakeGame.score = 0;
-  snakeGame.gameOver = false;
-  snakeGame.speed = 150;
-  spawnFood();
+void updatePlatformer() {
+    if (platformerGame.gameOver) return;
+
+    // Gravity
+    platformerGame.velocityY += 0.5;
+    platformerGame.playerY += platformerGame.velocityY;
+
+    // Horizontal Movement
+    platformerGame.playerX += platformerGame.velocityX;
+
+    // Friction
+    platformerGame.velocityX *= 0.8;
+    if (abs(platformerGame.velocityX) < 0.1) platformerGame.velocityX = 0;
+
+    // Collision Detection
+    platformerGame.grounded = false;
+    int pW = 6;
+    int pH = 8;
+
+    for (int i=0; i < platformerGame.platformCount; i++) {
+        Rect r = platformerGame.platforms[i];
+        // Simple AABB (Screen space coords relative to level offset)
+        int rectX = r.x - platformerGame.levelOffset;
+
+        // Only check if visible
+        if (rectX + r.w > 0 && rectX < SCREEN_WIDTH) {
+            if (platformerGame.playerX + pW > rectX &&
+                platformerGame.playerX < rectX + r.w &&
+                platformerGame.playerY + pH > r.y &&
+                platformerGame.playerY < r.y + r.h) {
+
+                // Land on top
+                if (platformerGame.velocityY > 0 && platformerGame.playerY + pH - platformerGame.velocityY <= r.y) {
+                    platformerGame.playerY = r.y - pH;
+                    platformerGame.velocityY = 0;
+                    platformerGame.grounded = true;
+                }
+            }
+        }
+    }
+
+    // Coins
+    for (int i=0; i < 5; i++) {
+        if (platformerGame.coins[i].w > 0) { // Active
+            int cX = platformerGame.coins[i].x - platformerGame.levelOffset;
+            if (platformerGame.playerX + pW > cX &&
+                platformerGame.playerX < cX + 4 &&
+                platformerGame.playerY + pH > platformerGame.coins[i].y &&
+                platformerGame.playerY < platformerGame.coins[i].y + 4) {
+
+                platformerGame.coins[i].w = 0; // Collect
+                platformerGame.score += 10;
+                ledQuickFlash();
+            }
+        }
+    }
+
+    // Scrolling
+    if (platformerGame.playerX > SCREEN_WIDTH / 2) {
+        int diff = platformerGame.playerX - SCREEN_WIDTH / 2;
+        platformerGame.levelOffset += diff;
+        platformerGame.playerX -= diff;
+    }
+
+    // Death
+    if (platformerGame.playerY > SCREEN_HEIGHT) {
+        platformerGame.gameOver = true;
+        ledError();
+        showStatus("GAME OVER\nScore: " + String(platformerGame.score), 2000);
+        currentState = STATE_MAIN_MENU;
+        showMainMenu();
+    }
 }
 
-void updateSnakeGame() {
-  if (snakeGame.gameOver) return;
+void drawPlatformer() {
+    display.clearDisplay();
+    drawBatteryIndicator();
 
-  // Move body
-  for (int i = snakeGame.length - 1; i > 0; i--) {
-    snakeGame.x[i] = snakeGame.x[i - 1];
-    snakeGame.y[i] = snakeGame.y[i - 1];
-  }
+    display.setCursor(0, 0);
+    display.print("Score:");
+    display.print(platformerGame.score);
 
-  // Move head
-  snakeGame.x[0] += snakeGame.dirX * 4;
-  snakeGame.y[0] += snakeGame.dirY * 4;
-
-  // Wrap around
-  if (snakeGame.x[0] >= SCREEN_WIDTH) snakeGame.x[0] = 0;
-  if (snakeGame.x[0] < 0) snakeGame.x[0] = SCREEN_WIDTH - 4;
-  if (snakeGame.y[0] >= SCREEN_HEIGHT) snakeGame.y[0] = 12; // Below status bar
-  if (snakeGame.y[0] < 12) snakeGame.y[0] = SCREEN_HEIGHT - 4;
-
-  // Check self collision
-  for (int i = 1; i < snakeGame.length; i++) {
-    if (snakeGame.x[0] == snakeGame.x[i] && snakeGame.y[0] == snakeGame.y[i]) {
-      snakeGame.gameOver = true;
-      ledError();
-      showStatus("GAME OVER\nScore: " + String(snakeGame.score), 2000);
-      currentState = STATE_MAIN_MENU;
-      showMainMenu();
-      return;
+    // Draw Platforms
+    for (int i=0; i < platformerGame.platformCount; i++) {
+        Rect r = platformerGame.platforms[i];
+        display.fillRect(r.x - platformerGame.levelOffset, r.y, r.w, r.h, SSD1306_WHITE);
     }
-  }
 
-  // Check food collision
-  if (abs(snakeGame.x[0] - snakeGame.foodX) < 4 && abs(snakeGame.y[0] - snakeGame.foodY) < 4) {
-    snakeGame.score += 10;
-    if (snakeGame.length < SNAKE_MAX_LEN) {
-      snakeGame.length++;
+    // Draw Coins
+    for (int i=0; i < 5; i++) {
+        if (platformerGame.coins[i].w > 0) {
+            display.drawCircle(platformerGame.coins[i].x - platformerGame.levelOffset + 2,
+                               platformerGame.coins[i].y + 2, 2, SSD1306_WHITE);
+        }
     }
-    snakeGame.speed = max(50, snakeGame.speed - 2);
-    spawnFood();
-    ledQuickFlash();
-  }
-}
 
-void drawSnakeGame() {
-  display.clearDisplay();
-  drawBatteryIndicator();
+    // Draw Player
+    display.fillRect((int)platformerGame.playerX, (int)platformerGame.playerY, 6, 8, SSD1306_WHITE);
 
-  display.setTextSize(1);
-  display.setCursor(2, 0);
-  display.print("SNAKE");
-  display.setCursor(80, 0);
-  display.print("Sc:");
-  display.print(snakeGame.score);
-
-  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
-
-  // Draw Snake
-  for(int i=0; i<snakeGame.length; i++) {
-    display.fillRect(snakeGame.x[i], snakeGame.y[i], 3, 3, SSD1306_WHITE);
-  }
-
-  // Draw Food
-  display.fillRect(snakeGame.foodX, snakeGame.foodY, 3, 3, SSD1306_WHITE);
-
-  display.display();
+    display.display();
 }
