@@ -31,7 +31,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Dual Gemini API Keys
 const char* geminiApiKey1 = "AIzaSyAtKmbcvYB8wuHI9bqkOhufJld0oSKv7zM";
 const char* geminiApiKey2 = "AIzaSyBvXPx3SrrRRJIU9Wf6nKcuQu9XjBlSH6Y";
-const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
+const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
 Preferences preferences;
 
@@ -343,6 +343,15 @@ void setup() {
   setCpuFrequencyMhz(240); // Set CPU to 240MHz for high performance
   Serial.begin(115200);
   delay(1000);
+
+  // Explicitly enable PSRAM
+  if(psramInit()){
+      Serial.println("\nPSRAM Enabled");
+      Serial.print("PSRAM Size: ");
+      Serial.println(ESP.getPsramSize());
+  } else {
+      Serial.println("\nPSRAM Init Failed");
+  }
   
   Serial.println("\n=== ESP32-S3 Gaming Edition v1.0 ===");
   
@@ -2372,6 +2381,10 @@ void sendToGemini() {
   JsonObject parts = content["parts"].add();
   parts["text"] = userInput;
 
+  // Limit response length for OLED display and memory safety
+  JsonObject config = doc["generationConfig"].to<JsonObject>();
+  config["maxOutputTokens"] = 150;
+
   String requestBody;
   serializeJson(doc, requestBody);
 
@@ -2386,21 +2399,36 @@ void sendToGemini() {
     String response = http.getString();
     Serial.println("Response received");
 
+    // Debug raw response if needed
+    // Serial.println(response);
+
     JsonDocument responseDoc;
     DeserializationError error = deserializeJson(responseDoc, response);
 
     if (!error) {
       if (responseDoc.containsKey("candidates")) {
          const char* text = responseDoc["candidates"][0]["content"]["parts"][0]["text"];
-         aiResponse = String(text);
+         if (text) {
+             aiResponse = String(text);
+         } else {
+             aiResponse = "Error: Empty response text";
+         }
       } else {
-         aiResponse = "Error: Invalid response format";
+         aiResponse = "Error: No candidates returned";
+         if (responseDoc.containsKey("error")) {
+             const char* errMsg = responseDoc["error"]["message"];
+             Serial.println(errMsg);
+         }
       }
     } else {
       aiResponse = "Error: JSON Parsing failed";
+      Serial.print("DeserializeJson failed: ");
+      Serial.println(error.c_str());
     }
   } else {
     aiResponse = "Error: HTTP " + String(httpResponseCode);
+    Serial.print("HTTP Error: ");
+    Serial.println(http.errorToString(httpResponseCode));
   }
 
   http.end();
