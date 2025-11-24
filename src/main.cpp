@@ -340,6 +340,7 @@ void ledQuickFlash() {
 }
 
 void setup() {
+  setCpuFrequencyMhz(240); // Set CPU to 240MHz for high performance
   Serial.begin(115200);
   delay(1000);
   
@@ -347,6 +348,7 @@ void setup() {
   
   preferences.begin("wifi-creds", false);
   Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(800000); // Set I2C to 800kHz for smooth display
   
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
@@ -496,18 +498,23 @@ void loop() {
       buttonPressed = true;
     }
     
-    // Touch buttons
-    if (digitalRead(TOUCH_LEFT) == HIGH) {
-      handleLeft();
-      if (currentState == STATE_GAME_SPACE_INVADERS || 
-          currentState == STATE_GAME_SIDE_SCROLLER) {
-        handleSelect(); // Also shoot
+    // Touch buttons - Only active in games
+    if (currentState == STATE_GAME_SPACE_INVADERS ||
+        currentState == STATE_GAME_SIDE_SCROLLER ||
+        currentState == STATE_GAME_PONG) {
+
+      if (digitalRead(TOUCH_LEFT) == HIGH) {
+        handleLeft();
+        if (currentState == STATE_GAME_SPACE_INVADERS ||
+            currentState == STATE_GAME_SIDE_SCROLLER) {
+          handleSelect(); // Also shoot
+        }
+        buttonPressed = true;
       }
-      buttonPressed = true;
-    }
-    if (digitalRead(TOUCH_RIGHT) == HIGH) {
-      handleRight();
-      buttonPressed = true;
+      if (digitalRead(TOUCH_RIGHT) == HIGH) {
+        handleRight();
+        buttonPressed = true;
+      }
     }
     
     if (buttonPressed) {
