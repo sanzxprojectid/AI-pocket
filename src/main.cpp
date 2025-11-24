@@ -15,7 +15,6 @@
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 #define SCREEN_ADDRESS 0x3C
-// Pins for ESP32-S3
 #define SDA_PIN 41
 #define SCL_PIN 40
 
@@ -46,9 +45,20 @@ const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/m
 int selectedAPIKey = 1;
 
 enum AppState {
-    STATE_BOOT, STATE_MAIN_MENU, STATE_WIFI_MENU, STATE_WIFI_SCAN,
-    STATE_CHAT_INPUT, STATE_CHAT_LOADING, STATE_CHAT_RESULT,
-    STATE_GAME_INVADERS, STATE_GAME_SCROLLER, STATE_GAME_PONG
+    STATE_BOOT,
+    STATE_MAIN_MENU,
+    STATE_WIFI_MENU,
+    STATE_WIFI_SCAN,
+    STATE_CHAT_INPUT,
+    STATE_CHAT_LOADING,
+    STATE_CHAT_RESULT,
+    STATE_GAME_INVADERS,
+    STATE_GAME_SCROLLER,
+    STATE_GAME_PONG,
+    // Preserved States (even if simplified for now, we keep the enum)
+    STATE_ESP_NOW,
+    STATE_VIDEO_PLAYER,
+    STATE_NOTES
 };
 
 AppState currentState = STATE_BOOT;
@@ -73,6 +83,10 @@ Particle particles[MAX_PARTICLES];
 String chatResponse = "";
 int wifiScanIndex = 0;
 int wifiScanScroll = 0;
+String wifiSSID = "";
+String wifiPass = "";
+String chatInput = "";
+bool keyboardWifiMode = false;
 
 // Forward Declarations
 void handleInput();
@@ -102,6 +116,17 @@ void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
 
     initParticles();
+
+    // Load saved WiFi
+    preferences.begin("wifi-creds", true);
+    String ssid = preferences.getString("ssid", "");
+    String pass = preferences.getString("password", "");
+    preferences.end();
+
+    if(ssid.length() > 0) {
+        WiFi.begin(ssid.c_str(), pass.c_str());
+    }
+
     currentState = STATE_BOOT;
 }
 
@@ -113,40 +138,125 @@ void loop() {
 
     handleInput();
     updateShake(dt);
+
+    // Clear with Shake Offset applied logically if we had a camera system,
+    // but for SSD1306 we just clear.
     display.clearDisplay();
 
     switch(currentState) {
-        case STATE_BOOT: currentState = STATE_MAIN_MENU; break;
+        case STATE_BOOT:
+            // Boot Animation
+            drawHeader("SYSTEM INIT");
+            display.setCursor(10, 30); display.print("Loading...");
+            display.drawRect(10, 45, (millis()/20)%100, 5, SSD1306_WHITE);
+            if(millis() > 2000) currentState = STATE_MAIN_MENU;
+            break;
+
         case STATE_MAIN_MENU: drawMainMenu(); break;
+
+        // Games (High Performance Mode)
         case STATE_GAME_INVADERS: updateGameInvaders(dt); drawGameInvaders(); break;
         case STATE_GAME_SCROLLER: updateGameScroller(dt); drawGameScroller(); break;
         case STATE_GAME_PONG: updateGamePong(dt); drawGamePong(); break;
+
+        // Utilities
         case STATE_WIFI_MENU: drawWiFiMenu(); break;
         case STATE_WIFI_SCAN: displayWiFiNetworks(); break;
         case STATE_CHAT_INPUT: drawKeyboard(); handleKeyboardInput(); break;
         case STATE_CHAT_RESULT: drawChatResult(); break;
+        case STATE_CHAT_LOADING:
+             drawHeader("Thinking...");
+             display.setCursor(30, 30); display.print("AI Processing");
+             display.fillCircle(64 + sin(millis()/200.0)*20, 45, 3, SSD1306_WHITE);
+             // Logic handled in keyboard input currently
+             break;
+
         default: currentState = STATE_MAIN_MENU; break;
     }
     display.display();
 }
 
-// UTILS & STUBS
+// UTILS
 void handleInput() {
-    input.upPressed = input.downPressed = input.leftPressed = input.rightPressed = input.selectPressed = input.backPressed = false;
-    bool u = digitalRead(BTN_UP)==0, d = digitalRead(BTN_DOWN)==0, l = digitalRead(BTN_LEFT)==0, r = digitalRead(BTN_RIGHT)==0, s = digitalRead(BTN_SELECT)==0, b = digitalRead(BTN_BACK)==0;
-    if(u && !input.up) input.upPressed=true; input.up=u;
-    if(d && !input.down) input.downPressed=true; input.down=d;
-    if(l && !input.left) input.leftPressed=true; input.left=l;
-    if(r && !input.right) input.rightPressed=true; input.right=r;
-    if(s && !input.select) input.selectPressed=true; input.select=s;
-    if(b && !input.back) input.backPressed=true; input.back=b;
+    // Debounce could be added here, but for high-perf games we want raw input mostly.
+    // We'll use simple edge detection for menus.
+    static bool lastUp, lastDown, lastLeft, lastRight, lastSelect, lastBack;
+
+    bool u = digitalRead(BTN_UP)==0;
+    bool d = digitalRead(BTN_DOWN)==0;
+    bool l = digitalRead(BTN_LEFT)==0 || digitalRead(TOUCH_LEFT)==HIGH;
+    bool r = digitalRead(BTN_RIGHT)==0 || digitalRead(TOUCH_RIGHT)==HIGH;
+    bool s = digitalRead(BTN_SELECT)==0;
+    bool b = digitalRead(BTN_BACK)==0;
+
+    input.up = u; input.down = d; input.left = l; input.right = r; input.select = s; input.back = b;
+
+    input.upPressed = u && !lastUp;
+    input.downPressed = d && !lastDown;
+    input.leftPressed = l && !lastLeft;
+    input.rightPressed = r && !lastRight;
+    input.selectPressed = s && !lastSelect;
+    input.backPressed = b && !lastBack;
+
+    lastUp=u; lastDown=d; lastLeft=l; lastRight=r; lastSelect=s; lastBack=b;
 }
-void updateShake(float dt) { if(shakeTrauma>0) { shakeTrauma -= dt*2; float s = shakeTrauma*shakeTrauma*5; screenShakeX = (random(100)/50.0f-1)*s; screenShakeY = (random(100)/50.0f-1)*s; } else { screenShakeX=0; screenShakeY=0; } }
-void addShake(float a) { shakeTrauma += a; if(shakeTrauma>1) shakeTrauma=1; }
-void initParticles() { for(int i=0;i<MAX_PARTICLES;i++) particles[i].active=false; }
-void updateParticles(float dt) { for(int i=0;i<MAX_PARTICLES;i++) if(particles[i].active) { particles[i].x+=particles[i].vx*dt; particles[i].y+=particles[i].vy*dt; particles[i].life-=dt*2; if(particles[i].life<=0) particles[i].active=false; } }
-void drawParticles() { for(int i=0;i<MAX_PARTICLES;i++) if(particles[i].active) display.drawPixel((int)particles[i].x, (int)particles[i].y, SSD1306_WHITE); }
-void spawnExplosion(float x, float y, int c, int col) { int n=0; for(int i=0;i<MAX_PARTICLES && n<c;i++) if(!particles[i].active) { particles[i]={x,y,cos(random(0,628)/100.0f)*random(20,100), sin(random(0,628)/100.0f)*random(20,100), 1.0f, true, col}; n++; } }
+
+void updateShake(float dt) {
+    if(shakeTrauma > 0) {
+        shakeTrauma -= dt * 2.0f;
+        if(shakeTrauma < 0) shakeTrauma = 0;
+        float s = shakeTrauma * shakeTrauma * 5.0f;
+        screenShakeX = (random(100)/50.0f - 1.0f) * s;
+        screenShakeY = (random(100)/50.0f - 1.0f) * s;
+    } else {
+        screenShakeX = 0;
+        screenShakeY = 0;
+    }
+}
+
+void addShake(float amount) {
+    shakeTrauma += amount;
+    if(shakeTrauma > 1.0f) shakeTrauma = 1.0f;
+}
+
+void initParticles() {
+    for(int i=0; i<MAX_PARTICLES; i++) particles[i].active = false;
+}
+
+void updateParticles(float dt) {
+    for(int i=0; i<MAX_PARTICLES; i++) {
+        if(particles[i].active) {
+            particles[i].x += particles[i].vx * dt;
+            particles[i].y += particles[i].vy * dt;
+            particles[i].life -= dt * 2.0f;
+            if(particles[i].life <= 0) particles[i].active = false;
+        }
+    }
+}
+
+void drawParticles() {
+    for(int i=0; i<MAX_PARTICLES; i++) {
+        if(particles[i].active) {
+            // Apply shake to particles too
+            display.drawPixel((int)(particles[i].x + screenShakeX), (int)(particles[i].y + screenShakeY), SSD1306_WHITE);
+        }
+    }
+}
+
+void spawnExplosion(float x, float y, int count, int color) {
+    int n = 0;
+    for(int i=0; i<MAX_PARTICLES && n<count; i++) {
+        if(!particles[i].active) {
+            particles[i] = {
+                x, y,
+                cos(random(0,628)/100.0f) * random(20,100),
+                sin(random(0,628)/100.0f) * random(20,100),
+                1.0f, true, color
+            };
+            n++;
+        }
+    }
+}
 
 void drawHeader(String title) {
     display.fillRect(0, 0, SCREEN_WIDTH, 10, SSD1306_WHITE);
@@ -155,7 +265,7 @@ void drawHeader(String title) {
     display.print(title);
     display.setTextColor(SSD1306_WHITE);
     
-    // Simple Battery
+    // Simple Battery Indicator
     display.drawRect(110, 2, 16, 6, SSD1306_BLACK);
     display.fillRect(112, 3, 12, 4, SSD1306_BLACK);
 }
@@ -403,16 +513,16 @@ void updateGameScroller(float dt) {
 void drawGameScroller() {
     int sx = (int)screenShakeX, sy = (int)screenShakeY;
     for(auto &s : scrollerGame.stars) display.drawPixel(s.x, s.y, SSD1306_WHITE);
-    
+
     if(!scrollerGame.gameOver) {
         display.fillTriangle(scrollerGame.playerX+8+sx, scrollerGame.playerY+3+sy,
                              scrollerGame.playerX+sx, scrollerGame.playerY+sy,
                              scrollerGame.playerX+sx, scrollerGame.playerY+6+sy, SSD1306_WHITE);
     }
-    
+
     for(auto &e : scrollerGame.obstacles) if(e.active) display.drawRect(e.x+sx, e.y+sy, e.w, e.h, SSD1306_WHITE);
     for(auto &b : scrollerGame.bullets) if(b.active) display.drawFastHLine(b.x+sx, b.y+sy, 4, SSD1306_WHITE);
-    
+
     display.setCursor(0,0); display.print("S:"); display.print(scrollerGame.score);
     drawParticles();
 }
@@ -467,63 +577,87 @@ void drawGamePong() {
 
 int menuSelection = 0;
 void drawMainMenu() {
-    display.setCursor(15, 5); display.setTextSize(2); display.print("MAIN MENU"); display.setTextSize(1);
-    
-    const char* items[] = {"Space Neon", "Astro Rush", "Neon Pong", "AI Chat", "WiFi"};
+    drawHeader("MAIN MENU");
+
+    const char* items[] = {"Space Invaders", "Astro Rush", "Neon Pong", "AI Chat", "WiFi Settings"};
     int count = 5;
 
     if(input.upPressed && menuSelection > 0) menuSelection--;
     if(input.downPressed && menuSelection < count-1) menuSelection++;
 
     for(int i=0; i<count; i++) {
+        int y = 20 + i * 10;
         if(i == menuSelection) {
-            display.fillRect(10, 25+i*10, 100, 9, SSD1306_WHITE);
+            display.fillRect(5, y-1, 118, 9, SSD1306_WHITE);
             display.setTextColor(SSD1306_BLACK);
+            display.setCursor(10, y); display.print(items[i]);
         } else {
             display.setTextColor(SSD1306_WHITE);
+            display.setCursor(10, y); display.print(items[i]);
         }
-        display.setCursor(15, 26+i*10); display.print(items[i]);
     }
     display.setTextColor(SSD1306_WHITE);
-    
+
     if(input.selectPressed) {
         if(menuSelection == 0) { invaderGame.reset(); currentState = STATE_GAME_INVADERS; }
         if(menuSelection == 1) { scrollerGame.reset(); currentState = STATE_GAME_SCROLLER; }
         if(menuSelection == 2) { pongGame.reset(); currentState = STATE_GAME_PONG; }
-        if(menuSelection == 3) { currentState = STATE_CHAT_INPUT; keyboardWifiMode=false; chatInput=""; }
+        if(menuSelection == 3) {
+            currentState = STATE_CHAT_INPUT;
+            keyboardWifiMode=false;
+            chatInput="";
+        }
         if(menuSelection == 4) { currentState = STATE_WIFI_MENU; }
     }
 }
 
 // Keyboard variables
 const char* keysLower = "qwertyuiopasdfghjkl zxcvbnm";
-bool keyboardWifiMode = false;
-String wifiSSID="", wifiPass="", chatInput="";
 int keyboardCursorX=0, keyboardCursorY=0;
 
 void drawKeyboard() {
-    display.setCursor(0,0); display.print(keyboardWifiMode?"Pass:":"Chat:");
-    display.setCursor(30,0); display.print(keyboardWifiMode?wifiPass:chatInput);
+    drawHeader(keyboardWifiMode ? "Enter Password" : "AI Chat Prompt");
+
+    // Display Input Field
+    display.drawRect(5, 15, 118, 11, SSD1306_WHITE);
+    display.setCursor(7, 17);
+    String show = keyboardWifiMode ? wifiPass : chatInput;
+    if(keyboardWifiMode) {
+        String mask = "";
+        for(int i=0; i<show.length(); i++) mask += "*";
+        show = mask;
+    }
+    if(show.length() > 18) show = show.substring(show.length()-18);
+    display.print(show);
     
-    int startY=15;
+    int startY = 30;
     for(int r=0; r<3; r++) {
         for(int c=0; c<10; c++) {
             int idx = r*10+c;
             if(idx<27) {
-                int x = c*12 + (r==2?12:0);
-                if(r==keyboardCursorY && c==keyboardCursorX) display.fillRect(x, startY+r*10, 10, 8, SSD1306_WHITE);
-                else display.drawRect(x, startY+r*10, 10, 8, SSD1306_WHITE);
-
-                display.setTextColor(r==keyboardCursorY && c==keyboardCursorX ? SSD1306_BLACK : SSD1306_WHITE);
-                display.setCursor(x+2, startY+r*10); display.print(keysLower[idx]);
+                int x = 5 + c*12 + (r==2?12:0);
+                int y = startY + r*10;
+                if(r==keyboardCursorY && c==keyboardCursorX) {
+                    display.fillRect(x, y, 10, 8, SSD1306_WHITE);
+                    display.setTextColor(SSD1306_BLACK);
+                } else {
+                    display.drawRect(x, y, 10, 8, SSD1306_WHITE);
+                    display.setTextColor(SSD1306_WHITE);
+                }
+                display.setCursor(x+2, y); display.print(keysLower[idx]);
             }
         }
     }
     // OK Button
-    if(keyboardCursorY==3) display.fillRect(40, 50, 40, 10, SSD1306_WHITE);
-    else display.drawRect(40, 50, 40, 10, SSD1306_WHITE);
-    display.setTextColor(keyboardCursorY==3 ? SSD1306_BLACK : SSD1306_WHITE);
-    display.setCursor(50, 51); display.print("SEND");
+    int okY = startY + 30;
+    if(keyboardCursorY==3) {
+        display.fillRect(40, 55, 40, 9, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+    } else {
+        display.drawRect(40, 55, 40, 9, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+    }
+    display.setCursor(50, 56); display.print("SEND");
     display.setTextColor(SSD1306_WHITE);
 }
 
@@ -538,14 +672,16 @@ void handleKeyboardInput() {
             // Send
             if(keyboardWifiMode) {
                 WiFi.begin(wifiSSID.c_str(), wifiPass.c_str());
+                preferences.begin("wifi-creds", false);
+                preferences.putString("ssid", wifiSSID);
+                preferences.putString("password", wifiPass);
+                preferences.end();
                 currentState=STATE_WIFI_MENU;
             }
             else {
                 // Actual Chat Logic
                 currentState=STATE_CHAT_LOADING;
-                display.clearDisplay();
-                drawHeader("Thinking...");
-                display.display();
+                display.display(); // Force update
 
                 if(WiFi.status() == WL_CONNECTED) {
                     WiFiClientSecure client;
@@ -606,9 +742,20 @@ void drawWiFiMenu() {
     display.setCursor(10, 40); display.print("[Scan Networks]");
     display.setCursor(10, 50); display.print("[Back]");
 
+    // Selection Logic for WiFi Menu
+    static int wifiMenuSel = 0;
+    if(input.downPressed) wifiMenuSel = 1;
+    if(input.upPressed) wifiMenuSel = 0;
+
+    display.setCursor(2, 40 + wifiMenuSel*10); display.print(">");
+
     if(input.selectPressed) {
-        scanWiFiNetworks();
-        currentState = STATE_WIFI_SCAN;
+        if(wifiMenuSel == 0) {
+            scanWiFiNetworks();
+            currentState = STATE_WIFI_SCAN;
+        } else {
+            currentState = STATE_MAIN_MENU;
+        }
     }
     if(input.backPressed) currentState = STATE_MAIN_MENU;
 }
