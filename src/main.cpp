@@ -349,6 +349,7 @@ void forgetNetwork();
 void refreshCurrentScreen();
 void showNotification(String message, int duration);
 void drawNotificationOverlay();
+void showBootStatus(String message);
 void drawBatteryIndicator();
 void drawWiFiSignalBars();
 void drawIcon(int x, int y, const unsigned char* icon);
@@ -472,7 +473,7 @@ void setup() {
       delay(1000);
     } else {
       ledError();
-      showStatus("Connection failed", 2000);
+      showBootStatus("Connection failed");
     }
   }
   
@@ -1946,6 +1947,15 @@ void drawVideoPlayer() {
 }
 
 // ========== UTILITY FUNCTIONS ==========
+
+void showBootStatus(String message) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(10, SCREEN_HEIGHT / 2 - 8);
+  display.print(message);
+  display.display();
+  delay(2000);
+}
 
 void showNotification(String message, int duration) {
   notificationMessage = message;
