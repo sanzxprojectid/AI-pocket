@@ -2605,6 +2605,7 @@ void sendToGemini() {
 
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
+  http.setTimeout(15000); // 15-second timeout
 
   int httpResponseCode = http.POST(requestBody);
 
