@@ -1618,7 +1618,7 @@ void handlePongInput() {
 
 // ========== GAME SELECT ==========
 
-void showGameSelect(int x_offset = 0) {
+void showGameSelect(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -1766,7 +1766,7 @@ void scanWiFiNetworks() {
   changeState(STATE_WIFI_SCAN);
 }
 
-void displayWiFiNetworks(int x_offset = 0) {
+void displayWiFiNetworks(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -1832,7 +1832,7 @@ void displayWiFiNetworks(int x_offset = 0) {
 
 // ========== API SELECT ==========
 
-void showAPISelect(int x_offset = 0) {
+void showAPISelect(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -2081,7 +2081,7 @@ void showProgressBar(String title, int percent) {
   display.display();
 }
 
-void showLoadingAnimation(int x_offset = 0) {
+void showLoadingAnimation(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
 
@@ -2165,7 +2165,7 @@ void toggleKeyboardMode() {
   }
 }
 
-void drawKeyboard(int x_offset = 0) {
+void drawKeyboard(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
 
@@ -2520,7 +2520,7 @@ void handleBackButton() {
   }
 }
 
-void displayResponse(int x_offset = 0) {
+void displayResponse(int x_offset) {
   display.clearDisplay();
   drawBatteryIndicator();
 
