@@ -6,6 +6,18 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <Adafruit_NeoPixel.h>
+
+// NeoPixel LED settings
+#define NEOPIXEL_PIN 48
+#define NEOPIXEL_COUNT 1
+Adafruit_NeoPixel pixels(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// NeoPixel Effect State
+uint32_t neoPixelColor = 0;
+unsigned long neoPixelEffectEnd = 0;
+void triggerNeoPixelEffect(uint32_t color, int duration);
+void updateNeoPixel();
 
 // Performance settings
 #define CPU_FREQ 240
@@ -495,6 +507,10 @@ void setup() {
   
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
+
+  pixels.begin();
+  pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+  pixels.show();
   
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -538,9 +554,27 @@ void setup() {
   showMainMenu();
 }
 
+void triggerNeoPixelEffect(uint32_t color, int duration) {
+  neoPixelColor = color;
+  pixels.setPixelColor(0, neoPixelColor);
+  pixels.show();
+  neoPixelEffectEnd = millis() + duration;
+}
+
+void updateNeoPixel() {
+  if (neoPixelEffectEnd > 0 && millis() > neoPixelEffectEnd) {
+    neoPixelColor = 0;
+    pixels.setPixelColor(0, neoPixelColor);
+    pixels.show();
+    neoPixelEffectEnd = 0;
+  }
+}
+
 void loop() {
   unsigned long currentMillis = millis();
   
+  updateNeoPixel();
+
   // LED Patterns
   switch(currentState) {
     case STATE_LOADING:
@@ -754,7 +788,7 @@ void updateSpaceInvaders() {
   
   // Smooth Enemy Movement
   bool hitEdge = false;
-  float enemySpeed = 20.0f + (invaders.level * 5.0f); // Speed in pixels per second
+  float enemySpeed = 5.0f + (invaders.level * 2.0f); // Speed in pixels per second
 
   for (int i = 0; i < MAX_ENEMIES; i++) {
     if (invaders.enemies[i].active) {
@@ -774,8 +808,14 @@ void updateSpaceInvaders() {
         invaders.enemies[i].y += 4; // Step down
         // Check if enemy reached player
         if (invaders.enemies[i].y >= invaders.playerY) {
-          invaders.lives = 0;
+          invaders.lives--;
+          triggerNeoPixelEffect(pixels.Color(255, 0, 0), 200); // Red flash
+          invaders.enemies[i].active = false; // Enemy disappears
           screenShake = 10;
+          if (invaders.lives <= 0) {
+            invaders.gameOver = true;
+            triggerNeoPixelEffect(pixels.Color(100, 0, 0), 1000); // Dim red for game over
+          }
         }
       }
     }
@@ -849,6 +889,7 @@ void updateSpaceInvaders() {
               invaders.score += (invaders.enemies[j].type + 1) * 10;
               
               spawnExplosion(invaders.enemies[j].x + 4, invaders.enemies[j].y + 3, 5);
+              triggerNeoPixelEffect(pixels.Color(255, 165, 0), 100); // Orange flash
               screenShake = 2;
 
               // Spawn powerup
@@ -882,10 +923,12 @@ void updateSpaceInvaders() {
           
           invaders.enemyBullets[i].active = false;
           invaders.lives--;
+          triggerNeoPixelEffect(pixels.Color(255, 0, 0), 200); // Red flash
           screenShake = 6;
           
           if (invaders.lives <= 0) {
             invaders.gameOver = true;
+            triggerNeoPixelEffect(pixels.Color(100, 0, 0), 1000); // Dim red for game over
           }
         }
       }
@@ -2436,6 +2479,7 @@ void handleSelect() {
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Shoot
+      triggerNeoPixelEffect(pixels.Color(200, 200, 200), 50); // White flash
       for (int i = 0; i < MAX_BULLETS; i++) {
         if (!invaders.bullets[i].active) {
           invaders.bullets[i].x = invaders.playerX + invaders.playerWidth / 2;
