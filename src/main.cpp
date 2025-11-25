@@ -2498,29 +2498,50 @@ void handleSelect() {
 }
 
 void handleBackButton() {
-  // Use previousState to intelligently go back
   switch(currentState) {
-    case STATE_WIFI_SCAN:
+    // WiFi Flow
     case STATE_PASSWORD_INPUT:
+      changeState(STATE_WIFI_SCAN);
+      break;
+    case STATE_WIFI_SCAN:
       changeState(STATE_WIFI_MENU);
       break;
-
-    case STATE_KEYBOARD:
-    case STATE_CHAT_RESPONSE:
-    case STATE_API_SELECT:
     case STATE_WIFI_MENU:
-    case STATE_GAME_SELECT:
-    case STATE_VIDEO_PLAYER:
-       changeState(STATE_MAIN_MENU);
-       break;
+      changeState(STATE_MAIN_MENU);
+      break;
 
+    // Chat AI Flow
+    case STATE_CHAT_RESPONSE:
+      changeState(STATE_KEYBOARD);
+      break;
+    case STATE_KEYBOARD:
+      if (keyboardContext == CONTEXT_CHAT) {
+        changeState(STATE_API_SELECT);
+      } else { // CONTEXT_WIFI_PASSWORD
+        changeState(STATE_WIFI_SCAN);
+      }
+      break;
+    case STATE_API_SELECT:
+      changeState(STATE_MAIN_MENU);
+      break;
+
+    // Game Flow
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
       changeState(STATE_GAME_SELECT);
       break;
+    case STATE_GAME_SELECT:
+      changeState(STATE_MAIN_MENU);
+      break;
+
+    // Other simple cases
+    case STATE_VIDEO_PLAYER:
+      changeState(STATE_MAIN_MENU);
+      break;
 
     default:
+      // Default back to main menu if we're lost
       changeState(STATE_MAIN_MENU);
       break;
   }
