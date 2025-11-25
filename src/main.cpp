@@ -614,11 +614,17 @@ void loop() {
         currentState = transitionTargetState;
         transitionState = TRANSITION_IN;
         transitionProgress = 0.0f;
-        // Reset scroll/selection when changing state
-        menuSelection = 0;
-        mainMenuSelection = 0;
-        menuScrollY = 0;
-        menuTargetScrollY = 0;
+
+        // If returning to the main menu, restore the selection. Otherwise, reset it.
+        if (transitionTargetState == STATE_MAIN_MENU) {
+          menuSelection = mainMenuSelection;
+          menuTargetScrollY = mainMenuSelection * 22;
+          menuScrollY = menuTargetScrollY;
+        } else {
+          menuSelection = 0;
+          menuScrollY = 0;
+          menuTargetScrollY = 0;
+        }
       } else {
         transitionState = TRANSITION_NONE;
       }
@@ -1919,7 +1925,7 @@ void showMainMenu(int x_offset) {
     if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
       int itemX = x_offset + 20 + (distance / 2.5);
 
-      if (i == mainMenuSelection) {
+      if (i == menuSelection) {
         // Highlighted item
         display.drawRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 6, SSD1306_WHITE);
         drawIcon(x_offset + 12, screenCenterY - 4, menuItems[i].icon);
