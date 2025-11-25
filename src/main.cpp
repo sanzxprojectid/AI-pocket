@@ -13,6 +13,27 @@
 #define TARGET_FPS 60
 #define FRAME_TIME (1000 / TARGET_FPS)
 
+// Delta Time for smooth, frame-rate independent movement
+unsigned long lastFrameMillis = 0;
+float deltaTime = 0.0;
+
+// App State Machine
+enum AppState {
+  STATE_WIFI_MENU,
+  STATE_WIFI_SCAN,
+  STATE_PASSWORD_INPUT,
+  STATE_KEYBOARD,
+  STATE_CHAT_RESPONSE,
+  STATE_MAIN_MENU,
+  STATE_API_SELECT,
+  STATE_LOADING,
+  STATE_GAME_SPACE_INVADERS,
+  STATE_GAME_SIDE_SCROLLER,
+  STATE_GAME_PONG,
+  STATE_GAME_SELECT,
+  STATE_VIDEO_PLAYER
+};
+
 // OLED Display settings
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -262,22 +283,6 @@ Pong pong;
 unsigned long pongResetTimer = 0;
 bool pongResetting = false;
 
-enum AppState {
-  STATE_WIFI_MENU,
-  STATE_WIFI_SCAN,
-  STATE_PASSWORD_INPUT,
-  STATE_KEYBOARD,
-  STATE_CHAT_RESPONSE,
-  STATE_MAIN_MENU,
-  STATE_API_SELECT,
-  STATE_LOADING,
-  STATE_GAME_SPACE_INVADERS,
-  STATE_GAME_SIDE_SCROLLER,
-  STATE_GAME_PONG,
-  STATE_GAME_SELECT,
-  STATE_VIDEO_PLAYER
-};
-
 AppState currentState = STATE_MAIN_MENU;
 AppState previousState = STATE_MAIN_MENU;
 
@@ -307,10 +312,6 @@ const unsigned long debounceDelay = 150;
 
 unsigned long lastGameUpdate = 0;
 const int gameUpdateInterval = FRAME_TIME;
-
-// Delta Time for smooth, frame-rate independent movement
-unsigned long lastFrameMillis = 0;
-float deltaTime = 0.0;
 
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
@@ -342,14 +343,14 @@ unsigned long lastVideoFrameTime = 0;
 const int videoFrameDelay = 70; // 25 FPS
 
 // Forward declarations
-void showMainMenu(int x_offset);
-void showWiFiMenu(int x_offset);
-void showAPISelect(int x_offset);
-void showGameSelect(int x_offset);
-void showLoadingAnimation(int x_offset);
+void showMainMenu(int x_offset = 0);
+void showWiFiMenu(int x_offset = 0);
+void showAPISelect(int x_offset = 0);
+void showGameSelect(int x_offset = 0);
+void showLoadingAnimation(int x_offset = 0);
 void showProgressBar(String title, int percent);
-void displayWiFiNetworks(int x_offset);
-void drawKeyboard(int x_offset);
+void displayWiFiNetworks(int x_offset = 0);
+void drawKeyboard(int x_offset = 0);
 void handleMainMenuSelect();
 void handleWiFiMenuSelect();
 void handleAPISelectSelect();
@@ -1617,7 +1618,7 @@ void handlePongInput() {
 
 // ========== GAME SELECT ==========
 
-void showGameSelect(int x_offset) {
+void showGameSelect(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -1765,7 +1766,7 @@ void scanWiFiNetworks() {
   changeState(STATE_WIFI_SCAN);
 }
 
-void displayWiFiNetworks(int x_offset) {
+void displayWiFiNetworks(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -1831,7 +1832,7 @@ void displayWiFiNetworks(int x_offset) {
 
 // ========== API SELECT ==========
 
-void showAPISelect(int x_offset) {
+void showAPISelect(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
   
@@ -1913,7 +1914,7 @@ void showMainMenu(int x_offset) {
     
     // Simple easing function for scaling
     float scale = 1.0 - (distance / (SCREEN_HEIGHT / 2.0));
-    scale = max(0.5, scale); // Min scale
+    scale = max(0.5f, scale); // Min scale
 
     if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
       int itemX = x_offset + 20 + (distance / 2.5);
@@ -2080,7 +2081,7 @@ void showProgressBar(String title, int percent) {
   display.display();
 }
 
-void showLoadingAnimation(int x_offset) {
+void showLoadingAnimation(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
 
@@ -2135,12 +2136,10 @@ void connectToWiFi(String ssid, String password) {
     preferences.end();
 
     showStatus("Connected!", 1500);
-    currentState = STATE_MAIN_MENU;
-    showMainMenu();
+    changeState(STATE_MAIN_MENU);
   } else {
     showStatus("Failed!", 1500);
-    currentState = STATE_WIFI_MENU;
-    showWiFiMenu();
+    changeState(STATE_WIFI_MENU);
   }
 }
 
@@ -2164,10 +2163,9 @@ void toggleKeyboardMode() {
   } else {
     currentKeyboardMode = MODE_LOWER;
   }
-  drawKeyboard();
 }
 
-void drawKeyboard(int x_offset) {
+void drawKeyboard(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
 
@@ -2237,12 +2235,10 @@ void handleKeyPress() {
     if (userInput.length() > 0) {
       userInput.remove(userInput.length() - 1);
     }
-    drawKeyboard();
   } else if (strcmp(key, "#") == 0) {
     toggleKeyboardMode();
   } else {
     userInput += key;
-    drawKeyboard();
   }
 }
 
@@ -2255,12 +2251,10 @@ void handlePasswordKeyPress() {
     if (passwordInput.length() > 0) {
       passwordInput.remove(passwordInput.length() - 1);
     }
-    drawKeyboard();
   } else if (strcmp(key, "#") == 0) {
     toggleKeyboardMode();
   } else {
     passwordInput += key;
-    drawKeyboard();
   }
 }
 
@@ -2279,7 +2273,6 @@ void handleUp() {
     case STATE_WIFI_MENU:
       if (menuSelection > 0) {
         menuSelection--;
-        showWiFiMenu();
       }
       break;
     case STATE_WIFI_SCAN:
@@ -2288,31 +2281,26 @@ void handleUp() {
         if (selectedNetwork < wifiPage * wifiPerPage) {
           wifiPage--;
         }
-        displayWiFiNetworks();
       }
       break;
     case STATE_GAME_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
-        showGameSelect();
       }
       break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
-        showAPISelect();
       }
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       cursorY--;
       if (cursorY < 0) cursorY = 2; // Wrap to bottom
-      drawKeyboard();
       break;
     case STATE_CHAT_RESPONSE:
       if (scrollOffset > 0) {
         scrollOffset -= 10;
-        displayResponse();
       }
       break;
     case STATE_GAME_PONG:
@@ -2337,7 +2325,6 @@ void handleDown() {
     case STATE_WIFI_MENU:
       if (menuSelection < 2) {
         menuSelection++;
-        showWiFiMenu();
       }
       break;
     case STATE_WIFI_SCAN:
@@ -2346,30 +2333,25 @@ void handleDown() {
         if (selectedNetwork >= (wifiPage + 1) * wifiPerPage) {
           wifiPage++;
         }
-        displayWiFiNetworks();
       }
       break;
     case STATE_GAME_SELECT:
       if (menuSelection < 3) {
         menuSelection++;
-        showGameSelect();
       }
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
         menuSelection++;
-        showAPISelect();
       }
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
       cursorY++;
       if (cursorY > 2) cursorY = 0; // Wrap to top
-      drawKeyboard();
       break;
     case STATE_CHAT_RESPONSE:
       scrollOffset += 10;
-      displayResponse();
       break;
     case STATE_GAME_PONG:
        // Handled in handlePongInput
@@ -2386,7 +2368,6 @@ void handleLeft() {
     case STATE_PASSWORD_INPUT:
       cursorX--;
       if (cursorX < 0) cursorX = 9; // Wrap to right
-      drawKeyboard();
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -2403,7 +2384,6 @@ void handleRight() {
     case STATE_PASSWORD_INPUT:
       cursorX++;
       if (cursorX > 9) cursorX = 0; // Wrap to left
-      drawKeyboard();
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -2427,11 +2407,10 @@ void handleSelect() {
         selectedSSID = networks[selectedNetwork].ssid;
         if (networks[selectedNetwork].encrypted) {
           passwordInput = "";
-          currentState = STATE_PASSWORD_INPUT;
           keyboardContext = CONTEXT_WIFI_PASSWORD;
           cursorX = 0;
           cursorY = 0;
-          drawKeyboard();
+          changeState(STATE_PASSWORD_INPUT);
         } else {
           connectToWiFi(selectedSSID, "");
         }
@@ -2541,7 +2520,7 @@ void handleBackButton() {
   }
 }
 
-void displayResponse(int x_offset) {
+void displayResponse(int x_offset = 0) {
   display.clearDisplay();
   drawBatteryIndicator();
 
@@ -2572,9 +2551,8 @@ void sendToGemini() {
     return;
   }
 
-  currentState = STATE_LOADING;
+  changeState(STATE_LOADING);
   loadingFrame = 0;
-  showLoadingAnimation();
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -2622,7 +2600,6 @@ void sendToGemini() {
 
   http.end();
 
-  currentState = STATE_CHAT_RESPONSE;
   scrollOffset = 0;
-  displayResponse();
+  changeState(STATE_CHAT_RESPONSE);
 }
