@@ -2594,6 +2594,10 @@ void sendToGemini() {
   JsonObject parts = content["parts"].add();
   parts["text"] = userInput;
 
+  // Limit the response size to speed up the API call
+  JsonObject generationConfig = doc["generationConfig"].to<JsonObject>();
+  generationConfig["maxOutputTokens"] = 150;
+
   String requestBody;
   serializeJson(doc, requestBody);
 
