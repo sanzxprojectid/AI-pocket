@@ -754,7 +754,7 @@ void updateSpaceInvaders() {
   
   // Smooth Enemy Movement
   bool hitEdge = false;
-  float enemySpeed = 10.0f + (invaders.level * 2.0f); // Speed in pixels per second
+  float enemySpeed = 5.0f + (invaders.level * 2.0f); // Speed in pixels per second
 
   for (int i = 0; i < MAX_ENEMIES; i++) {
     if (invaders.enemies[i].active) {
