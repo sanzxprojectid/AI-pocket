@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Adafruit_NeoPixel.h>
+#include "secrets.h"
 
 // NeoPixel LED settings
 #define NEOPIXEL_PIN 48
@@ -67,9 +68,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define TOUCH_LEFT 1
 #define TOUCH_RIGHT 2
 
-// Dual Gemini API Keys
-const char* geminiApiKey1 = "AIzaSyAtKmbcvYB8wuHI9bqkOhufJld0oSKv7zM";
-const char* geminiApiKey2 = "AIzaSyBvXPx3SrrRRJIU9Wf6nKcuQu9XjBlSH6Y";
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
 Preferences preferences;
@@ -85,6 +83,9 @@ int networkCount = 0;
 int selectedNetwork = 0;
 int wifiPage = 0;
 const int wifiPerPage = 4;
+
+// WiFi Auto-off settings
+unsigned long lastWiFiActivity = 0;
 
 // Battery monitoring
 float batteryVoltage = 5.0;
@@ -372,7 +373,7 @@ void handlePasswordKeyPress();
 void handleBackButton();
 void connectToWiFi(String ssid, String password);
 void scanWiFiNetworks();
-void displayResponse(int x_offset);
+void displayResponse();
 void showStatus(String message, int delayMs);
 void forgetNetwork();
 void refreshCurrentScreen() {
@@ -393,7 +394,7 @@ void refreshCurrentScreen() {
     case STATE_LOADING: showLoadingAnimation(x_offset); break;
     case STATE_KEYBOARD: drawKeyboard(x_offset); break;
     case STATE_PASSWORD_INPUT: drawKeyboard(x_offset); break;
-    case STATE_CHAT_RESPONSE: displayResponse(x_offset); break;
+    case STATE_CHAT_RESPONSE: displayResponse(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -2591,90 +2592,124 @@ void handleBackButton() {
   }
 }
 
-void displayResponse(int x_offset) {
+void displayResponse() {
   display.clearDisplay();
   drawBatteryIndicator();
 
-  display.setCursor(x_offset, 0);
   display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
 
   int y = 12 - scrollOffset;
+  int lineHeight = 10;
+  String word = "";
+  int x = 0;
 
-  display.setCursor(x_offset, y);
-  display.print(aiResponse);
+  for (unsigned int i = 0; i < aiResponse.length(); i++) {
+    char c = aiResponse.charAt(i);
 
-  if (aiResponse.length() > 100) {
-      int totalH = (aiResponse.length() / 21 + 1) * 8;
-      int visibleH = SCREEN_HEIGHT - 12;
-      if (totalH > visibleH) {
-         int scrollH = (visibleH * visibleH) / totalH;
-         int scrollY = 12 + (scrollOffset * visibleH) / totalH;
-         display.fillRect(SCREEN_WIDTH - 2, scrollY, 2, scrollH, SSD1306_WHITE);
+    if (c == ' ' || c == '\n' || i == aiResponse.length() - 1) {
+      if (i == aiResponse.length() - 1 && c != ' ' && c != '\n') {
+        word += c;
       }
+
+      int wordWidth = word.length() * 6;
+
+      if (x + wordWidth > SCREEN_WIDTH - 10) {
+        y += lineHeight;
+        x = 0;
+      }
+
+      if (y >= -lineHeight && y < SCREEN_HEIGHT) {
+        display.setCursor(x, y);
+        display.print(word);
+      }
+
+      x += wordWidth + 6;
+      word = "";
+
+      if (c == '\n') {
+        y += lineHeight;
+        x = 0;
+      }
+    } else {
+      word += c;
+    }
   }
 
   display.display();
 }
 
 void sendToGemini() {
+  currentState = STATE_LOADING;
+  loadingFrame = 0;
+  lastLoadingUpdate = millis();
+
+  for (int i = 0; i < 5; i++) {
+    showLoadingAnimation();
+    delay(100);
+    loadingFrame++;
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
-    showStatus("No WiFi!", 2000);
+    ledError();
+    aiResponse = "WiFi not connected!";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    displayResponse();
     return;
   }
 
-  changeState(STATE_LOADING);
-  loadingFrame = 0;
-
-  WiFiClientSecure client;
-  client.setInsecure();
+  const char* currentApiKey = (selectedAPIKey == 1) ? geminiApiKey1 : geminiApiKey2;
 
   HTTPClient http;
+  String url = String(geminiEndpoint) + "?key=" + currentApiKey;
 
-  String apiKey = (selectedAPIKey == 1) ? geminiApiKey1 : geminiApiKey2;
-  String url = String(geminiEndpoint) + "?key=" + apiKey;
-
-  JsonDocument doc;
-  JsonObject content = doc["contents"].add();
-  JsonObject parts = content["parts"].add();
-  parts["text"] = userInput;
-
-  // Limit the response size to speed up the API call
-  JsonObject generationConfig = doc["generationConfig"].to<JsonObject>();
-  generationConfig["maxOutputTokens"] = 150;
-
-  String requestBody;
-  serializeJson(doc, requestBody);
-
-  Serial.println("Sending to Gemini...");
-
-  http.begin(client, url);
+  http.begin(url);
   http.addHeader("Content-Type", "application/json");
+  http.setTimeout(15000);
 
-  int httpResponseCode = http.POST(requestBody);
+  String escapedInput = userInput;
+  escapedInput.replace("\\", "\\\\");
+  escapedInput.replace("\"", "\\\"");
+  escapedInput.replace("\n", "\\n");
 
-  if (httpResponseCode > 0) {
+  String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedInput + "\"}]}]}";
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode == 200) {
     String response = http.getString();
-    Serial.println("Response received");
 
-    JsonDocument responseDoc;
+    StaticJsonDocument<16384> responseDoc;
     DeserializationError error = deserializeJson(responseDoc, response);
 
-    if (!error) {
-      if (responseDoc.containsKey("candidates")) {
-         const char* text = responseDoc["candidates"][0]["content"]["parts"][0]["text"];
-         aiResponse = String(text);
+    if (!error && responseDoc.containsKey("candidates")) {
+      JsonArray candidates = responseDoc["candidates"];
+      if (candidates.size() > 0) {
+        JsonObject content = candidates[0]["content"];
+        JsonArray parts = content["parts"];
+        if (parts.size() > 0) {
+          aiResponse = parts[0]["text"].as<String>();
+          ledSuccess();
+        } else {
+          aiResponse = "Error: Empty response";
+        }
       } else {
-         aiResponse = "Error: Invalid response format";
+        aiResponse = "Error: No candidates";
       }
     } else {
-      aiResponse = "Error: JSON Parsing failed";
+      ledError();
+      aiResponse = "JSON Error";
     }
   } else {
-    aiResponse = "Error: HTTP " + String(httpResponseCode);
+    ledError();
+    aiResponse = "HTTP Error " + String(httpResponseCode);
   }
 
   http.end();
+  lastWiFiActivity = millis();
 
+  currentState = STATE_CHAT_RESPONSE;
   scrollOffset = 0;
-  changeState(STATE_CHAT_RESPONSE);
+  displayResponse();
 }
