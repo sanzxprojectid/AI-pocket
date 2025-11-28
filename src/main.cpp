@@ -30,7 +30,7 @@ void setNeoPixelMode(NeoPixelMode mode, uint32_t color = 0);
 // Performance settings
 #define CPU_FREQ 240
 #define I2C_FREQ 1000000
-#define TARGET_FPS 120
+#define TARGET_FPS 60
 #define FRAME_TIME (1000 / TARGET_FPS)
 
 // Delta Time for smooth, frame-rate independent movement
@@ -720,50 +720,56 @@ void loop() {
         drawRacing();
         break;
     }
-    lastGameUpdate = currentMillis;
-  }
 
-  if (currentState == STATE_VIDEO_PLAYER) {
-    drawVideoPlayer();
-  }
+    if (currentState == STATE_VIDEO_PLAYER) {
+      drawVideoPlayer();
+    }
 
-  // UI Transition Logic
-  if (transitionState != TRANSITION_NONE) {
-    transitionProgress += transitionSpeed * deltaTime;
-    if (transitionProgress >= 1.0f) {
-      transitionProgress = 1.0f;
-      if (transitionState == TRANSITION_OUT) {
-        currentState = transitionTargetState;
-        transitionState = TRANSITION_IN;
-        transitionProgress = 0.0f;
+    // UI Transition Logic
+    if (transitionState != TRANSITION_NONE) {
+      transitionProgress += transitionSpeed * deltaTime;
+      if (transitionProgress >= 1.0f) {
+        transitionProgress = 1.0f;
+        if (transitionState == TRANSITION_OUT) {
+          currentState = transitionTargetState;
+          transitionState = TRANSITION_IN;
+          transitionProgress = 0.0f;
 
-        // If returning to the main menu, restore the selection. Otherwise, reset it.
-        if (transitionTargetState == STATE_MAIN_MENU) {
-          menuSelection = mainMenuSelection;
-          menuTargetScrollY = mainMenuSelection * 22;
-          menuScrollY = menuTargetScrollY;
+          // If returning to the main menu, restore the selection. Otherwise, reset it.
+          if (transitionTargetState == STATE_MAIN_MENU) {
+            menuSelection = mainMenuSelection;
+            // Restore scroll position to keep selection visible
+            menuTargetScrollY = 0;
+            if (menuSelection > 1) {
+               menuTargetScrollY = (menuSelection * 22) - 25;
+               if (menuTargetScrollY < 0) menuTargetScrollY = 0;
+            }
+            menuScrollY = menuTargetScrollY;
+          } else {
+            menuSelection = 0;
+            menuScrollY = 0;
+            menuTargetScrollY = 0;
+          }
         } else {
-          menuSelection = 0;
-          menuScrollY = 0;
-          menuTargetScrollY = 0;
+          transitionState = TRANSITION_NONE;
         }
-      } else {
-        transitionState = TRANSITION_NONE;
       }
     }
-  }
 
-  // Draw current screen with transition offset
-  // We call this every frame now, not just on input
-  refreshCurrentScreen();
+    // Draw current screen with transition offset
+    // This is now throttled to TARGET_FPS
+    refreshCurrentScreen();
 
-  // Main Menu Animation (Only if not transitioning)
-  if (currentState == STATE_MAIN_MENU && transitionState == TRANSITION_NONE) {
-    if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
-      menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
-    } else if (menuScrollY != menuTargetScrollY) {
-      menuScrollY = menuTargetScrollY;
+    // Main Menu Animation (Only if not transitioning)
+    if (currentState == STATE_MAIN_MENU && transitionState == TRANSITION_NONE) {
+      if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
+        menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
+      } else if (menuScrollY != menuTargetScrollY) {
+        menuScrollY = menuTargetScrollY;
+      }
     }
+
+    lastGameUpdate = currentMillis;
   }
   
   // Button handling (only if not transitioning)
@@ -2050,41 +2056,32 @@ void showMainMenu(int x_offset) {
   };
   
   int numItems = sizeof(menuItems) / sizeof(MenuItem);
-  int screenCenterY = SCREEN_HEIGHT / 2;
+  int startY = 15; // Start below status bar
   
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 22) - menuScrollY;
-    float distance = abs(itemY - screenCenterY);
-    
-    // Simple easing function for scaling
-    float scale = 1.0 - (distance / (SCREEN_HEIGHT / 2.0));
-    scale = max(0.5f, scale); // Min scale
+    float itemY = startY + (i * 22) - menuScrollY;
 
-    if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
-      int itemX = x_offset + 20 + (distance / 2.5);
+    if (itemY > -20 && itemY < SCREEN_HEIGHT + 5) {
+      int itemX = x_offset + 20;
 
       if (i == menuSelection) {
         // Highlighted item - MODERN LOOK (Filled Round Rect + Inverted Text)
-        display.fillRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 8, SSD1306_WHITE);
-
-        // Draw icon in BLACK (inverted)
-        // Since drawIcon draws in WHITE, we need to temporarily handle this or draw manually in black?
-        // Actually, drawIcon uses drawBitmap with WHITE. Let's customize it here or just draw text.
-        // For simplicity with current helpers, we'll draw text in BLACK.
+        display.fillRoundRect(x_offset + 5, itemY - 2, SCREEN_WIDTH - 10, 24, 8, SSD1306_WHITE);
 
         display.setTextColor(SSD1306_BLACK);
         display.setTextSize(2);
-        display.setCursor(x_offset + 30, screenCenterY - 7);
+        // Align text vertically
+        display.setCursor(x_offset + 30, itemY + 3);
         display.print(menuItems[i].text);
 
         // Draw icon inverted (manual bitmap draw with BLACK)
-        display.drawBitmap(x_offset + 12, screenCenterY - 4, menuItems[i].icon, 8, 8, SSD1306_BLACK);
+        display.drawBitmap(x_offset + 12, itemY + 6, menuItems[i].icon, 8, 8, SSD1306_BLACK);
 
         display.setTextColor(SSD1306_WHITE); // Reset
       } else {
         // Other items
         display.setTextSize(1);
-        display.setCursor(itemX, itemY - 3);
+        display.setCursor(itemX, itemY + 6);
         display.print(menuItems[i].text);
       }
     }
@@ -2425,8 +2422,17 @@ void handleUp() {
   switch(currentState) {
     case STATE_MAIN_MENU:
       menuSelection--;
-      if (menuSelection < 0) menuSelection = 3; // Wrap
-      menuTargetScrollY = menuSelection * 22;
+      if (menuSelection < 0) {
+        menuSelection = 3; // Wrap
+        // Jump to bottom if wrapping (ensure last item is visible)
+        menuTargetScrollY = max(0, (menuSelection + 1) * 22 - (SCREEN_HEIGHT - 15));
+      } else {
+        // Scroll Into View
+        int itemTop = menuSelection * 22;
+        if (itemTop < menuTargetScrollY) {
+            menuTargetScrollY = itemTop;
+        }
+      }
       menuTextScrollX = 0;
       lastMenuTextScrollTime = millis();
       break;
@@ -2475,8 +2481,17 @@ void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
       menuSelection++;
-      if (menuSelection > 3) menuSelection = 0; // Wrap
-      menuTargetScrollY = menuSelection * 22;
+      if (menuSelection > 3) {
+         menuSelection = 0; // Wrap
+         menuTargetScrollY = 0; // Reset scroll
+      } else {
+         // Scroll Into View
+         int itemBottom = (menuSelection + 1) * 22;
+         // Viewport height approx 49 (64 - 15)
+         if (itemBottom > menuTargetScrollY + (SCREEN_HEIGHT - 15)) {
+             menuTargetScrollY = itemBottom - (SCREEN_HEIGHT - 15);
+         }
+      }
       menuTextScrollX = 0;
       lastMenuTextScrollTime = millis();
       break;
