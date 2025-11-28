@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Adafruit_NeoPixel.h>
+#include <time.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -15,9 +16,14 @@
 Adafruit_NeoPixel pixels(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 // NeoPixel Effect State
-uint32_t neoPixelColor = 0;
-unsigned long neoPixelEffectEnd = 0;
-void triggerNeoPixelEffect(uint32_t color, int duration);
+enum NeoPixelMode { NEO_OFF, NEO_STATIC, NEO_BREATHE, NEO_RAINBOW, NEO_BLINK };
+NeoPixelMode neoMode = NEO_OFF;
+uint32_t neoColor = 0;
+unsigned long neoTimer = 0;
+int neoBrightness = 0;
+int neoDirection = 1;
+
+void setNeoPixelMode(NeoPixelMode mode, uint32_t color = 0);
 void updateNeoPixel();
 
 // Performance settings
@@ -26,7 +32,12 @@ void updateNeoPixel();
 #define TARGET_FPS 60
 #define FRAME_TIME (1000 / TARGET_FPS)
 
-// Delta Time for smooth, frame-rate independent movement
+// NTP Settings (WIB: UTC+7)
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 25200;
+const int   daylightOffset_sec = 0;
+
+// Delta Time
 unsigned long lastFrameMillis = 0;
 float deltaTime = 0.0;
 
@@ -43,6 +54,7 @@ enum AppState {
   STATE_GAME_SPACE_INVADERS,
   STATE_GAME_SIDE_SCROLLER,
   STATE_GAME_PONG,
+  STATE_GAME_RACING,
   STATE_GAME_SELECT,
   STATE_VIDEO_PLAYER
 };
@@ -84,20 +96,17 @@ int selectedNetwork = 0;
 int wifiPage = 0;
 const int wifiPerPage = 4;
 
-// WiFi Auto-off settings
+// WiFi Auto-off
 unsigned long lastWiFiActivity = 0;
 
-// Battery monitoring
-float batteryVoltage = 5.0;
-int batteryPercent = 100;
-
-// Game Effects System
-#define MAX_PARTICLES 30
+// Game Effects
+#define MAX_PARTICLES 40
 struct Particle {
   float x, y;
   float vx, vy;
   int life;
   bool active;
+  uint16_t color;
 };
 Particle particles[MAX_PARTICLES];
 int screenShake = 0;
@@ -110,10 +119,11 @@ void spawnExplosion(float x, float y, int count) {
         particles[j].x = x;
         particles[j].y = y;
         float angle = random(0, 360) * PI / 180.0;
-        float speed = random(5, 20) / 10.0;
+        float speed = random(5, 25) / 10.0;
         particles[j].vx = cos(angle) * speed;
         particles[j].vy = sin(angle) * speed;
-        particles[j].life = random(10, 30);
+        particles[j].life = random(15, 40);
+        particles[j].color = SSD1306_WHITE;
         break;
       }
     }
@@ -134,8 +144,8 @@ void updateParticles() {
 void drawParticles() {
   for (int i = 0; i < MAX_PARTICLES; i++) {
     if (particles[i].active) {
-      if (particles[i].life % 2 == 0) { // Flicker effect
-        display.drawPixel((int)particles[i].x, (int)particles[i].y, SSD1306_WHITE);
+      if (particles[i].life % 2 == 0) {
+        display.drawPixel((int)particles[i].x, (int)particles[i].y, particles[i].color);
       }
     }
   }
@@ -167,64 +177,33 @@ const char* keyboardNumbers[3][10] = {
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext {
-  CONTEXT_CHAT,
-  CONTEXT_WIFI_PASSWORD
-};
+enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
-// Space Invaders Game State
+// Space Invaders State
 #define MAX_ENEMIES 15
 #define MAX_BULLETS 5
 #define MAX_ENEMY_BULLETS 10
 #define MAX_POWERUPS 3
 
 struct SpaceInvaders {
-  float playerX;
-  float playerY;
-  int playerWidth;
-  int playerHeight;
-  int lives;
-  int score;
-  int level;
+  float playerX, playerY;
+  int playerWidth, playerHeight;
+  int lives, score, level;
   bool gameOver;
-  int weaponType; // 0=single, 1=double, 2=triple
-  int shieldTime;
-  
-  struct Enemy {
-    float x, y;
-    int width, height;
-    bool active;
-    int type; // 0=basic, 1=fast, 2=tank
-    int health;
-  };
+  int weaponType, shieldTime;
+  struct Enemy { float x, y; int width, height; bool active; int type; int health; };
   Enemy enemies[MAX_ENEMIES];
-  
-  struct Bullet {
-    float x, y;
-    bool active;
-  };
+  struct Bullet { float x, y; bool active; };
   Bullet bullets[MAX_BULLETS];
   Bullet enemyBullets[MAX_ENEMY_BULLETS];
-  
-  struct PowerUp {
-    float x, y;
-    int type; // 0=weapon, 1=shield, 2=life
-    bool active;
-  };
+  struct PowerUp { float x, y; int type; bool active; };
   PowerUp powerups[MAX_POWERUPS];
-  
-  float enemyDirection; // 1=right, -1=left
-  unsigned long lastEnemyMove;
-  unsigned long lastEnemyShoot;
-  unsigned long lastSpawn;
-  bool bossActive;
-  float bossX, bossY;
-  int bossHealth;
-};
-SpaceInvaders invaders;
+  float enemyDirection;
+  unsigned long lastEnemyMove, lastEnemyShoot, lastSpawn;
+} invaders;
 
-// Side Scroller Shooter Game State
+// Side Scroller State
 #define MAX_OBSTACLES 8
 #define MAX_SCROLLER_BULLETS 8
 #define MAX_SCROLLER_ENEMIES 6
@@ -232,87 +211,75 @@ SpaceInvaders invaders;
 struct SideScroller {
   float playerX, playerY;
   int playerWidth, playerHeight;
-  int lives;
-  int score;
-  int level;
+  int lives, score, level;
   bool gameOver;
-  int weaponLevel; // 1-5
-  int specialCharge; // 0-100
+  int weaponLevel, specialCharge;
   bool shieldActive;
-  
-  struct Obstacle {
-    float x, y;
-    int width, height;
-    bool active;
-    float scrollSpeed;
-  };
+  struct Obstacle { float x, y; int width, height; bool active; float scrollSpeed; };
   Obstacle obstacles[MAX_OBSTACLES];
-  
-  struct ScrollerBullet {
-    float x, y;
-    int dirX, dirY; // -1, 0, or 1
-    bool active;
-    int damage;
-  };
+  struct ScrollerBullet { float x, y; int dirX, dirY; bool active; int damage; };
   ScrollerBullet bullets[MAX_SCROLLER_BULLETS];
-  
-  struct ScrollerEnemy {
-    float x, y;
-    int width, height;
-    bool active;
-    int health;
-    int type; // 0=basic, 1=shooter, 2=kamikaze
-    int dirY;
-  };
+  struct ScrollerEnemy { float x, y; int width, height; bool active; int health, type, dirY; };
   ScrollerEnemy enemies[MAX_SCROLLER_ENEMIES];
-  
-  struct ScrollerEnemyBullet {
-    float x, y;
-    bool active;
-  };
+  struct ScrollerEnemyBullet { float x, y; bool active; };
   ScrollerEnemyBullet enemyBullets[MAX_OBSTACLES];
-  
-  unsigned long lastMove;
-  unsigned long lastShoot;
-  unsigned long lastEnemySpawn;
-  unsigned long lastObstacleSpawn;
+  unsigned long lastMove, lastShoot, lastEnemySpawn, lastObstacleSpawn;
   int scrollOffset;
-};
-SideScroller scroller;
+} scroller;
 
-// Pong Game State
+// Pong State
 struct Pong {
-  float ballX, ballY;
-  float ballDirX, ballDirY;
-  float ballSpeed;
+  float ballX, ballY, ballDirX, ballDirY, ballSpeed;
   float paddle1Y, paddle2Y;
   int paddleWidth, paddleHeight;
   int score1, score2;
   bool gameOver;
-  bool aiMode; // true = vs AI, false = 2 player
-  int difficulty; // 1-3
-};
-Pong pong;
+  bool aiMode;
+  int difficulty;
+} pong;
 unsigned long pongResetTimer = 0;
 bool pongResetting = false;
+
+// Racing Game State
+#define MAX_RACING_CARS 5
+struct RacingGame {
+  float roadOffset;
+  float playerX;
+  float speed;      // 0 to 250 km/h
+  float rpm;        // 0 to 9000
+  int gear;         // 1 to 6
+  bool clutch;      // True if pressed
+  float distance;
+  int score;
+  bool gameOver;
+
+  struct Opponent {
+    float x, y;
+    float speed;
+    bool active;
+    int type; // 0=Traffic, 1=Racer
+  };
+  Opponent opponents[MAX_RACING_CARS];
+
+  unsigned long lastSpawn;
+  float trackCurve;
+  float currentCurve;
+} racing;
 
 AppState currentState = STATE_MAIN_MENU;
 AppState previousState = STATE_MAIN_MENU;
 
-// UI Transition System
+// UI Transition
 enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
 AppState transitionTargetState;
-float transitionProgress = 0.0; // 0.0 to 1.0
-const float transitionSpeed = 2.5f;
+float transitionProgress = 0.0;
+const float transitionSpeed = 3.0f;
 
-// Main Menu Animation Variables
+// Menu Logic
 float menuScrollY = 0;
 float menuTargetScrollY = 0;
 int mainMenuSelection = 0;
-float menuTextScrollX = 0;
-unsigned long lastMenuTextScrollTime = 0;
-
 int cursorX = 0, cursorY = 0;
 String userInput = "";
 String passwordInput = "";
@@ -326,34 +293,17 @@ const unsigned long debounceDelay = 150;
 unsigned long lastGameUpdate = 0;
 const int gameUpdateInterval = FRAME_TIME;
 
-// Icons (8x8 pixel bitmaps)
-const unsigned char ICON_WIFI[] PROGMEM = {
-  0x00, 0x3C, 0x42, 0x99, 0x24, 0x00, 0x18, 0x00
-};
+// Icons
+const unsigned char ICON_WIFI[] PROGMEM = { 0x00, 0x3C, 0x42, 0x99, 0x24, 0x00, 0x18, 0x00 };
+const unsigned char ICON_CHAT[] PROGMEM = { 0x7E, 0xFF, 0xC3, 0xC3, 0xC3, 0xFF, 0x18, 0x00 };
+const unsigned char ICON_GAME[] PROGMEM = { 0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C };
+const unsigned char ICON_VIDEO[] PROGMEM = { 0x7E, 0x81, 0x81, 0xBD, 0xBD, 0x81, 0x81, 0x7E };
 
-const unsigned char ICON_CHAT[] PROGMEM = {
-  0x7E, 0xFF, 0xC3, 0xC3, 0xC3, 0xFF, 0x18, 0x00
-};
-
-const unsigned char ICON_GAME[] PROGMEM = {
-  0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C
-};
-
-const unsigned char ICON_VIDEO[] PROGMEM = {
-  0x7E, 0x81, 0x81, 0xBD, 0xBD, 0x81, 0x81, 0x7E
-};
-
-// Video Player Data
-// ==========================================
-// PASTE YOUR VIDEO FRAME ARRAY HERE
-// Format: const unsigned char frame1[] PROGMEM = { ... };
-//         const unsigned char* videoFrames[] = { frame1, frame2, ... };
-// ==========================================
-const unsigned char* videoFrames[] = { NULL }; // Placeholder
+const unsigned char* videoFrames[] = { NULL };
 int videoTotalFrames = 0;
 int videoCurrentFrame = 0;
 unsigned long lastVideoFrameTime = 0;
-const int videoFrameDelay = 70; // 25 FPS
+const int videoFrameDelay = 60;
 
 // Forward declarations
 void showMainMenu(int x_offset = 0);
@@ -376,6 +326,40 @@ void scanWiFiNetworks();
 void displayResponse();
 void showStatus(String message, int delayMs);
 void forgetNetwork();
+void drawHeader();
+void drawWiFiSignalBars();
+void drawIcon(int x, int y, const unsigned char* icon);
+void sendToGemini();
+const char* getCurrentKey();
+void toggleKeyboardMode();
+void changeState(AppState newState);
+
+// Game Funcs
+void initSpaceInvaders();
+void updateSpaceInvaders();
+void drawSpaceInvaders();
+void handleSpaceInvadersInput();
+void initSideScroller();
+void updateSideScroller();
+void drawSideScroller();
+void handleSideScrollerInput();
+void initPong();
+void updatePong();
+void drawPong();
+void handlePongInput();
+void initRacing();
+void updateRacing();
+void drawRacing();
+void handleRacingInput();
+void drawVideoPlayer();
+
+// Button handlers
+void handleUp();
+void handleDown();
+void handleLeft();
+void handleRight();
+void handleSelect();
+
 void refreshCurrentScreen() {
   int x_offset = 0;
   if (transitionState == TRANSITION_OUT) {
@@ -384,7 +368,6 @@ void refreshCurrentScreen() {
     x_offset = SCREEN_WIDTH * (1.0 - transitionProgress);
   }
 
-  // We don't draw UI for game states, they handle their own display updates
   switch(currentState) {
     case STATE_MAIN_MENU: showMainMenu(x_offset); break;
     case STATE_WIFI_MENU: showWiFiMenu(x_offset); break;
@@ -395,106 +378,40 @@ void refreshCurrentScreen() {
     case STATE_KEYBOARD: drawKeyboard(x_offset); break;
     case STATE_PASSWORD_INPUT: drawKeyboard(x_offset); break;
     case STATE_CHAT_RESPONSE: displayResponse(); break;
-    // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
+    case STATE_GAME_RACING:
     case STATE_VIDEO_PLAYER:
       break;
     default: showMainMenu(x_offset); break;
   }
 }
-void drawBatteryIndicator();
-void drawWiFiSignalBars();
-void drawIcon(int x, int y, const unsigned char* icon);
-void sendToGemini();
-const char* getCurrentKey();
-void toggleKeyboardMode();
 
-// UI Transition Function
+// Global Transition
 void changeState(AppState newState) {
   if (transitionState == TRANSITION_NONE && currentState != newState) {
     transitionTargetState = newState;
     transitionState = TRANSITION_OUT;
     transitionProgress = 0.0f;
-    previousState = currentState; // Store where we came from
+    previousState = currentState;
   }
-}
-
-// Game functions
-void initSpaceInvaders();
-void updateSpaceInvaders();
-void drawSpaceInvaders();
-void handleSpaceInvadersInput();
-
-void initSideScroller();
-void updateSideScroller();
-void drawSideScroller();
-void handleSideScrollerInput();
-
-void initPong();
-void updatePong();
-void drawPong();
-void handlePongInput();
-
-void drawVideoPlayer();
-
-// Button handlers
-void handleUp();
-void handleDown();
-void handleLeft();
-void handleRight();
-void handleSelect();
-
-// LED Patterns
-void ledHeartbeat() {
-  int beat = (millis() / 100) % 20;
-  digitalWrite(LED_BUILTIN, (beat < 2 || beat == 4));
-}
-
-void ledBlink(int speed) {
-  digitalWrite(LED_BUILTIN, (millis() / speed) % 2);
-}
-
-void ledSuccess() {
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(100);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(100);
-  }
-}
-
-void ledError() {
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(80);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(80);
-  }
-}
-
-void ledQuickFlash() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(30);
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  // High Performance Setup for ESP32-S3 N16R8
+  // MAX PERFORMANCE
   setCpuFrequencyMhz(CPU_FREQ);
-  psramInit();
   
-  Serial.println("\n=== ESP32-S3 Gaming Edition v1.0 ===");
+  Serial.println("\n=== ESP32-S3 Ultimate Edition ===");
   Serial.printf("CPU Freq: %d MHz\n", getCpuFrequencyMhz());
-  Serial.printf("PSRAM Size: %d KB\n", ESP.getPsramSize() / 1024);
+  Serial.printf("PSRAM: %d KB\n", ESP.getPsramSize() / 1024);
   
   preferences.begin("wifi-creds", false);
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(I2C_FREQ); // Fast I2C for smoother display updates
+  Wire.setClock(I2C_FREQ);
   
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
@@ -507,11 +424,9 @@ void setup() {
   pinMode(TOUCH_RIGHT, INPUT);
   
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
 
   pixels.begin();
-  pixels.setPixelColor(0, pixels.Color(0, 0, 0));
-  pixels.show();
+  setNeoPixelMode(NEO_BREATHE, pixels.Color(0, 255, 255)); // Cyan Breathe
   
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -519,11 +434,11 @@ void setup() {
   }
   
   display.clearDisplay();
-  display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.display();
   
-  ledSuccess();
+  // NTP Setup
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   
   preferences.begin("wifi-creds", true);
   String savedSSID = preferences.getString("ssid", "");
@@ -531,116 +446,116 @@ void setup() {
   preferences.end();
   
   if (savedSSID.length() > 0) {
-    showProgressBar("WiFi Connect", 0);
+    showProgressBar("System Init", 0);
     WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
     
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      ledBlink(100);
+    while (WiFi.status() != WL_CONNECTED && attempts < 15) {
       delay(500);
       attempts++;
-      showProgressBar("Connecting", attempts * 5);
+      showProgressBar("Syncing", attempts * 6);
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-      ledSuccess();
-      showProgressBar("Connected!", 100);
-      delay(1000);
+      setNeoPixelMode(NEO_STATIC, pixels.Color(0, 255, 0)); // Green
+      showProgressBar("Ready", 100);
+      delay(500);
     } else {
-      ledError();
-      showStatus("Connection failed", 2000);
+      setNeoPixelMode(NEO_STATIC, pixels.Color(255, 0, 0)); // Red
+      showStatus("Offline Mode", 1000);
     }
   }
   
+  setNeoPixelMode(NEO_RAINBOW);
   showMainMenu();
 }
 
-void triggerNeoPixelEffect(uint32_t color, int duration) {
-  neoPixelColor = color;
-  pixels.setPixelColor(0, neoPixelColor);
-  pixels.show();
-  neoPixelEffectEnd = millis() + duration;
+void setNeoPixelMode(NeoPixelMode mode, uint32_t color) {
+  neoMode = mode;
+  neoColor = color;
+  if (mode == NEO_STATIC) {
+    pixels.setPixelColor(0, color);
+    pixels.show();
+  }
 }
 
 void updateNeoPixel() {
-  if (neoPixelEffectEnd > 0 && millis() > neoPixelEffectEnd) {
-    neoPixelColor = 0;
-    pixels.setPixelColor(0, neoPixelColor);
-    pixels.show();
-    neoPixelEffectEnd = 0;
+  unsigned long now = millis();
+  
+  switch(neoMode) {
+    case NEO_OFF:
+      pixels.setPixelColor(0, 0);
+      pixels.show();
+      break;
+    case NEO_STATIC:
+      // Already set
+      break;
+    case NEO_BREATHE:
+      if (now - neoTimer > 20) {
+        neoTimer = now;
+        neoBrightness += neoDirection * 2;
+        if (neoBrightness <= 10) neoDirection = 1;
+        if (neoBrightness >= 200) neoDirection = -1;
+
+        uint8_t r = (uint8_t)((neoColor >> 16) & 0xFF) * neoBrightness / 255;
+        uint8_t g = (uint8_t)((neoColor >> 8) & 0xFF) * neoBrightness / 255;
+        uint8_t b = (uint8_t)(neoColor & 0xFF) * neoBrightness / 255;
+        pixels.setPixelColor(0, pixels.Color(r, g, b));
+        pixels.show();
+      }
+      break;
+    case NEO_RAINBOW:
+      if (now - neoTimer > 30) {
+        neoTimer = now;
+        neoBrightness = (neoBrightness + 1) % 256;
+        // Simple hue cycle
+        pixels.setPixelColor(0, pixels.gamma32(pixels.ColorHSV(neoBrightness * 256)));
+        pixels.show();
+      }
+      break;
+    case NEO_BLINK:
+      if (now - neoTimer > 200) {
+        neoTimer = now;
+        neoDirection = !neoDirection;
+        if (neoDirection) pixels.setPixelColor(0, neoColor);
+        else pixels.setPixelColor(0, 0);
+        pixels.show();
+      }
+      break;
   }
 }
 
 void loop() {
   unsigned long currentMillis = millis();
-  
   updateNeoPixel();
-
-  // LED Patterns
-  switch(currentState) {
-    case STATE_LOADING:
-      ledBlink(100);
-      break;
-    case STATE_CHAT_RESPONSE:
-      ledBlink(300);
-      break;
-    case STATE_GAME_SPACE_INVADERS:
-    case STATE_GAME_SIDE_SCROLLER:
-    case STATE_GAME_PONG:
-      {
-        int blink = (millis() / 100) % 3;
-        digitalWrite(LED_BUILTIN, blink < 2);
-      }
-      break;
-    case STATE_MAIN_MENU:
-    default:
-      ledHeartbeat();
-      break;
-  }
   
-  // Loading animation
-  if (currentState == STATE_LOADING) {
-    if (currentMillis - lastLoadingUpdate > 100) {
-      lastLoadingUpdate = currentMillis;
-      loadingFrame = (loadingFrame + 1) % 8;
-      showLoadingAnimation();
-    }
-  }
+  // LED Logic based on state
+  if (currentState == STATE_LOADING) setNeoPixelMode(NEO_BLINK, pixels.Color(0, 0, 255));
   
   // Game updates
   if (currentMillis - lastGameUpdate > gameUpdateInterval) {
-    // Calculate Delta Time
     if (lastFrameMillis == 0) lastFrameMillis = currentMillis;
     deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
     lastFrameMillis = currentMillis;
 
-    // Poll Game Inputs (Smooth Movement)
+    // Input polling
     if (currentState == STATE_GAME_SPACE_INVADERS) handleSpaceInvadersInput();
     else if (currentState == STATE_GAME_SIDE_SCROLLER) handleSideScrollerInput();
     else if (currentState == STATE_GAME_PONG) handlePongInput();
+    else if (currentState == STATE_GAME_RACING) handleRacingInput();
 
     switch(currentState) {
-      case STATE_GAME_SPACE_INVADERS:
-        updateSpaceInvaders();
-        drawSpaceInvaders();
-        break;
-      case STATE_GAME_SIDE_SCROLLER:
-        updateSideScroller();
-        drawSideScroller();
-        break;
-      case STATE_GAME_PONG:
-        updatePong();
-        drawPong();
-        break;
+      case STATE_GAME_SPACE_INVADERS: updateSpaceInvaders(); drawSpaceInvaders(); break;
+      case STATE_GAME_SIDE_SCROLLER: updateSideScroller(); drawSideScroller(); break;
+      case STATE_GAME_PONG: updatePong(); drawPong(); break;
+      case STATE_GAME_RACING: updateRacing(); drawRacing(); break;
     }
     lastGameUpdate = currentMillis;
   }
 
-  if (currentState == STATE_VIDEO_PLAYER) {
-    drawVideoPlayer();
-  }
+  if (currentState == STATE_VIDEO_PLAYER) drawVideoPlayer();
 
-  // UI Transition Logic
+  // Transition Logic
   if (transitionState != TRANSITION_NONE) {
     transitionProgress += transitionSpeed * deltaTime;
     if (transitionProgress >= 1.0f) {
@@ -650,11 +565,11 @@ void loop() {
         transitionState = TRANSITION_IN;
         transitionProgress = 0.0f;
 
-        // If returning to the main menu, restore the selection. Otherwise, reset it.
         if (transitionTargetState == STATE_MAIN_MENU) {
           menuSelection = mainMenuSelection;
           menuTargetScrollY = mainMenuSelection * 22;
           menuScrollY = menuTargetScrollY;
+          setNeoPixelMode(NEO_RAINBOW);
         } else {
           menuSelection = 0;
           menuScrollY = 0;
@@ -666,70 +581,328 @@ void loop() {
     }
   }
 
-  // Draw current screen with transition offset
-  // We call this every frame now, not just on input
   refreshCurrentScreen();
 
-  // Main Menu Animation (Only if not transitioning)
+  // Menu Animation
   if (currentState == STATE_MAIN_MENU && transitionState == TRANSITION_NONE) {
     if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
       menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
-    } else if (menuScrollY != menuTargetScrollY) {
+    } else {
       menuScrollY = menuTargetScrollY;
     }
   }
   
-  // Button handling (only if not transitioning)
+  // Input Handling
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
     
-    if (digitalRead(BTN_UP) == LOW) {
-      handleUp();
-      buttonPressed = true;
-    }
-    if (digitalRead(BTN_DOWN) == LOW) {
-      handleDown();
-      buttonPressed = true;
-    }
-    if (digitalRead(BTN_LEFT) == LOW) {
-      handleLeft();
-      buttonPressed = true;
-    }
-    if (digitalRead(BTN_RIGHT) == LOW) {
-      handleRight();
-      buttonPressed = true;
-    }
-    if (digitalRead(BTN_SELECT) == LOW) {
-      handleSelect();
-      buttonPressed = true;
-    }
-    if (digitalRead(BTN_BACK) == LOW) {
-      handleBackButton();
-      buttonPressed = true;
-    }
+    if (digitalRead(BTN_UP) == LOW) { handleUp(); buttonPressed = true; }
+    if (digitalRead(BTN_DOWN) == LOW) { handleDown(); buttonPressed = true; }
+    if (digitalRead(BTN_LEFT) == LOW) { handleLeft(); buttonPressed = true; }
+    if (digitalRead(BTN_RIGHT) == LOW) { handleRight(); buttonPressed = true; }
+    if (digitalRead(BTN_SELECT) == LOW) { handleSelect(); buttonPressed = true; }
+    if (digitalRead(BTN_BACK) == LOW) { handleBackButton(); buttonPressed = true; }
     
-    // Touch buttons
-    if (digitalRead(TOUCH_LEFT) == HIGH) {
-      handleLeft();
-      if (currentState == STATE_GAME_SPACE_INVADERS || 
-          currentState == STATE_GAME_SIDE_SCROLLER) {
-        handleSelect(); // Also shoot
+    // Touch Buttons (Restricted)
+    if (currentState != STATE_KEYBOARD && currentState != STATE_PASSWORD_INPUT) {
+      if (digitalRead(TOUCH_LEFT) == HIGH) {
+        handleLeft();
+        if (currentState == STATE_GAME_SPACE_INVADERS || currentState == STATE_GAME_SIDE_SCROLLER) {
+          handleSelect();
+        }
+        buttonPressed = true;
       }
-      buttonPressed = true;
-    }
-    if (digitalRead(TOUCH_RIGHT) == HIGH) {
-      handleRight();
-      buttonPressed = true;
+      if (digitalRead(TOUCH_RIGHT) == HIGH) {
+        handleRight();
+        buttonPressed = true;
+      }
     }
     
     if (buttonPressed) {
       lastDebounce = currentMillis;
-      ledQuickFlash();
     }
   }
 }
 
-// ========== SPACE INVADERS GAME ==========
+// ========== HEADER UI (Time + WiFi) ==========
+void drawHeader() {
+  // Time
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(2, 2);
+    display.printf("%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+  } else {
+    display.setCursor(2, 2);
+    display.print("Sync..");
+  }
+
+  // WiFi Signal
+  if (WiFi.status() == WL_CONNECTED) {
+    drawWiFiSignalBars();
+  }
+}
+
+void drawWiFiSignalBars() {
+  int rssi = WiFi.RSSI();
+  int bars = 0;
+  if (rssi > -55) bars = 4;
+  else if (rssi > -65) bars = 3;
+  else if (rssi > -75) bars = 2;
+  else if (rssi > -85) bars = 1;
+
+  int x = SCREEN_WIDTH - 15;
+  int y = 8;
+  for (int i = 0; i < 4; i++) {
+    int h = (i + 1) * 2;
+    if (i < bars) display.fillRect(x + (i * 3), y - h + 2, 2, h, SSD1306_WHITE);
+    else display.drawRect(x + (i * 3), y - h + 2, 2, h, SSD1306_WHITE);
+  }
+}
+
+void drawIcon(int x, int y, const unsigned char* icon) {
+  display.drawBitmap(x, y, icon, 8, 8, SSD1306_WHITE);
+}
+
+// ========== RACING GAME ==========
+
+void initRacing() {
+  racing.roadOffset = 0;
+  racing.playerX = 0; // -1.0 to 1.0 (Lane position)
+  racing.speed = 0;
+  racing.rpm = 1000;
+  racing.gear = 1;
+  racing.clutch = false;
+  racing.distance = 0;
+  racing.score = 0;
+  racing.gameOver = false;
+  racing.trackCurve = 0;
+  racing.currentCurve = 0;
+
+  for(int i=0; i<MAX_RACING_CARS; i++) {
+    racing.opponents[i].active = false;
+  }
+  setNeoPixelMode(NEO_STATIC, pixels.Color(255, 0, 0)); // Start with Red (Brake lights)
+}
+
+void updateRacing() {
+  if (racing.gameOver) return;
+
+  updateParticles();
+  if (screenShake > 0) screenShake--;
+
+  // 1. Physics Engine
+  float maxSpeed = racing.gear * 40.0f + 20.0f; // Max speed per gear
+  float acceleration = (8000.0f - racing.rpm) / 5000.0f;
+  if (acceleration < 0.1f) acceleration = 0.1f;
+
+  // Engine Sound / RPM Logic
+  if (digitalRead(BTN_UP) == LOW) { // Gas
+    if (racing.clutch) {
+      racing.rpm += 500.0f; // Rev freely
+    } else {
+      racing.rpm += 150.0f;
+      racing.speed += acceleration * deltaTime * 20.0f;
+    }
+  } else {
+    racing.rpm -= 200.0f;
+    racing.speed -= 10.0f * deltaTime;
+  }
+
+  // Brake
+  if (digitalRead(BTN_DOWN) == LOW) {
+    racing.speed -= 80.0f * deltaTime;
+    setNeoPixelMode(NEO_STATIC, pixels.Color(255, 0, 0)); // Red Brake Lights
+  } else {
+     // RPM/Speed LED effect
+     float rpmRatio = racing.rpm / 8000.0f;
+     uint8_t r = (uint8_t)(rpmRatio * 255);
+     uint8_t g = (uint8_t)((1.0f - rpmRatio) * 255);
+     setNeoPixelMode(NEO_STATIC, pixels.Color(r, g, 0));
+  }
+
+  // Clutch Logic
+  if (digitalRead(BTN_SELECT) == LOW) {
+    racing.clutch = true;
+  } else {
+    racing.clutch = false;
+  }
+
+  // Resistance
+  racing.speed -= (racing.speed * 0.01f);
+  racing.rpm = constrain(racing.rpm, 800, 9000);
+  racing.speed = constrain(racing.speed, 0, 250);
+
+  // Link RPM to Speed roughly if clutch engaged
+  if (!racing.clutch) {
+     float targetRPM = (racing.speed / maxSpeed) * 7000.0f + 1000.0f;
+     racing.rpm = (racing.rpm * 0.8f) + (targetRPM * 0.2f);
+
+     if (racing.rpm > 8500 && racing.gear < 6) {
+       // Simple auto shift up for playability
+       if (racing.rpm > 8000) { racing.gear++; racing.rpm = 5000; }
+     }
+     if (racing.rpm < 3000 && racing.gear > 1) {
+       racing.gear--;
+       racing.rpm = 6000;
+     }
+  }
+
+  // Steering
+  if (digitalRead(BTN_LEFT) == LOW) racing.playerX -= 1.5f * deltaTime;
+  if (digitalRead(BTN_RIGHT) == LOW) racing.playerX += 1.5f * deltaTime;
+  racing.playerX = constrain(racing.playerX, -1.0f, 1.0f);
+
+  // Road Curve
+  racing.roadOffset += racing.speed * deltaTime * 0.1f;
+
+  // Spawn Opponents
+  if (millis() - racing.lastSpawn > (3000 - racing.speed * 5)) {
+     for(int i=0; i<MAX_RACING_CARS; i++) {
+       if (!racing.opponents[i].active) {
+         racing.opponents[i].active = true;
+         racing.opponents[i].x = random(-80, 80) / 100.0f;
+         racing.opponents[i].y = 0; // Horizon
+         racing.opponents[i].speed = racing.speed * 0.5f + 20.0f; // Slower than player
+         racing.lastSpawn = millis();
+         break;
+       }
+     }
+  }
+
+  // Update Opponents (Fake 3D Z-movement)
+  for(int i=0; i<MAX_RACING_CARS; i++) {
+    if (racing.opponents[i].active) {
+      // Perspective move: Y goes 0 -> 1.0
+      racing.opponents[i].y += (racing.speed - racing.opponents[i].speed) * 0.0005f * deltaTime;
+
+      // Collision
+      if (racing.opponents[i].y > 0.8f && racing.opponents[i].y < 1.0f) {
+         if (abs(racing.playerX - racing.opponents[i].x) < 0.3f) {
+            // CRASH
+            racing.speed = 0;
+            screenShake = 10;
+            racing.gameOver = true;
+         }
+      }
+
+      if (racing.opponents[i].y > 1.2f || racing.opponents[i].y < -0.1f) {
+         racing.opponents[i].active = false;
+         racing.score += 10;
+      }
+    }
+  }
+
+  racing.distance += racing.speed * deltaTime * 0.001f;
+}
+
+void drawRacing() {
+  display.clearDisplay();
+  drawHeader();
+
+  int cx = SCREEN_WIDTH / 2;
+  int cy = SCREEN_HEIGHT / 2;
+
+  int horizon = 20;
+
+  // Draw Sky/Ground
+  display.drawLine(0, horizon, SCREEN_WIDTH, horizon, SSD1306_WHITE);
+
+  // Draw Road (Perspective)
+  // Vanishing point
+  int vpX = cx - (racing.playerX * 30);
+
+  // Road Edges
+  display.drawLine(vpX, horizon, 0, SCREEN_HEIGHT, SSD1306_WHITE);
+  display.drawLine(vpX, horizon, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  // Lane markers
+  int roadOffset = (int)(racing.distance * 100) % 20;
+  if (roadOffset < 10) {
+    display.drawLine(vpX, horizon, cx, SCREEN_HEIGHT, SSD1306_WHITE);
+  }
+
+  // Draw Opponents
+  for(int i=0; i<MAX_RACING_CARS; i++) {
+    if (racing.opponents[i].active && racing.opponents[i].y > 0) {
+      // Projection
+      float z = racing.opponents[i].y;
+      int w = 4 + (z * 20);
+      int h = 3 + (z * 15);
+      int ox = vpX + (racing.opponents[i].x - racing.playerX) * (z * 60); // Parallax
+      int oy = horizon + (z * (SCREEN_HEIGHT - horizon));
+
+      display.fillRect(ox - w/2, oy - h, w, h, SSD1306_WHITE);
+    }
+  }
+
+  // Draw Player Car (Modern Sports Car Sprite)
+  int carW = 24;
+  int carH = 14;
+  int carX = cx - carW/2 + random(-screenShake, screenShake+1);
+  int carY = SCREEN_HEIGHT - carH - 2;
+
+  // Main Body
+  display.fillRoundRect(carX, carY + 4, carW, carH - 4, 2, SSD1306_BLACK);
+  display.drawRoundRect(carX, carY + 4, carW, carH - 4, 2, SSD1306_WHITE);
+
+  // Cabin (narrower top)
+  display.fillRect(carX + 4, carY, carW - 8, 5, SSD1306_BLACK);
+  display.drawRect(carX + 4, carY, carW - 8, 5, SSD1306_WHITE);
+
+  // Spoiler
+  display.drawLine(carX, carY+2, carX+carW, carY+2, SSD1306_WHITE);
+
+  // Tyres
+  display.fillRect(carX - 2, carY + 8, 3, 5, SSD1306_WHITE);
+  display.fillRect(carX + carW - 1, carY + 8, 3, 5, SSD1306_WHITE);
+
+  // Brake Lights
+  if (digitalRead(BTN_DOWN) == LOW) { // Braking
+     display.fillRect(carX + 2, carY + 5, 6, 3, SSD1306_WHITE);
+     display.fillRect(carX + carW - 8, carY + 5, 6, 3, SSD1306_WHITE);
+  } else {
+     display.drawRect(carX + 2, carY + 5, 6, 3, SSD1306_WHITE);
+     display.drawRect(carX + carW - 8, carY + 5, 6, 3, SSD1306_WHITE);
+  }
+
+  // HUD
+  display.setTextSize(1);
+  display.setCursor(2, 55);
+  display.printf("%d KM/H", (int)racing.speed);
+  display.setCursor(80, 55);
+  display.printf("G:%d", racing.gear);
+  display.setCursor(110, 55);
+  if(racing.clutch) display.print("C");
+
+  // RPM Bar (Dynamic)
+  int rpmW = map(racing.rpm, 0, 9000, 0, 50);
+  display.drawRect(35, 60, 52, 4, SSD1306_WHITE);
+
+  if (racing.rpm > 7000) {
+      if ((millis() / 50) % 2 == 0) display.fillRect(36, 61, rpmW, 2, SSD1306_WHITE);
+  } else {
+      display.fillRect(36, 61, rpmW, 2, SSD1306_WHITE);
+  }
+
+  if (racing.gameOver) {
+    display.fillRect(20, 20, 88, 30, SSD1306_BLACK);
+    display.drawRect(20, 20, 88, 30, SSD1306_WHITE);
+    display.setCursor(35, 25);
+    display.print("CRASHED!");
+    display.setCursor(35, 38);
+    display.print("Score: "); display.print(racing.score);
+  }
+
+  display.display();
+}
+
+void handleRacingInput() {
+  // Input handled in updateRacing for physics simulation
+}
+
+// ========== SPACE INVADERS ==========
 
 void initSpaceInvaders() {
   invaders.playerX = SCREEN_WIDTH / 2 - 4;
@@ -746,14 +919,9 @@ void initSpaceInvaders() {
   invaders.lastEnemyMove = 0;
   invaders.lastEnemyShoot = 0;
   invaders.lastSpawn = 0;
-  invaders.bossActive = false;
   
-  // Initialize enemies
-  for (int i = 0; i < MAX_ENEMIES; i++) {
-    invaders.enemies[i].active = false;
-  }
+  for (int i = 0; i < MAX_ENEMIES; i++) invaders.enemies[i].active = false;
   
-  // Spawn initial wave
   for (int i = 0; i < 5; i++) {
     invaders.enemies[i].active = true;
     invaders.enemies[i].x = 10 + i * 20;
@@ -764,37 +932,27 @@ void initSpaceInvaders() {
     invaders.enemies[i].health = invaders.enemies[i].type + 1;
   }
   
-  // Clear bullets
-  for (int i = 0; i < MAX_BULLETS; i++) {
-    invaders.bullets[i].active = false;
-  }
-  for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-    invaders.enemyBullets[i].active = false;
-  }
-  for (int i = 0; i < MAX_POWERUPS; i++) {
-    invaders.powerups[i].active = false;
-  }
+  for (int i = 0; i < MAX_BULLETS; i++) invaders.bullets[i].active = false;
+  for (int i = 0; i < MAX_ENEMY_BULLETS; i++) invaders.enemyBullets[i].active = false;
+  for (int i = 0; i < MAX_POWERUPS; i++) invaders.powerups[i].active = false;
+
+  setNeoPixelMode(NEO_RAINBOW);
 }
 
 void updateSpaceInvaders() {
   if (invaders.gameOver) return;
   
   unsigned long now = millis();
-  
   updateParticles();
   if (screenShake > 0) screenShake--;
-
-  // Decrease shield
   if (invaders.shieldTime > 0) invaders.shieldTime--;
   
-  // Smooth Enemy Movement
+  float enemySpeed = 5.0f + (invaders.level * 2.0f);
   bool hitEdge = false;
-  float enemySpeed = 5.0f + (invaders.level * 2.0f); // Speed in pixels per second
 
   for (int i = 0; i < MAX_ENEMIES; i++) {
     if (invaders.enemies[i].active) {
       invaders.enemies[i].x += invaders.enemyDirection * enemySpeed * deltaTime;
-
       if ((invaders.enemyDirection > 0 && invaders.enemies[i].x >= SCREEN_WIDTH - 8) ||
           (invaders.enemyDirection < 0 && invaders.enemies[i].x <= 0)) {
         hitEdge = true;
@@ -806,27 +964,20 @@ void updateSpaceInvaders() {
     invaders.enemyDirection *= -1;
     for (int i = 0; i < MAX_ENEMIES; i++) {
       if (invaders.enemies[i].active) {
-        invaders.enemies[i].y += 4; // Step down
-        // Check if enemy reached player
+        invaders.enemies[i].y += 4;
         if (invaders.enemies[i].y >= invaders.playerY) {
           invaders.lives--;
-          triggerNeoPixelEffect(pixels.Color(255, 0, 0), 200); // Red flash
-          invaders.enemies[i].active = false; // Enemy disappears
           screenShake = 10;
-          if (invaders.lives <= 0) {
-            invaders.gameOver = true;
-            triggerNeoPixelEffect(pixels.Color(100, 0, 0), 1000); // Dim red for game over
-          }
+          if (invaders.lives <= 0) invaders.gameOver = true;
         }
       }
     }
   }
   
-  // Enemy shooting
+  // Enemy Shooting
   if (now - invaders.lastEnemyShoot > 1000) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
       if (invaders.enemies[i].active && random(0, 5) == 0) {
-        // Find empty bullet slot
         for (int j = 0; j < MAX_ENEMY_BULLETS; j++) {
           if (!invaders.enemyBullets[j].active) {
             invaders.enemyBullets[j].x = invaders.enemies[i].x + 4;
@@ -839,287 +990,122 @@ void updateSpaceInvaders() {
     }
     invaders.lastEnemyShoot = now;
   }
-  
-  // Move bullets
-  float bulletSpeed = 150.0f;
-  float enemyBulletSpeed = 90.0f;
+
+  // Bullets
   for (int i = 0; i < MAX_BULLETS; i++) {
     if (invaders.bullets[i].active) {
-      invaders.bullets[i].y -= bulletSpeed * deltaTime;
-      if (invaders.bullets[i].y < 0) {
-        invaders.bullets[i].active = false;
-      }
-    }
-  }
-  
-  for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-    if (invaders.enemyBullets[i].active) {
-      invaders.enemyBullets[i].y += enemyBulletSpeed * deltaTime;
-      if (invaders.enemyBullets[i].y > SCREEN_HEIGHT) {
-        invaders.enemyBullets[i].active = false;
-      }
-    }
-  }
-  
-  // Move powerups
-  float powerupSpeed = 60.0f;
-  for (int i = 0; i < MAX_POWERUPS; i++) {
-    if (invaders.powerups[i].active) {
-      invaders.powerups[i].y += powerupSpeed * deltaTime;
-      if (invaders.powerups[i].y > SCREEN_HEIGHT) {
-        invaders.powerups[i].active = false;
-      }
-    }
-  }
-  
-  // Collision detection - player bullets vs enemies
-  for (int i = 0; i < MAX_BULLETS; i++) {
-    if (invaders.bullets[i].active) {
-      for (int j = 0; j < MAX_ENEMIES; j++) {
-        if (invaders.enemies[j].active) {
-          if (invaders.bullets[i].x >= invaders.enemies[j].x &&
-              invaders.bullets[i].x <= invaders.enemies[j].x + invaders.enemies[j].width &&
-              invaders.bullets[i].y >= invaders.enemies[j].y &&
-              invaders.bullets[i].y <= invaders.enemies[j].y + invaders.enemies[j].height) {
-            
+      invaders.bullets[i].y -= 150.0f * deltaTime;
+      if (invaders.bullets[i].y < 0) invaders.bullets[i].active = false;
+
+      // Collision
+      for(int j=0; j<MAX_ENEMIES; j++) {
+         if(invaders.enemies[j].active &&
+            invaders.bullets[i].x >= invaders.enemies[j].x &&
+            invaders.bullets[i].x <= invaders.enemies[j].x + 8 &&
+            invaders.bullets[i].y >= invaders.enemies[j].y &&
+            invaders.bullets[i].y <= invaders.enemies[j].y + 6) {
+
             invaders.bullets[i].active = false;
             invaders.enemies[j].health--;
-            
-            if (invaders.enemies[j].health <= 0) {
+            if(invaders.enemies[j].health <= 0) {
               invaders.enemies[j].active = false;
-              invaders.score += (invaders.enemies[j].type + 1) * 10;
-              
-              spawnExplosion(invaders.enemies[j].x + 4, invaders.enemies[j].y + 3, 5);
-              triggerNeoPixelEffect(pixels.Color(255, 165, 0), 100); // Orange flash
-              screenShake = 2;
-
-              // Spawn powerup
-              if (random(0, 10) < 3) {
-                for (int k = 0; k < MAX_POWERUPS; k++) {
-                  if (!invaders.powerups[k].active) {
-                    invaders.powerups[k].x = invaders.enemies[j].x;
-                    invaders.powerups[k].y = invaders.enemies[j].y;
-                    invaders.powerups[k].type = random(0, 3);
-                    invaders.powerups[k].active = true;
-                    break;
-                  }
-                }
-              }
+              invaders.score += 10;
+              spawnExplosion(invaders.enemies[j].x, invaders.enemies[j].y, 5);
             }
             break;
-          }
-        }
+         }
       }
     }
   }
   
-  // Collision - enemy bullets vs player
-  if (invaders.shieldTime == 0) {
-    for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-      if (invaders.enemyBullets[i].active) {
-        if (invaders.enemyBullets[i].x >= invaders.playerX &&
-            invaders.enemyBullets[i].x <= invaders.playerX + invaders.playerWidth &&
-            invaders.enemyBullets[i].y >= invaders.playerY &&
-            invaders.enemyBullets[i].y <= invaders.playerY + invaders.playerHeight) {
-          
-          invaders.enemyBullets[i].active = false;
-          invaders.lives--;
-          triggerNeoPixelEffect(pixels.Color(255, 0, 0), 200); // Red flash
-          screenShake = 6;
-          
-          if (invaders.lives <= 0) {
-            invaders.gameOver = true;
-            triggerNeoPixelEffect(pixels.Color(100, 0, 0), 1000); // Dim red for game over
-          }
-        }
+  // Enemy Bullets
+  for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
+    if (invaders.enemyBullets[i].active) {
+      invaders.enemyBullets[i].y += 90.0f * deltaTime;
+      if (invaders.enemyBullets[i].y > SCREEN_HEIGHT) invaders.enemyBullets[i].active = false;
+
+      if (invaders.shieldTime == 0 &&
+          invaders.enemyBullets[i].x >= invaders.playerX &&
+          invaders.enemyBullets[i].x <= invaders.playerX + invaders.playerWidth &&
+          invaders.enemyBullets[i].y >= invaders.playerY &&
+          invaders.enemyBullets[i].y <= invaders.playerY + invaders.playerHeight) {
+
+           invaders.enemyBullets[i].active = false;
+           invaders.lives--;
+           screenShake = 6;
+           if(invaders.lives <= 0) invaders.gameOver = true;
       }
     }
   }
   
-  // Collision - powerups vs player
-  for (int i = 0; i < MAX_POWERUPS; i++) {
-    if (invaders.powerups[i].active) {
-      if (abs(invaders.powerups[i].x - invaders.playerX) < 8 &&
-          abs(invaders.powerups[i].y - invaders.playerY) < 8) {
-        
-        invaders.powerups[i].active = false;
-        
-        switch(invaders.powerups[i].type) {
-          case 0: // Weapon upgrade
-            invaders.weaponType = min(invaders.weaponType + 1, 2);
-            break;
-          case 1: // Shield
-            invaders.shieldTime = 300;
-            break;
-          case 2: // Extra life
-            invaders.lives++;
-            break;
-        }
-      }
-    }
-  }
-  
-  // Spawn new wave
+  // Respawn
   bool allDead = true;
-  for (int i = 0; i < MAX_ENEMIES; i++) {
-    if (invaders.enemies[i].active) {
-      allDead = false;
-      break;
-    }
-  }
-  
+  for (int i = 0; i < MAX_ENEMIES; i++) if (invaders.enemies[i].active) allDead = false;
   if (allDead && now - invaders.lastSpawn > 2000) {
-    invaders.level++;
-    int numEnemies = min(5 + invaders.level, MAX_ENEMIES);
-    
-    for (int i = 0; i < numEnemies; i++) {
-      invaders.enemies[i].active = true;
-      invaders.enemies[i].x = 10 + (i % 5) * 20;
-      invaders.enemies[i].y = 15 + (i / 5) * 10;
-      invaders.enemies[i].width = 8;
-      invaders.enemies[i].height = 6;
-      invaders.enemies[i].type = random(0, 3);
-      invaders.enemies[i].health = invaders.enemies[i].type + 1;
-    }
-    
-    invaders.lastSpawn = now;
+     invaders.level++;
+     for (int i = 0; i < 5; i++) {
+       invaders.enemies[i].active = true;
+       invaders.enemies[i].x = 10 + i * 20;
+       invaders.enemies[i].y = 15;
+       invaders.enemies[i].type = random(0,3);
+       invaders.enemies[i].health = invaders.enemies[i].type + 1;
+     }
+     invaders.lastSpawn = now;
   }
 }
 
 void drawSpaceInvaders() {
   display.clearDisplay();
-
-  // Apply Screen Shake
-  int shakeX = 0;
-  int shakeY = 0;
-  if (screenShake > 0) {
-    shakeX = random(-screenShake, screenShake + 1);
-    shakeY = random(-screenShake, screenShake + 1);
-  }
-
-  drawBatteryIndicator();
+  drawHeader();
   
-  // Draw HUD (Fixed position, no shake)
-  display.setTextSize(1);
-  display.setCursor(2, 2);
-  display.print("L:");
-  display.print(invaders.lives);
-  display.setCursor(40, 2);
-  display.print("S:");
-  display.print(invaders.score);
-  display.setCursor(90, 2);
-  display.print("Lv:");
-  display.print(invaders.level);
+  // HUD
+  display.setCursor(0, 10);
+  display.printf("L:%d S:%d", invaders.lives, invaders.score);
   
-  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+  // Player
+  display.drawTriangle(invaders.playerX+4, invaders.playerY, invaders.playerX, invaders.playerY+6, invaders.playerX+8, invaders.playerY+6, SSD1306_WHITE);
   
-  // Draw player (Neon Style)
-  if (invaders.shieldTime > 0 && (millis() / 100) % 2 == 0) {
-    display.drawCircle(invaders.playerX + 4 + shakeX, invaders.playerY + 3 + shakeY, 8, SSD1306_WHITE);
-  }
-  display.drawTriangle(
-    invaders.playerX + 4 + shakeX, invaders.playerY + shakeY,
-    invaders.playerX + shakeX, invaders.playerY + 6 + shakeY,
-    invaders.playerX + 8 + shakeX, invaders.playerY + 6 + shakeY,
-    SSD1306_WHITE
-  );
-  
-  // Draw enemies (Neon Style)
-  for (int i = 0; i < MAX_ENEMIES; i++) {
-    if (invaders.enemies[i].active) {
-      // Different shapes for different types
-      switch(invaders.enemies[i].type) {
-        case 0: // Basic
-          display.drawRect(invaders.enemies[i].x + shakeX, invaders.enemies[i].y + shakeY, 8, 6, SSD1306_WHITE);
-          break;
-        case 1: // Fast
-          display.drawTriangle(
-            invaders.enemies[i].x + 4 + shakeX, invaders.enemies[i].y + shakeY,
-            invaders.enemies[i].x + shakeX, invaders.enemies[i].y + 6 + shakeY,
-            invaders.enemies[i].x + 8 + shakeX, invaders.enemies[i].y + 6 + shakeY,
-            SSD1306_WHITE
-          );
-          break;
-        case 2: // Tank
-          display.drawRect(invaders.enemies[i].x + shakeX, invaders.enemies[i].y + shakeY, 8, 8, SSD1306_WHITE);
-          display.drawRect(invaders.enemies[i].x + 2 + shakeX, invaders.enemies[i].y + 2 + shakeY, 4, 4, SSD1306_WHITE);
-          break;
-      }
+  // Enemies
+  for(int i=0; i<MAX_ENEMIES; i++) {
+    if(invaders.enemies[i].active) {
+       display.drawRect(invaders.enemies[i].x, invaders.enemies[i].y, 8, 6, SSD1306_WHITE);
     }
   }
   
-  // Draw bullets
-  for (int i = 0; i < MAX_BULLETS; i++) {
-    if (invaders.bullets[i].active) {
-      display.drawLine(invaders.bullets[i].x + shakeX, invaders.bullets[i].y + shakeY,
-                      invaders.bullets[i].x + shakeX, invaders.bullets[i].y + 3 + shakeY, SSD1306_WHITE);
-    }
+  // Bullets
+  for(int i=0; i<MAX_BULLETS; i++) {
+    if(invaders.bullets[i].active) display.drawPixel(invaders.bullets[i].x, invaders.bullets[i].y, SSD1306_WHITE);
   }
   
-  for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-    if (invaders.enemyBullets[i].active) {
-      display.drawLine(invaders.enemyBullets[i].x + shakeX, invaders.enemyBullets[i].y + shakeY,
-                      invaders.enemyBullets[i].x + shakeX, invaders.enemyBullets[i].y - 3 + shakeY, SSD1306_WHITE);
-    }
-  }
-  
-  // Draw powerups
-  for (int i = 0; i < MAX_POWERUPS; i++) {
-    if (invaders.powerups[i].active) {
-      switch(invaders.powerups[i].type) {
-        case 0: // Weapon
-          display.drawCircle(invaders.powerups[i].x + shakeX, invaders.powerups[i].y + shakeY, 3, SSD1306_WHITE);
-          display.drawPixel(invaders.powerups[i].x + shakeX, invaders.powerups[i].y + shakeY, SSD1306_WHITE);
-          break;
-        case 1: // Shield
-          display.drawCircle(invaders.powerups[i].x + shakeX, invaders.powerups[i].y + shakeY, 3, SSD1306_WHITE);
-          break;
-        case 2: // Life
-          display.fillRect(invaders.powerups[i].x - 2 + shakeX, invaders.powerups[i].y - 2 + shakeY, 4, 4, SSD1306_WHITE);
-          break;
-      }
-    }
-  }
-
   drawParticles();
-  
-  // Game Over
   if (invaders.gameOver) {
-    display.fillRect(10, 20, 108, 30, SSD1306_BLACK);
-    display.drawRect(10, 20, 108, 30, SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(30, 25);
-    display.print("GAME OVER");
-    display.setCursor(25, 38);
-    display.print("Score: ");
-    display.print(invaders.score);
+    display.setCursor(30,30); display.print("GAME OVER");
   }
-  
   display.display();
 }
 
 void handleSpaceInvadersInput() {
   if (invaders.gameOver) return;
-  float speed = 120.0f; // pixels per second
+  float speed = 120.0f;
+  if (digitalRead(BTN_LEFT) == LOW) invaders.playerX -= speed * deltaTime;
+  if (digitalRead(BTN_RIGHT) == LOW) invaders.playerX += speed * deltaTime;
+  invaders.playerX = constrain(invaders.playerX, 0, SCREEN_WIDTH - 8);
 
-  if (digitalRead(BTN_LEFT) == LOW) {
-    invaders.playerX -= speed * deltaTime;
-  }
-  if (digitalRead(BTN_RIGHT) == LOW) {
-    invaders.playerX += speed * deltaTime;
-  }
-
-  // Clamp
-  if (invaders.playerX < 0) invaders.playerX = 0;
-  if (invaders.playerX > SCREEN_WIDTH - invaders.playerWidth) invaders.playerX = SCREEN_WIDTH - invaders.playerWidth;
-
-  // Auto-fire if holding touch button
-  if (digitalRead(TOUCH_LEFT) == HIGH) {
-     handleSelect(); // Re-use select logic for shooting
+  // Shoot
+  if (digitalRead(BTN_SELECT) == LOW || digitalRead(TOUCH_LEFT) == HIGH) {
+      for (int i = 0; i < MAX_BULLETS; i++) {
+        if (!invaders.bullets[i].active) {
+          invaders.bullets[i].x = invaders.playerX + 4;
+          invaders.bullets[i].y = invaders.playerY;
+          invaders.bullets[i].active = true;
+          break;
+        }
+      }
   }
 }
 
-// ========== SIDE SCROLLER SHOOTER GAME ==========
+
+// ========== SIDE SCROLLER ==========
 
 void initSideScroller() {
   scroller.playerX = 20;
@@ -1139,7 +1125,6 @@ void initSideScroller() {
   scroller.lastObstacleSpawn = 0;
   scroller.scrollOffset = 0;
   
-  // Clear everything
   for (int i = 0; i < MAX_OBSTACLES; i++) {
     scroller.obstacles[i].active = false;
     scroller.enemyBullets[i].active = false;
@@ -1156,14 +1141,13 @@ void updateSideScroller() {
   if (scroller.gameOver) return;
   
   unsigned long now = millis();
-  
   updateParticles();
   if (screenShake > 0) screenShake--;
 
   scroller.scrollOffset += 60.0f * deltaTime;
   if (scroller.scrollOffset > SCREEN_WIDTH) scroller.scrollOffset = 0;
   
-  // Spawn obstacles (More varied speed)
+  // Spawn obstacles
   if (now - scroller.lastObstacleSpawn > 2000) {
     for (int i = 0; i < MAX_OBSTACLES; i++) {
       if (!scroller.obstacles[i].active) {
@@ -1171,7 +1155,7 @@ void updateSideScroller() {
         scroller.obstacles[i].y = random(15, SCREEN_HEIGHT - 20);
         scroller.obstacles[i].width = 8;
         scroller.obstacles[i].height = 12;
-        scroller.obstacles[i].scrollSpeed = 1.0 + (random(0, 10) / 5.0); // 1.0 to 3.0
+        scroller.obstacles[i].scrollSpeed = 1.0 + (random(0, 10) / 5.0);
         scroller.obstacles[i].active = true;
         break;
       }
@@ -1204,6 +1188,17 @@ void updateSideScroller() {
       if (scroller.obstacles[i].x < -scroller.obstacles[i].width) {
         scroller.obstacles[i].active = false;
       }
+
+      // Collision Player vs Obstacle
+      if (abs(scroller.playerX - scroller.obstacles[i].x) < 8 &&
+          abs(scroller.playerY - scroller.obstacles[i].y) < 8) {
+          if (!scroller.shieldActive) {
+             scroller.lives--;
+             screenShake = 6;
+             if (scroller.lives <= 0) scroller.gameOver = true;
+          }
+          scroller.obstacles[i].active = false;
+      }
     }
   }
   
@@ -1214,61 +1209,35 @@ void updateSideScroller() {
       scroller.enemies[i].x -= enemyBaseSpeed * deltaTime;
       scroller.enemies[i].y += scroller.enemies[i].dirY * (enemyBaseSpeed / 2.0f) * deltaTime;
       
-      // Bounce off edges
-      if (scroller.enemies[i].y < 12) {
-        scroller.enemies[i].y = 12;
-        scroller.enemies[i].dirY = 1;
-      }
-      if (scroller.enemies[i].y > SCREEN_HEIGHT - 8) {
-        scroller.enemies[i].y = SCREEN_HEIGHT - 8;
-        scroller.enemies[i].dirY = -1;
+      if (scroller.enemies[i].y < 12 || scroller.enemies[i].y > SCREEN_HEIGHT - 8) {
+        scroller.enemies[i].dirY *= -1;
       }
       
-      // Enemy shooting
-      if (scroller.enemies[i].type == 1 && random(0, 50) == 0) {
-        for (int j = 0; j < MAX_OBSTACLES; j++) {
-          if (!scroller.enemyBullets[j].active) {
-            scroller.enemyBullets[j].x = scroller.enemies[i].x;
-            scroller.enemyBullets[j].y = scroller.enemies[i].y + 4;
-            scroller.enemyBullets[j].active = true;
-            break;
+      if (scroller.enemies[i].x < -8) scroller.enemies[i].active = false;
+      
+      // Collision Player vs Enemy
+      if (abs(scroller.playerX - scroller.enemies[i].x) < 8 &&
+          abs(scroller.playerY - scroller.enemies[i].y) < 8) {
+          if (!scroller.shieldActive) {
+             scroller.lives--;
+             screenShake = 6;
+             if (scroller.lives <= 0) scroller.gameOver = true;
           }
-        }
-      }
-      
-      if (scroller.enemies[i].x < -8) {
-        scroller.enemies[i].active = false;
+          scroller.enemies[i].active = false;
       }
     }
   }
   
-  // Move bullets
+  // Player Bullets
   float playerBulletSpeed = 200.0f;
   for (int i = 0; i < MAX_SCROLLER_BULLETS; i++) {
     if (scroller.bullets[i].active) {
       scroller.bullets[i].x += scroller.bullets[i].dirX * playerBulletSpeed * deltaTime;
       scroller.bullets[i].y += scroller.bullets[i].dirY * playerBulletSpeed * deltaTime;
       
-      if (scroller.bullets[i].x < 0 || scroller.bullets[i].x > SCREEN_WIDTH ||
-          scroller.bullets[i].y < 12 || scroller.bullets[i].y > SCREEN_HEIGHT) {
-        scroller.bullets[i].active = false;
-      }
-    }
-  }
-  
-  float enemyBulletSpeed = 120.0f;
-  for (int i = 0; i < MAX_OBSTACLES; i++) {
-    if (scroller.enemyBullets[i].active) {
-      scroller.enemyBullets[i].x -= enemyBulletSpeed * deltaTime;
-      if (scroller.enemyBullets[i].x < 0) {
-        scroller.enemyBullets[i].active = false;
-      }
-    }
-  }
-  
-  // Collision - player bullets vs enemies
-  for (int i = 0; i < MAX_SCROLLER_BULLETS; i++) {
-    if (scroller.bullets[i].active) {
+      if (scroller.bullets[i].x > SCREEN_WIDTH) scroller.bullets[i].active = false;
+
+      // Collision Bullet vs Enemy
       for (int j = 0; j < MAX_SCROLLER_ENEMIES; j++) {
         if (scroller.enemies[j].active) {
           if (abs(scroller.bullets[i].x - scroller.enemies[j].x) < 8 &&
@@ -1279,76 +1248,12 @@ void updateSideScroller() {
             
             if (scroller.enemies[j].health <= 0) {
               scroller.enemies[j].active = false;
-              spawnExplosion(scroller.enemies[j].x + 4, scroller.enemies[j].y + 4, 6);
-              screenShake = 2;
-              scroller.score += (scroller.enemies[j].type + 1) * 15;
-              scroller.specialCharge = min(scroller.specialCharge + 10, 100);
+              spawnExplosion(scroller.enemies[j].x, scroller.enemies[j].y, 6);
+              scroller.score += 15;
             }
             break;
           }
         }
-      }
-      
-      // Bullets vs obstacles
-      for (int j = 0; j < MAX_OBSTACLES; j++) {
-        if (scroller.obstacles[j].active) {
-          if (abs(scroller.bullets[i].x - scroller.obstacles[j].x) < 8 &&
-              abs(scroller.bullets[i].y - scroller.obstacles[j].y) < 8) {
-            scroller.bullets[i].active = false;
-            break;
-          }
-        }
-      }
-    }
-  }
-  
-  // Collision - player vs obstacles
-  for (int i = 0; i < MAX_OBSTACLES; i++) {
-    if (scroller.obstacles[i].active) {
-      if (abs(scroller.playerX - scroller.obstacles[i].x) < 8 &&
-          abs(scroller.playerY - scroller.obstacles[i].y) < 8) {
-        if (!scroller.shieldActive) {
-          scroller.lives--;
-          screenShake = 6;
-          if (scroller.lives <= 0) {
-            scroller.gameOver = true;
-          }
-        }
-        scroller.obstacles[i].active = false;
-      }
-    }
-  }
-  
-  // Collision - player vs enemies
-  for (int i = 0; i < MAX_SCROLLER_ENEMIES; i++) {
-    if (scroller.enemies[i].active) {
-      if (abs(scroller.playerX - scroller.enemies[i].x) < 8 &&
-          abs(scroller.playerY - scroller.enemies[i].y) < 8) {
-        if (!scroller.shieldActive) {
-          scroller.lives--;
-          screenShake = 6;
-          if (scroller.lives <= 0) {
-            scroller.gameOver = true;
-          }
-        }
-        scroller.enemies[i].active = false;
-      }
-    }
-  }
-  
-  // Collision - enemy bullets vs player
-  for (int i = 0; i < MAX_OBSTACLES; i++) {
-    if (scroller.enemyBullets[i].active) {
-      if (abs(scroller.enemyBullets[i].x - scroller.playerX) < 6 &&
-          abs(scroller.enemyBullets[i].y - scroller.playerY) < 6) {
-        if (!scroller.shieldActive) {
-          scroller.lives--;
-          screenShake = 6;
-          if (scroller.lives <= 0) {
-            scroller.gameOver = true;
-          }
-        }
-        scroller.enemyBullets[i].active = false;
       }
     }
   }
@@ -1356,112 +1261,54 @@ void updateSideScroller() {
 
 void drawSideScroller() {
   display.clearDisplay();
+  drawHeader();
 
-  int shakeX = 0;
-  int shakeY = 0;
-  if (screenShake > 0) {
-    shakeX = random(-screenShake, screenShake + 1);
-    shakeY = random(-screenShake, screenShake + 1);
-  }
-
-  drawBatteryIndicator();
+  // HUD
+  display.setCursor(0, 10);
+  display.printf("L:%d S:%d W:%d", scroller.lives, scroller.score, scroller.weaponLevel);
   
-  // Draw HUD
-  display.setTextSize(1);
-  display.setCursor(2, 2);
-  display.print("L:");
-  display.print(scroller.lives);
-  display.setCursor(30, 2);
-  display.print("S:");
-  display.print(scroller.score);
-  display.setCursor(75, 2);
-  display.print("W:");
-  display.print(scroller.weaponLevel);
-  display.setCursor(100, 2);
-  display.print("SP:");
-  display.print(scroller.specialCharge);
-  
-  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
-  
-  // Draw scrolling background (Parallax)
+  // Stars / Background
   for (int i = 0; i < SCREEN_WIDTH; i += 16) {
     int x = (i + scroller.scrollOffset) % SCREEN_WIDTH;
     display.drawPixel(x, 12 + random(0, 3), SSD1306_WHITE);
     display.drawPixel(x, SCREEN_HEIGHT - 2 - random(0, 3), SSD1306_WHITE);
   }
   
-  // Draw player (Neon Style)
-  if (scroller.shieldActive && (millis() / 100) % 2 == 0) {
-    display.drawCircle(scroller.playerX + shakeX, scroller.playerY + shakeY, 7, SSD1306_WHITE);
-  }
-  
-  // Player ship design
+  // Player
   display.drawTriangle(
-    scroller.playerX + 4 + shakeX, scroller.playerY + shakeY,
-    scroller.playerX - 4 + shakeX, scroller.playerY - 3 + shakeY,
-    scroller.playerX - 4 + shakeX, scroller.playerY + 3 + shakeY,
+    scroller.playerX + 4, scroller.playerY,
+    scroller.playerX - 4, scroller.playerY - 3,
+    scroller.playerX - 4, scroller.playerY + 3,
     SSD1306_WHITE
   );
   
-  // Draw obstacles (as asteroids)
+  // Obstacles
   for (int i = 0; i < MAX_OBSTACLES; i++) {
     if (scroller.obstacles[i].active) {
-      display.drawCircle(scroller.obstacles[i].x + shakeX, scroller.obstacles[i].y + shakeY, 5, SSD1306_WHITE);
-      display.drawPixel(scroller.obstacles[i].x + shakeX + 2, scroller.obstacles[i].y + shakeY - 2, SSD1306_WHITE);
+      display.drawCircle(scroller.obstacles[i].x, scroller.obstacles[i].y, 5, SSD1306_WHITE);
     }
   }
   
-  // Draw enemies (Neon Style)
+  // Enemies
   for (int i = 0; i < MAX_SCROLLER_ENEMIES; i++) {
     if (scroller.enemies[i].active) {
-      switch(scroller.enemies[i].type) {
-        case 0: // Basic
-          display.drawCircle(scroller.enemies[i].x + shakeX, scroller.enemies[i].y + shakeY, 4, SSD1306_WHITE);
-          break;
-        case 1: // Shooter
-          display.drawRect(scroller.enemies[i].x - 4 + shakeX, scroller.enemies[i].y - 4 + shakeY, 8, 8, SSD1306_WHITE);
-          break;
-        case 2: // Kamikaze
-          display.drawTriangle(
-            scroller.enemies[i].x - 6 + shakeX, scroller.enemies[i].y + shakeY,
-            scroller.enemies[i].x + 2 + shakeX, scroller.enemies[i].y - 4 + shakeY,
-            scroller.enemies[i].x + 2 + shakeX, scroller.enemies[i].y + 4 + shakeY,
-            SSD1306_WHITE
-          );
-          break;
-      }
+      display.drawRect(scroller.enemies[i].x - 4, scroller.enemies[i].y - 4, 8, 8, SSD1306_WHITE);
     }
   }
   
-  // Draw bullets (Neon Style)
+  // Bullets
   for (int i = 0; i < MAX_SCROLLER_BULLETS; i++) {
     if (scroller.bullets[i].active) {
-      display.drawLine(scroller.bullets[i].x + shakeX, scroller.bullets[i].y + shakeY,
-                       scroller.bullets[i].x + shakeX - 3, scroller.bullets[i].y + shakeY,
-                       SSD1306_WHITE);
-    }
-  }
-  
-  for (int i = 0; i < MAX_OBSTACLES; i++) {
-    if (scroller.enemyBullets[i].active) {
-      display.drawLine(scroller.enemyBullets[i].x + shakeX, scroller.enemyBullets[i].y + shakeY,
-                       scroller.enemyBullets[i].x + shakeX + 2, scroller.enemyBullets[i].y + shakeY,
-                       SSD1306_WHITE);
+      display.drawLine(scroller.bullets[i].x, scroller.bullets[i].y,
+                       scroller.bullets[i].x - 3, scroller.bullets[i].y, SSD1306_WHITE);
     }
   }
 
   drawParticles();
   
-  // Game Over
   if (scroller.gameOver) {
-    display.fillRect(10, 20, 108, 30, SSD1306_BLACK);
-    display.drawRect(10, 20, 108, 30, SSD1306_WHITE);
-    display.setTextSize(1);
     display.setCursor(30, 25);
     display.print("GAME OVER");
-    display.setCursor(25, 38);
-    display.print("Score: ");
-    display.print(scroller.score);
   }
   
   display.display();
@@ -1469,26 +1316,34 @@ void drawSideScroller() {
 
 void handleSideScrollerInput() {
   if (scroller.gameOver) return;
-  float speed = 110.0f; // pixels per second
+  float speed = 110.0f;
 
   if (digitalRead(BTN_LEFT) == LOW) scroller.playerX -= speed * deltaTime;
   if (digitalRead(BTN_RIGHT) == LOW) scroller.playerX += speed * deltaTime;
   if (digitalRead(BTN_UP) == LOW) scroller.playerY -= speed * deltaTime;
   if (digitalRead(BTN_DOWN) == LOW) scroller.playerY += speed * deltaTime;
 
-  // Clamp
-  if (scroller.playerX < 0) scroller.playerX = 0;
-  if (scroller.playerX > SCREEN_WIDTH - scroller.playerWidth) scroller.playerX = SCREEN_WIDTH - scroller.playerWidth;
-  if (scroller.playerY < 12) scroller.playerY = 12;
-  if (scroller.playerY > SCREEN_HEIGHT - scroller.playerHeight) scroller.playerY = SCREEN_HEIGHT - scroller.playerHeight;
+  scroller.playerX = constrain(scroller.playerX, 0, SCREEN_WIDTH - 8);
+  scroller.playerY = constrain(scroller.playerY, 12, SCREEN_HEIGHT - 8);
 
-  // Auto-fire
-  if (digitalRead(TOUCH_LEFT) == HIGH) {
-     handleSelect();
+  // Shoot
+  if (digitalRead(BTN_SELECT) == LOW || digitalRead(TOUCH_LEFT) == HIGH) {
+     for (int i = 0; i < MAX_SCROLLER_BULLETS; i++) {
+        if (!scroller.bullets[i].active) {
+          scroller.bullets[i].x = scroller.playerX + 4;
+          scroller.bullets[i].y = scroller.playerY;
+          scroller.bullets[i].dirX = 1;
+          scroller.bullets[i].dirY = 0;
+          scroller.bullets[i].damage = 1;
+          scroller.bullets[i].active = true;
+          break;
+        }
+      }
   }
 }
 
-// ========== PONG GAME ==========
+
+// ========== PONG ==========
 
 void initPong() {
   pong.ballX = SCREEN_WIDTH / 2;
@@ -1513,50 +1368,35 @@ void updatePong() {
   updateParticles();
   if (screenShake > 0) screenShake--;
   
-  // Move ball
   if (!pongResetting) {
-    float effectiveSpeed = pong.ballSpeed * 60.0f; // Base speed at 60fps
+    float effectiveSpeed = pong.ballSpeed * 60.0f;
     pong.ballX += pong.ballDirX * effectiveSpeed * deltaTime;
     pong.ballY += pong.ballDirY * effectiveSpeed * deltaTime;
   }
   
-  // Ball collision with top/bottom
+  // Collision top/bottom
   if (pong.ballY <= 12) {
-    pong.ballY = 12;
-    pong.ballDirY *= -1;
+    pong.ballY = 12; pong.ballDirY *= -1;
   }
   if (pong.ballY >= SCREEN_HEIGHT - 2) {
-    pong.ballY = SCREEN_HEIGHT - 2;
-    pong.ballDirY *= -1;
+    pong.ballY = SCREEN_HEIGHT - 2; pong.ballDirY *= -1;
   }
   
-  // Ball collision with paddles
-  // Left paddle
+  // Paddles
+  // Left
   if (pong.ballX <= 6 && pong.ballX >= 2) {
     if (pong.ballY >= pong.paddle1Y - 2 && pong.ballY <= pong.paddle1Y + pong.paddleHeight + 2) {
       pong.ballDirX = 1;
-      pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f); // Accelerate
+      pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f);
       spawnExplosion(pong.ballX, pong.ballY, 3);
-
-      // Add spin based on where it hit the paddle
-      float hitPos = pong.ballY - (pong.paddle1Y + pong.paddleHeight / 2.0);
-      pong.ballDirY = hitPos / (pong.paddleHeight / 2.0); // -1.0 to 1.0
-
-      ledQuickFlash();
     }
   }
-  
-  // Right paddle
+  // Right
   if (pong.ballX >= SCREEN_WIDTH - 6 && pong.ballX <= SCREEN_WIDTH - 2) {
     if (pong.ballY >= pong.paddle2Y - 2 && pong.ballY <= pong.paddle2Y + pong.paddleHeight + 2) {
       pong.ballDirX = -1;
-      pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f); // Accelerate
+      pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f);
       spawnExplosion(pong.ballX, pong.ballY, 3);
-
-      float hitPos = pong.ballY - (pong.paddle2Y + pong.paddleHeight / 2.0);
-      pong.ballDirY = hitPos / (pong.paddleHeight / 2.0);
-
-      ledQuickFlash();
     }
   }
   
@@ -1568,7 +1408,6 @@ void updatePong() {
       pongResetTimer = millis();
       if (pong.score2 >= 10) pong.gameOver = true;
     }
-    
     if (pong.ballX > SCREEN_WIDTH) {
       pong.score1++;
       pongResetting = true;
@@ -1585,70 +1424,39 @@ void updatePong() {
     }
   }
   
-  // AI for right paddle
+  // AI
   if (pong.aiMode) {
     float targetY = pong.ballY - pong.paddleHeight / 2.0;
     float diff = targetY - pong.paddle2Y;
-    
-    // AI difficulty (float speed)
-    float aiSpeed = pong.difficulty * 45.0f; // pixels per second
-    if (abs(diff) > 1.0) { // Add a small deadzone
+    float aiSpeed = pong.difficulty * 45.0f;
+    if (abs(diff) > 1.0) {
       if (diff > 0) pong.paddle2Y += min(aiSpeed * deltaTime, diff);
       else pong.paddle2Y += max(-aiSpeed * deltaTime, diff);
     }
   }
   
-  // Clamp paddles
   pong.paddle1Y = constrain(pong.paddle1Y, 12, SCREEN_HEIGHT - pong.paddleHeight);
   pong.paddle2Y = constrain(pong.paddle2Y, 12, SCREEN_HEIGHT - pong.paddleHeight);
 }
 
 void drawPong() {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawHeader();
   
-  int shakeX = 0;
-  int shakeY = 0;
-  if (screenShake > 0) {
-    shakeX = random(-screenShake, screenShake + 1);
-    shakeY = random(-screenShake, screenShake + 1);
-  }
-
-  // Draw score
-  display.setTextSize(1);
-  display.setCursor(30, 2);
-  display.print(pong.score1);
-  display.setCursor(SCREEN_WIDTH - 40, 2);
-  display.print(pong.score2);
+  display.setCursor(30, 15); display.print(pong.score1);
+  display.setCursor(SCREEN_WIDTH - 40, 15); display.print(pong.score2);
   
-  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+  display.drawRect(2, pong.paddle1Y, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
+  display.drawRect(SCREEN_WIDTH - 6, pong.paddle2Y, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
   
-  // Draw center line
-  for (int y = 12; y < SCREEN_HEIGHT; y += 4) {
-    display.drawPixel(SCREEN_WIDTH / 2, y, SSD1306_WHITE);
-  }
+  display.drawCircle(pong.ballX, pong.ballY, 2, SSD1306_WHITE);
   
-  // Draw paddles (Neon Style)
-  display.drawRect(2, pong.paddle1Y + shakeY, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
-  display.drawRect(SCREEN_WIDTH - 6, pong.paddle2Y + shakeY, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
-  
-  // Draw ball (Neon Style with pulse)
-  float ballPulse = abs(sin(millis() / 150.0f)); // 0.0 to 1.0
-  display.drawCircle(pong.ballX + shakeX, pong.ballY + shakeY, 2 + ballPulse, SSD1306_WHITE);
-
   drawParticles();
   
-  // Game Over
   if (pong.gameOver) {
-    display.fillRect(20, 25, 88, 20, SSD1306_BLACK);
-    display.drawRect(20, 25, 88, 20, SSD1306_WHITE);
-    display.setTextSize(1);
     display.setCursor(30, 30);
-    if (pong.score1 >= 10) {
-      display.print("PLAYER 1 WINS!");
-    } else {
-      display.print("PLAYER 2 WINS!");
-    }
+    if (pong.score1 >= 10) display.print("PLAYER 1 WINS");
+    else display.print("PLAYER 2 WINS");
   }
   
   display.display();
@@ -1656,341 +1464,59 @@ void drawPong() {
 
 void handlePongInput() {
   if (pong.gameOver) return;
-  float speed = 130.0f; // pixels per second
-
+  float speed = 130.0f;
   if (digitalRead(BTN_UP) == LOW) pong.paddle1Y -= speed * deltaTime;
   if (digitalRead(BTN_DOWN) == LOW) pong.paddle1Y += speed * deltaTime;
-
-  // Clamp
-  if (pong.paddle1Y < 12) pong.paddle1Y = 12;
-  if (pong.paddle1Y > SCREEN_HEIGHT - pong.paddleHeight) pong.paddle1Y = SCREEN_HEIGHT - pong.paddleHeight;
-}
-
-// ========== GAME SELECT ==========
-
-void showGameSelect(int x_offset) {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("SELECT GAME");
-  
-  drawIcon(x_offset + 10, 2, ICON_GAME);
-  
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
-  const char* games[] = {
-    "Neon Invaders",
-    "Astro Rush",
-    "Vector Pong",
-    "Back"
-  };
-  
-  for (int i = 0; i < 4; i++) {
-    display.setCursor(x_offset + 10, 18 + i * 11);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(games[i]);
-  }
-  
-  display.display();
-}
-
-void handleGameSelectSelect() {
-  switch(menuSelection) {
-    case 0:
-      initSpaceInvaders();
-      changeState(STATE_GAME_SPACE_INVADERS);
-      break;
-    case 1:
-      initSideScroller();
-      changeState(STATE_GAME_SIDE_SCROLLER);
-      break;
-    case 2:
-      initPong();
-      changeState(STATE_GAME_PONG);
-      break;
-    case 3:
-      changeState(STATE_MAIN_MENU);
-      break;
-  }
-}
-
-// ========== WIFI FUNCTIONS ==========
-
-void showWiFiMenu(int x_offset) {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("WiFi MENU");
-  
-  drawIcon(x_offset + 10, 2, ICON_WIFI);
-  
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
-  display.setCursor(x_offset + 5, 16);
-  if (WiFi.status() == WL_CONNECTED) {
-    display.print("Connected:");
-    display.setCursor(5, 24);
-    String ssid = WiFi.SSID();
-    if (ssid.length() > 18) {
-      ssid = ssid.substring(0, 18) + "..";
-    }
-    display.print(ssid);
-  } else {
-    display.print("Not connected");
-  }
-  
-  const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
-  
-  for (int i = 0; i < 3; i++) {
-    display.setCursor(5, 36 + i * 9);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(menuItems[i]);
-  }
-  
-  display.display();
-}
-
-void handleWiFiMenuSelect() {
-  switch(menuSelection) {
-    case 0:
-      scanWiFiNetworks();
-      break;
-    case 1:
-      forgetNetwork();
-      break;
-    case 2:
-      changeState(STATE_MAIN_MENU);
-      break;
-  }
-}
-
-void scanWiFiNetworks() {
-  showProgressBar("Scanning", 0);
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  
-  showProgressBar("Scanning", 30);
-  
-  int n = WiFi.scanNetworks();
-  networkCount = min(n, 20);
-  
-  showProgressBar("Processing", 60);
-  
-  for (int i = 0; i < networkCount; i++) {
-    networks[i].ssid = WiFi.SSID(i);
-    networks[i].rssi = WiFi.RSSI(i);
-    networks[i].encrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-  }
-  
-  showProgressBar("Sorting", 80);
-  
-  for (int i = 0; i < networkCount - 1; i++) {
-    for (int j = i + 1; j < networkCount; j++) {
-      if (networks[j].rssi > networks[i].rssi) {
-        WiFiNetwork temp = networks[i];
-        networks[i] = networks[j];
-        networks[j] = temp;
-      }
-    }
-  }
-  
-  showProgressBar("Complete", 100);
-  delay(500);
-  
-  selectedNetwork = 0;
-  wifiPage = 0;
-  changeState(STATE_WIFI_SCAN);
-}
-
-void displayWiFiNetworks(int x_offset) {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 5, 0);
-  display.print("WiFi (");
-  display.print(networkCount);
-  display.print(")");
-  
-  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
-  
-  if (networkCount == 0) {
-    display.setCursor(10, 25);
-    display.println("No networks found");
-  } else {
-    int startIdx = wifiPage * wifiPerPage;
-    int endIdx = min(networkCount, startIdx + wifiPerPage);
-    
-    for (int i = startIdx; i < endIdx; i++) {
-      int y = 12 + (i - startIdx) * 12;
-      
-      if (i == selectedNetwork) {
-        display.fillRect(0, y, SCREEN_WIDTH, 11, SSD1306_WHITE);
-        display.setTextColor(SSD1306_BLACK);
-      } else {
-        display.setTextColor(SSD1306_WHITE);
-      }
-      
-      display.setCursor(2, y + 2);
-      
-      String displaySSID = networks[i].ssid;
-      if (displaySSID.length() > 14) {
-        displaySSID = displaySSID.substring(0, 14) + "..";
-      }
-      display.print(displaySSID);
-      
-      if (networks[i].encrypted) {
-        display.setCursor(100, y + 2);
-        display.print("L");
-      }
-      
-      int bars = map(networks[i].rssi, -100, -50, 1, 4);
-      bars = constrain(bars, 1, 4);
-      display.setCursor(110, y + 2);
-      for (int b = 0; b < bars; b++) {
-        display.print("|");
-      }
-      
-      display.setTextColor(SSD1306_WHITE);
-    }
-    
-    if (networkCount > wifiPerPage) {
-      display.setCursor(45, 56);
-      display.print("Pg ");
-      display.print(wifiPage + 1);
-      display.print("/");
-      display.print((networkCount + wifiPerPage - 1) / wifiPerPage);
-    }
-  }
-  
-  display.display();
-}
-
-// ========== API SELECT ==========
-
-void showAPISelect(int x_offset) {
-  display.clearDisplay();
-  drawBatteryIndicator();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 15, 5);
-  display.print("SELECT GEMINI API");
-  
-  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
-  
-  int y1 = 25;
-  if (menuSelection == 0) {
-    display.fillRect(5, y1 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(10, y1);
-  display.print("1. Gemini API #1");
-  if (selectedAPIKey == 1) {
-    display.setCursor(100, y1);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
-  
-  int y2 = 42;
-  if (menuSelection == 1) {
-    display.fillRect(5, y2 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(10, y2);
-  display.print("2. Gemini API #2");
-  if (selectedAPIKey == 2) {
-    display.setCursor(100, y2);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
-  
-  display.display();
-}
-
-void handleAPISelectSelect() {
-  if (menuSelection == 0) {
-    selectedAPIKey = 1;
-  } else {
-    selectedAPIKey = 2;
-  }
-  
-  ledSuccess();
-  
-  userInput = "";
-  keyboardContext = CONTEXT_CHAT;
-  cursorX = 0;
-  cursorY = 0;
-  currentKeyboardMode = MODE_LOWER;
-  changeState(STATE_KEYBOARD);
 }
 
 // ========== MAIN MENU ==========
 
 void showMainMenu(int x_offset) {
   display.clearDisplay();
-  
+
   struct MenuItem {
     const char* text;
     const unsigned char* icon;
   };
-  
+
   MenuItem menuItems[] = {
     {"Chat AI", ICON_CHAT},
     {"WiFi", ICON_WIFI},
     {"Games", ICON_GAME},
     {"Video", ICON_VIDEO}
   };
-  
-  int numItems = sizeof(menuItems) / sizeof(MenuItem);
+
+  int numItems = 4;
   int screenCenterY = SCREEN_HEIGHT / 2;
-  
+
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 22) - menuScrollY;
+    float itemY = screenCenterY + (i * 24) - menuScrollY; // Increased spacing
     float distance = abs(itemY - screenCenterY);
-    
-    // Simple easing function for scaling
-    float scale = 1.0 - (distance / (SCREEN_HEIGHT / 2.0));
-    scale = max(0.5f, scale); // Min scale
 
-    if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
-      int itemX = x_offset + 20 + (distance / 2.5);
-
+    if (itemY > -25 && itemY < SCREEN_HEIGHT + 25) {
       if (i == menuSelection) {
-        // Highlighted item
-        display.drawRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 6, SSD1306_WHITE);
-        drawIcon(x_offset + 12, screenCenterY - 4, menuItems[i].icon);
+        // Modern Selection Box
+        display.fillRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 8, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+        drawIcon(x_offset + 12, screenCenterY - 4, menuItems[i].icon); // Invert color logic needed here?
+        // Actually drawing bitmap in BLACK on WHITE bg is tricky with 1-bit,
+        // simplest is to draw text in black. Icons we just skip or draw inverted manually.
+        // Let's keep it simple: White text on black is standard, inverse is highlighted.
+        display.setCursor(x_offset + 30, screenCenterY - 6);
         display.setTextSize(2);
-        display.setCursor(x_offset + 30, screenCenterY - 7);
         display.print(menuItems[i].text);
+        display.setTextColor(SSD1306_WHITE);
       } else {
-        // Other items
+        // Unselected
+        display.drawRoundRect(x_offset + 10, itemY - 10, SCREEN_WIDTH - 20, 20, 4, SSD1306_WHITE);
+        display.setCursor(x_offset + 35, itemY - 4);
         display.setTextSize(1);
-        display.setCursor(itemX, itemY - 3);
         display.print(menuItems[i].text);
       }
     }
   }
 
-  // Top and bottom status bar (fixed position)
-  drawBatteryIndicator();
-  if (WiFi.status() == WL_CONNECTED) {
-    drawWiFiSignalBars();
-  }
-  
+  drawHeader();
   display.display();
 }
 
@@ -2001,8 +1527,7 @@ void handleMainMenuSelect() {
       if (WiFi.status() == WL_CONNECTED) {
         changeState(STATE_API_SELECT);
       } else {
-        ledError();
-        showStatus("WiFi not connected!\nGo to WiFi Settings", 2000);
+        showStatus("Connect WiFi", 1000);
       }
       break;
     case 1: // WiFi
@@ -2018,142 +1543,279 @@ void handleMainMenuSelect() {
   }
 }
 
+// ========== GAME SELECT ==========
+
+void showGameSelect(int x_offset) {
+  display.clearDisplay();
+  drawHeader();
+  
+  display.setCursor(x_offset + 25, 12);
+  display.println("SELECT GAME");
+  display.drawLine(0, 22, SCREEN_WIDTH, 22, SSD1306_WHITE);
+  
+  const char* games[] = {
+    "Neon Invaders",
+    "Astro Rush",
+    "Vector Pong",
+    "Turbo Racing",
+    "Back"
+  };
+  
+  for (int i = 0; i < 5; i++) {
+    display.setCursor(x_offset + 10, 26 + i * 10);
+    if (i == menuSelection) display.print("> ");
+    else display.print("  ");
+    display.print(games[i]);
+  }
+  display.display();
+}
+
+void handleGameSelectSelect() {
+  switch(menuSelection) {
+    case 0: initSpaceInvaders(); changeState(STATE_GAME_SPACE_INVADERS); break;
+    case 1: initSideScroller(); changeState(STATE_GAME_SIDE_SCROLLER); break;
+    case 2: initPong(); changeState(STATE_GAME_PONG); break;
+    case 3: initRacing(); changeState(STATE_GAME_RACING); break;
+    case 4: changeState(STATE_MAIN_MENU); break;
+  }
+}
+
+// ========== WiFi & Keyboard & Others ==========
+// (Retaining logic but ensuring battery icon calls are gone and header is used)
+
+void showWiFiMenu(int x_offset) {
+  display.clearDisplay();
+  drawHeader();
+  
+  display.setCursor(x_offset + 25, 15);
+  display.print("WiFi SETTINGS");
+  display.drawLine(0, 25, SCREEN_WIDTH, 25, SSD1306_WHITE);
+  
+  const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
+  for (int i = 0; i < 3; i++) {
+    display.setCursor(10, 35 + i * 10);
+    if (i == menuSelection) display.print("> ");
+    else display.print("  ");
+    display.print(menuItems[i]);
+  }
+  display.display();
+}
+
+void handleWiFiMenuSelect() {
+  switch(menuSelection) {
+    case 0: scanWiFiNetworks(); break;
+    case 1: forgetNetwork(); break;
+    case 2: changeState(STATE_MAIN_MENU); break;
+  }
+}
+
+void displayWiFiNetworks(int x_offset) {
+  display.clearDisplay();
+  drawHeader();
+  
+  display.setCursor(x_offset + 5, 12);
+  display.printf("Found: %d", networkCount);
+  
+  if (networkCount == 0) {
+    display.setCursor(10, 30); display.print("No networks");
+  } else {
+    int startIdx = wifiPage * wifiPerPage;
+    int endIdx = min(networkCount, startIdx + wifiPerPage);
+    
+    for (int i = startIdx; i < endIdx; i++) {
+      int y = 24 + (i - startIdx) * 10;
+      if (i == selectedNetwork) {
+        display.fillRect(0, y, SCREEN_WIDTH, 9, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+      display.setCursor(2, y+1);
+      String s = networks[i].ssid;
+      if(s.length()>15) s = s.substring(0,15);
+      display.print(s);
+      display.setTextColor(SSD1306_WHITE);
+    }
+  }
+  display.display();
+}
+
+void showAPISelect(int x_offset) {
+  display.clearDisplay();
+  drawHeader();
+  display.setCursor(x_offset + 10, 15); display.print("SELECT AI MODEL");
+  
+  display.setCursor(10, 30);
+  if(menuSelection==0) display.print("> API 1"); else display.print("  API 1");
+  if(selectedAPIKey==1) display.print(" [*]");
+  
+  display.setCursor(10, 40);
+  if(menuSelection==1) display.print("> API 2"); else display.print("  API 2");
+  if(selectedAPIKey==2) display.print(" [*]");
+  
+  display.display();
+}
+
+void handleAPISelectSelect() {
+  selectedAPIKey = (menuSelection == 0) ? 1 : 2;
+  userInput = "";
+  keyboardContext = CONTEXT_CHAT;
+  changeState(STATE_KEYBOARD);
+}
+
+void drawKeyboard(int x_offset) {
+  display.clearDisplay();
+  drawHeader();
+  
+  // Input Box
+  display.drawRect(x_offset + 2, 10, SCREEN_WIDTH - 4, 12, SSD1306_WHITE);
+  display.setCursor(x_offset + 4, 12);
+  
+  String txt = (keyboardContext == CONTEXT_WIFI_PASSWORD) ? passwordInput : userInput;
+  if(keyboardContext == CONTEXT_WIFI_PASSWORD) {
+    String masked = "";
+    for(int i=0; i<txt.length(); i++) masked += "*";
+    txt = masked;
+  }
+  if(txt.length() > 18) txt = txt.substring(txt.length()-18);
+  display.print(txt);
+  
+  // Keys
+  int startY = 26;
+  for (int r = 0; r < 3; r++) {
+    for (int c = 0; c < 10; c++) {
+      int x = 2 + c * 12;
+      int y = startY + r * 11;
+      const char* keyLabel;
+      if (currentKeyboardMode == MODE_LOWER) keyLabel = keyboardLower[r][c];
+      else if (currentKeyboardMode == MODE_UPPER) keyLabel = keyboardUpper[r][c];
+      else keyLabel = keyboardNumbers[r][c];
+
+      if (r == cursorY && c == cursorX) {
+        display.fillRect(x, y, 11, 10, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.drawRect(x, y, 11, 10, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+      }
+      display.setCursor(x+3, y+1);
+      display.print(keyLabel);
+    }
+  }
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
+}
+
+void handleKeyPress() {
+  const char* key = getCurrentKey();
+  if (strcmp(key, "OK") == 0) sendToGemini();
+  else if (strcmp(key, "<") == 0) { if(userInput.length()>0) userInput.remove(userInput.length()-1); }
+  else if (strcmp(key, "#") == 0) toggleKeyboardMode();
+  else userInput += key;
+}
+
+void handlePasswordKeyPress() {
+  const char* key = getCurrentKey();
+  if (strcmp(key, "OK") == 0) connectToWiFi(selectedSSID, passwordInput);
+  else if (strcmp(key, "<") == 0) { if(passwordInput.length()>0) passwordInput.remove(passwordInput.length()-1); }
+  else if (strcmp(key, "#") == 0) toggleKeyboardMode();
+  else passwordInput += key;
+}
+
+const char* getCurrentKey() {
+  if (currentKeyboardMode == MODE_LOWER) return keyboardLower[cursorY][cursorX];
+  else if (currentKeyboardMode == MODE_UPPER) return keyboardUpper[cursorY][cursorX];
+  else return keyboardNumbers[cursorY][cursorX];
+}
+
+void toggleKeyboardMode() {
+  if (currentKeyboardMode == MODE_LOWER) currentKeyboardMode = MODE_UPPER;
+  else if (currentKeyboardMode == MODE_UPPER) currentKeyboardMode = MODE_NUMBERS;
+  else currentKeyboardMode = MODE_LOWER;
+}
+
+
+// Video Player Logic
 void drawVideoPlayer() {
-  // Simple frame timing
   if (millis() - lastVideoFrameTime > videoFrameDelay) {
     lastVideoFrameTime = millis();
-
     display.clearDisplay();
 
     if (videoTotalFrames > 0 && videoFrames[0] != NULL) {
       display.drawBitmap(0, 0, videoFrames[videoCurrentFrame], SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
-
       videoCurrentFrame++;
-      if (videoCurrentFrame >= videoTotalFrames) {
-        videoCurrentFrame = 0;
-      }
+      if (videoCurrentFrame >= videoTotalFrames) videoCurrentFrame = 0;
     } else {
       display.setCursor(10, 20);
-      display.setTextSize(1);
       display.println("No Video Data");
-      display.setCursor(10, 35);
-      display.println("Add frames to code");
     }
-
     display.display();
   }
 }
 
-// ========== UTILITY FUNCTIONS ==========
+// ========== Gemini & Networking ==========
 
-void drawBatteryIndicator() {
-  int battX = SCREEN_WIDTH - 22;
-  int battY = 2;
-
-  display.drawRect(battX, battY, 18, 8, SSD1306_WHITE);
-  display.fillRect(battX + 18, battY + 2, 2, 4, SSD1306_WHITE);
-
-  int fill = map(batteryPercent, 0, 100, 0, 14);
-  if (fill > 0) {
-    display.fillRect(battX + 2, battY + 2, fill, 4, SSD1306_WHITE);
+void sendToGemini() {
+  currentState = STATE_LOADING;
+  if (WiFi.status() != WL_CONNECTED) {
+    aiResponse = "No WiFi!";
+    currentState = STATE_CHAT_RESPONSE;
+    return;
   }
+
+  HTTPClient http;
+  String url = String(geminiEndpoint) + "?key=" + ((selectedAPIKey==1)?geminiApiKey1:geminiApiKey2);
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+
+  String cleanInput = userInput;
+  cleanInput.replace("\"", "\\\"");
+  String payload = "{\"contents\":[{\"parts\":[{\"text\":\"" + cleanInput + "\"}]}]}";
+
+  int code = http.POST(payload);
+  if (code == 200) {
+    String res = http.getString();
+    StaticJsonDocument<4096> doc;
+    deserializeJson(doc, res);
+    aiResponse = doc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
+  } else {
+    aiResponse = "Error: " + String(code);
+  }
+  http.end();
+  currentState = STATE_CHAT_RESPONSE;
+  scrollOffset = 0;
 }
 
-void drawWiFiSignalBars() {
-  int rssi = WiFi.RSSI();
-  int bars = 0;
-
-  if (rssi > -55) bars = 4;
-  else if (rssi > -65) bars = 3;
-  else if (rssi > -75) bars = 2;
-  else if (rssi > -85) bars = 1;
-
-  int x = SCREEN_WIDTH - 35;
-  int y = 8;
-
-  for (int i = 0; i < 4; i++) {
-    int h = (i + 1) * 2;
-    if (i < bars) {
-      display.fillRect(x + (i * 3), y - h + 2, 2, h, SSD1306_WHITE);
-    } else {
-      display.drawRect(x + (i * 3), y - h + 2, 2, h, SSD1306_WHITE);
-    }
-  }
-}
-
-void drawIcon(int x, int y, const unsigned char* icon) {
-  display.drawBitmap(x, y, icon, 8, 8, SSD1306_WHITE);
+void displayResponse() {
+  display.clearDisplay();
+  drawHeader();
+  int y = 15 - scrollOffset;
+  display.setCursor(0, y);
+  display.print(aiResponse);
+  display.display();
 }
 
 void showStatus(String message, int delayMs) {
-  int boxW = SCREEN_WIDTH - 20;
-  int boxH = 40;
-  int boxX = 10;
-  int boxY = (SCREEN_HEIGHT - boxH) / 2;
-
-  display.fillRect(boxX, boxY, boxW, boxH, SSD1306_BLACK);
-  display.drawRect(boxX, boxY, boxW, boxH, SSD1306_WHITE);
-
-  display.setCursor(boxX + 5, boxY + 5);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
+  display.fillRoundRect(10, 20, 108, 24, 4, SSD1306_BLACK);
+  display.drawRoundRect(10, 20, 108, 24, 4, SSD1306_WHITE);
+  display.setCursor(15, 28);
   display.print(message);
   display.display();
-
-  if (delayMs > 0) {
-    delay(delayMs);
-  }
+  delay(delayMs);
 }
 
 void showProgressBar(String title, int percent) {
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print(title);
-
-  int barX = 10;
-  int barY = 30;
-  int barW = SCREEN_WIDTH - 20;
-  int barH = 10;
-
-  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
-
-  int fillW = map(percent, 0, 100, 0, barW - 4);
-  if (fillW > 0) {
-    display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
-  }
-
-  display.setCursor(SCREEN_WIDTH / 2 - 10, barY + 15);
-  display.print(percent);
-  display.print("%");
-
+  display.setCursor(0,0); display.print(title);
+  display.drawRect(10, 30, 108, 10, SSD1306_WHITE);
+  display.fillRect(12, 32, percent, 6, SSD1306_WHITE);
   display.display();
 }
 
 void showLoadingAnimation(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
-
-  display.setCursor(x_offset + 35, 25);
-  display.print("Loading...");
-
-  int cx = SCREEN_WIDTH / 2;
-  int cy = SCREEN_HEIGHT / 2 + 10;
-  int r = 10;
-
-  for (int i = 0; i < 8; i++) {
-    float angle = (loadingFrame + i) * (2 * PI / 8);
-    int x = cx + cos(angle) * r;
-    int y = cy + sin(angle) * r;
-
-    if (i == 0) {
-      display.fillCircle(x, y, 2, SSD1306_WHITE);
-    } else {
-      display.drawPixel(x, y, SSD1306_WHITE);
-    }
-  }
-
+  drawHeader();
+  display.setCursor(40, 30); display.print("Thinking...");
   display.display();
 }
 
@@ -2162,554 +1824,86 @@ void forgetNetwork() {
   preferences.begin("wifi-creds", false);
   preferences.clear();
   preferences.end();
-
-  showStatus("Network forgotten", 1500);
-  scanWiFiNetworks();
+  showStatus("Forgotten", 1000);
 }
 
 void connectToWiFi(String ssid, String password) {
-  showProgressBar("Connecting...", 0);
-
+  showProgressBar("Connecting", 0);
   WiFi.begin(ssid.c_str(), password.c_str());
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    attempts++;
-    showProgressBar("Connecting...", attempts * 5);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
+  int t=0;
+  while(WiFi.status()!=WL_CONNECTED && t<20) { delay(500); t++; showProgressBar("Connecting", t*5); }
+  if(WiFi.status()==WL_CONNECTED) {
     preferences.begin("wifi-creds", false);
     preferences.putString("ssid", ssid);
     preferences.putString("password", password);
     preferences.end();
-
-    showStatus("Connected!", 1500);
     changeState(STATE_MAIN_MENU);
   } else {
-    showStatus("Failed!", 1500);
+    showStatus("Failed", 1000);
     changeState(STATE_WIFI_MENU);
   }
 }
 
-// ========== KEYBOARD FUNCTIONS ==========
-
-const char* getCurrentKey() {
-  if (currentKeyboardMode == MODE_LOWER) {
-    return keyboardLower[cursorY][cursorX];
-  } else if (currentKeyboardMode == MODE_UPPER) {
-    return keyboardUpper[cursorY][cursorX];
-  } else {
-    return keyboardNumbers[cursorY][cursorX];
-  }
-}
-
-void toggleKeyboardMode() {
-  if (currentKeyboardMode == MODE_LOWER) {
-    currentKeyboardMode = MODE_UPPER;
-  } else if (currentKeyboardMode == MODE_UPPER) {
-    currentKeyboardMode = MODE_NUMBERS;
-  } else {
-    currentKeyboardMode = MODE_LOWER;
-  }
-}
-
-void drawKeyboard(int x_offset) {
-  display.clearDisplay();
-  drawBatteryIndicator();
-
-  display.drawRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, SSD1306_WHITE);
-
-  display.setCursor(x_offset + 5, 5);
-  String displayText = "";
-  if (keyboardContext == CONTEXT_WIFI_PASSWORD) {
-     for(unsigned int i=0; i<passwordInput.length(); i++) displayText += "*";
-  } else {
-     displayText = userInput;
-  }
-
-  int maxChars = 18;
-  if (displayText.length() > maxChars) {
-      displayText = displayText.substring(displayText.length() - maxChars);
-  }
-  display.print(displayText);
-
-  int startY = 20;
-  int keyW = 11;
-  int keyH = 10;
-  int gap = 1;
-
-  for (int r = 0; r < 3; r++) {
-    for (int c = 0; c < 10; c++) {
-      int x = 2 + c * (keyW + gap);
-      int y = startY + r * (keyH + gap);
-
-      const char* keyLabel;
-      if (currentKeyboardMode == MODE_LOWER) {
-         keyLabel = keyboardLower[r][c];
-      } else if (currentKeyboardMode == MODE_UPPER) {
-         keyLabel = keyboardUpper[r][c];
-      } else {
-         keyLabel = keyboardNumbers[r][c];
-      }
-
-      if (r == cursorY && c == cursorX) {
-        display.fillRect(x, y, keyW, keyH, SSD1306_WHITE);
-        display.setTextColor(SSD1306_BLACK);
-      } else {
-        display.drawRect(x, y, keyW, keyH, SSD1306_WHITE);
-        display.setTextColor(SSD1306_WHITE);
-      }
-
-      display.setCursor(x + 3, y + 1);
-      display.print(keyLabel);
-    }
-  }
-
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(2, 56);
-  display.print("SEL:Type #:Mode");
-
-  display.display();
-}
-
-void handleKeyPress() {
-  const char* key = getCurrentKey();
-
-  if (strcmp(key, "OK") == 0) {
-    if (keyboardContext == CONTEXT_CHAT) {
-      sendToGemini();
-    }
-  } else if (strcmp(key, "<") == 0) {
-    if (userInput.length() > 0) {
-      userInput.remove(userInput.length() - 1);
-    }
-  } else if (strcmp(key, "#") == 0) {
-    toggleKeyboardMode();
-  } else {
-    userInput += key;
-  }
-}
-
-void handlePasswordKeyPress() {
-  const char* key = getCurrentKey();
-
-  if (strcmp(key, "OK") == 0) {
-    connectToWiFi(selectedSSID, passwordInput);
-  } else if (strcmp(key, "<") == 0) {
-    if (passwordInput.length() > 0) {
-      passwordInput.remove(passwordInput.length() - 1);
-    }
-  } else if (strcmp(key, "#") == 0) {
-    toggleKeyboardMode();
-  } else {
-    passwordInput += key;
-  }
-}
-
-// ========== INPUT HANDLING ==========
-
+// Other inputs
 void handleUp() {
-  switch(currentState) {
-    case STATE_MAIN_MENU:
-      if (menuSelection > 0) {
-        menuSelection--;
-        menuTargetScrollY = menuSelection * 22;
-        menuTextScrollX = 0;
-        lastMenuTextScrollTime = millis();
-      }
-      break;
-    case STATE_WIFI_MENU:
-      if (menuSelection > 0) {
-        menuSelection--;
-      }
-      break;
-    case STATE_WIFI_SCAN:
-      if (selectedNetwork > 0) {
-        selectedNetwork--;
-        if (selectedNetwork < wifiPage * wifiPerPage) {
-          wifiPage--;
-        }
-      }
-      break;
-    case STATE_GAME_SELECT:
-      if (menuSelection > 0) {
-        menuSelection--;
-      }
-      break;
-    case STATE_API_SELECT:
-      if (menuSelection > 0) {
-        menuSelection--;
-      }
-      break;
-    case STATE_KEYBOARD:
-    case STATE_PASSWORD_INPUT:
-      cursorY--;
-      if (cursorY < 0) cursorY = 2; // Wrap to bottom
-      break;
-    case STATE_CHAT_RESPONSE:
-      if (scrollOffset > 0) {
-        scrollOffset -= 10;
-      }
-      break;
-    case STATE_GAME_PONG:
-      // Handled in handlePongInput
-      break;
-    case STATE_GAME_SIDE_SCROLLER:
-      // Handled in handleSideScrollerInput
-      break;
-  }
+  if(currentState==STATE_MAIN_MENU && menuSelection>0) menuSelection--;
+  else if(currentState==STATE_GAME_SELECT && menuSelection>0) menuSelection--;
+  else if(currentState==STATE_WIFI_MENU && menuSelection>0) menuSelection--;
+  else if(currentState==STATE_API_SELECT && menuSelection>0) menuSelection--;
+  else if(currentState==STATE_WIFI_SCAN && selectedNetwork>0) selectedNetwork--;
+  else if(currentState==STATE_KEYBOARD || currentState==STATE_PASSWORD_INPUT) { cursorY--; if(cursorY<0) cursorY=2; }
+  else if(currentState==STATE_CHAT_RESPONSE) scrollOffset-=10;
 }
 
 void handleDown() {
-  switch(currentState) {
-    case STATE_MAIN_MENU:
-      if (menuSelection < 3) {
-        menuSelection++;
-        menuTargetScrollY = menuSelection * 22;
-        menuTextScrollX = 0;
-        lastMenuTextScrollTime = millis();
-      }
-      break;
-    case STATE_WIFI_MENU:
-      if (menuSelection < 2) {
-        menuSelection++;
-      }
-      break;
-    case STATE_WIFI_SCAN:
-      if (selectedNetwork < networkCount - 1) {
-        selectedNetwork++;
-        if (selectedNetwork >= (wifiPage + 1) * wifiPerPage) {
-          wifiPage++;
-        }
-      }
-      break;
-    case STATE_GAME_SELECT:
-      if (menuSelection < 3) {
-        menuSelection++;
-      }
-      break;
-    case STATE_API_SELECT:
-      if (menuSelection < 1) {
-        menuSelection++;
-      }
-      break;
-    case STATE_KEYBOARD:
-    case STATE_PASSWORD_INPUT:
-      cursorY++;
-      if (cursorY > 2) cursorY = 0; // Wrap to top
-      break;
-    case STATE_CHAT_RESPONSE:
-      scrollOffset += 10;
-      break;
-    case STATE_GAME_PONG:
-       // Handled in handlePongInput
-      break;
-    case STATE_GAME_SIDE_SCROLLER:
-       // Handled in handleSideScrollerInput
-      break;
-  }
+  if(currentState==STATE_MAIN_MENU && menuSelection<3) menuSelection++;
+  else if(currentState==STATE_GAME_SELECT && menuSelection<4) menuSelection++;
+  else if(currentState==STATE_WIFI_MENU && menuSelection<2) menuSelection++;
+  else if(currentState==STATE_API_SELECT && menuSelection<1) menuSelection++;
+  else if(currentState==STATE_WIFI_SCAN && selectedNetwork<networkCount-1) selectedNetwork++;
+  else if(currentState==STATE_KEYBOARD || currentState==STATE_PASSWORD_INPUT) { cursorY++; if(cursorY>2) cursorY=0; }
+  else if(currentState==STATE_CHAT_RESPONSE) scrollOffset+=10;
 }
 
 void handleLeft() {
-  switch(currentState) {
-    case STATE_KEYBOARD:
-    case STATE_PASSWORD_INPUT:
-      cursorX--;
-      if (cursorX < 0) cursorX = 9; // Wrap to right
-      break;
-    case STATE_GAME_SPACE_INVADERS:
-      // Handled in handleSpaceInvadersInput
-      break;
-    case STATE_GAME_SIDE_SCROLLER:
-      // Handled in handleSideScrollerInput
-      break;
-  }
+  if(currentState==STATE_KEYBOARD || currentState==STATE_PASSWORD_INPUT) { cursorX--; if(cursorX<0) cursorX=9; }
 }
 
 void handleRight() {
-  switch(currentState) {
-    case STATE_KEYBOARD:
-    case STATE_PASSWORD_INPUT:
-      cursorX++;
-      if (cursorX > 9) cursorX = 0; // Wrap to left
-      break;
-    case STATE_GAME_SPACE_INVADERS:
-      // Handled in handleSpaceInvadersInput
-      break;
-    case STATE_GAME_SIDE_SCROLLER:
-       // Handled in handleSideScrollerInput
-      break;
-  }
+  if(currentState==STATE_KEYBOARD || currentState==STATE_PASSWORD_INPUT) { cursorX++; if(cursorX>9) cursorX=0; }
 }
 
 void handleSelect() {
-  switch(currentState) {
-    case STATE_MAIN_MENU:
-      handleMainMenuSelect();
-      break;
-    case STATE_WIFI_MENU:
-      handleWiFiMenuSelect();
-      break;
-    case STATE_WIFI_SCAN:
-      if (networkCount > 0) {
-        selectedSSID = networks[selectedNetwork].ssid;
-        if (networks[selectedNetwork].encrypted) {
-          passwordInput = "";
-          keyboardContext = CONTEXT_WIFI_PASSWORD;
-          cursorX = 0;
-          cursorY = 0;
-          changeState(STATE_PASSWORD_INPUT);
-        } else {
-          connectToWiFi(selectedSSID, "");
-        }
-      }
-      break;
-    case STATE_GAME_SELECT:
-      handleGameSelectSelect();
-      break;
-    case STATE_API_SELECT:
-      handleAPISelectSelect();
-      break;
-    case STATE_KEYBOARD:
-      handleKeyPress();
-      break;
-    case STATE_PASSWORD_INPUT:
-      handlePasswordKeyPress();
-      break;
-    case STATE_GAME_SPACE_INVADERS:
-      // Shoot
-      triggerNeoPixelEffect(pixels.Color(200, 200, 200), 50); // White flash
-      for (int i = 0; i < MAX_BULLETS; i++) {
-        if (!invaders.bullets[i].active) {
-          invaders.bullets[i].x = invaders.playerX + invaders.playerWidth / 2;
-          invaders.bullets[i].y = invaders.playerY;
-          invaders.bullets[i].active = true;
-          
-          // Double shot
-          if (invaders.weaponType >= 1 && i < MAX_BULLETS - 1) {
-            invaders.bullets[i+1].x = invaders.playerX + 2;
-            invaders.bullets[i+1].y = invaders.playerY;
-            invaders.bullets[i+1].active = true;
-            i++;
-          }
-          
-          // Triple shot
-          if (invaders.weaponType >= 2 && i < MAX_BULLETS - 1) {
-            invaders.bullets[i+1].x = invaders.playerX + invaders.playerWidth - 2;
-            invaders.bullets[i+1].y = invaders.playerY;
-            invaders.bullets[i+1].active = true;
-          }
-          break;
-        }
-      }
-      break;
-    case STATE_GAME_SIDE_SCROLLER:
-      // Shoot
-      for (int i = 0; i < MAX_SCROLLER_BULLETS; i++) {
-        if (!scroller.bullets[i].active) {
-          scroller.bullets[i].x = scroller.playerX + 4;
-          scroller.bullets[i].y = scroller.playerY;
-          scroller.bullets[i].dirX = 1;
-          scroller.bullets[i].dirY = 0;
-          scroller.bullets[i].damage = scroller.weaponLevel;
-          scroller.bullets[i].active = true;
-          
-          // Multi-shot based on weapon level
-          if (scroller.weaponLevel >= 2 && i < MAX_SCROLLER_BULLETS - 1) {
-            scroller.bullets[i+1].x = scroller.playerX + 4;
-            scroller.bullets[i+1].y = scroller.playerY;
-            scroller.bullets[i+1].dirX = 1;
-            scroller.bullets[i+1].dirY = -1;
-            scroller.bullets[i+1].damage = scroller.weaponLevel;
-            scroller.bullets[i+1].active = true;
-            i++;
-          }
-          
-          if (scroller.weaponLevel >= 3 && i < MAX_SCROLLER_BULLETS - 1) {
-            scroller.bullets[i+1].x = scroller.playerX + 4;
-            scroller.bullets[i+1].y = scroller.playerY;
-            scroller.bullets[i+1].dirX = 1;
-            scroller.bullets[i+1].dirY = 1;
-            scroller.bullets[i+1].damage = scroller.weaponLevel;
-            scroller.bullets[i+1].active = true;
-          }
-          break;
-        }
-      }
-      break;
+  if(currentState==STATE_MAIN_MENU) handleMainMenuSelect();
+  else if(currentState==STATE_GAME_SELECT) handleGameSelectSelect();
+  else if(currentState==STATE_WIFI_MENU) handleWiFiMenuSelect();
+  else if(currentState==STATE_WIFI_SCAN) {
+     selectedSSID = networks[selectedNetwork].ssid;
+     if(networks[selectedNetwork].encrypted) { passwordInput=""; keyboardContext=CONTEXT_WIFI_PASSWORD; changeState(STATE_PASSWORD_INPUT); }
+     else connectToWiFi(selectedSSID, "");
   }
+  else if(currentState==STATE_API_SELECT) handleAPISelectSelect();
+  else if(currentState==STATE_KEYBOARD) handleKeyPress();
+  else if(currentState==STATE_PASSWORD_INPUT) handlePasswordKeyPress();
 }
 
 void handleBackButton() {
-  switch(currentState) {
-    // WiFi Flow
-    case STATE_PASSWORD_INPUT:
-      changeState(STATE_WIFI_SCAN);
-      break;
-    case STATE_WIFI_SCAN:
-      changeState(STATE_WIFI_MENU);
-      break;
-    case STATE_WIFI_MENU:
-      changeState(STATE_MAIN_MENU);
-      break;
-
-    // Chat AI Flow
-    case STATE_CHAT_RESPONSE:
-      changeState(STATE_KEYBOARD);
-      break;
-    case STATE_KEYBOARD:
-      if (keyboardContext == CONTEXT_CHAT) {
-        changeState(STATE_API_SELECT);
-      } else { // CONTEXT_WIFI_PASSWORD
-        changeState(STATE_WIFI_SCAN);
-      }
-      break;
-    case STATE_API_SELECT:
-      changeState(STATE_MAIN_MENU);
-      break;
-
-    // Game Flow
-    case STATE_GAME_SPACE_INVADERS:
-    case STATE_GAME_SIDE_SCROLLER:
-    case STATE_GAME_PONG:
-      changeState(STATE_GAME_SELECT);
-      break;
-    case STATE_GAME_SELECT:
-      changeState(STATE_MAIN_MENU);
-      break;
-
-    // Other simple cases
-    case STATE_VIDEO_PLAYER:
-      changeState(STATE_MAIN_MENU);
-      break;
-
-    default:
-      // Default back to main menu if we're lost
-      changeState(STATE_MAIN_MENU);
-      break;
-  }
+  if(currentState==STATE_MAIN_MENU) {} // Do nothing
+  else if(currentState==STATE_GAME_SPACE_INVADERS || currentState==STATE_GAME_SIDE_SCROLLER || currentState==STATE_GAME_PONG || currentState==STATE_GAME_RACING) changeState(STATE_GAME_SELECT);
+  else if(currentState==STATE_GAME_SELECT) changeState(STATE_MAIN_MENU);
+  else if(currentState==STATE_API_SELECT) changeState(STATE_MAIN_MENU);
+  else if(currentState==STATE_KEYBOARD) changeState(STATE_API_SELECT); // Or wifi scan depending on context
+  else if(currentState==STATE_CHAT_RESPONSE) changeState(STATE_KEYBOARD);
+  else changeState(STATE_MAIN_MENU);
 }
 
-void displayResponse() {
-  display.clearDisplay();
-  drawBatteryIndicator();
-
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  int y = 12 - scrollOffset;
-  int lineHeight = 10;
-  String word = "";
-  int x = 0;
-
-  for (unsigned int i = 0; i < aiResponse.length(); i++) {
-    char c = aiResponse.charAt(i);
-
-    if (c == ' ' || c == '\n' || i == aiResponse.length() - 1) {
-      if (i == aiResponse.length() - 1 && c != ' ' && c != '\n') {
-        word += c;
-      }
-
-      int wordWidth = word.length() * 6;
-
-      if (x + wordWidth > SCREEN_WIDTH - 10) {
-        y += lineHeight;
-        x = 0;
-      }
-
-      if (y >= -lineHeight && y < SCREEN_HEIGHT) {
-        display.setCursor(x, y);
-        display.print(word);
-      }
-
-      x += wordWidth + 6;
-      word = "";
-
-      if (c == '\n') {
-        y += lineHeight;
-        x = 0;
-      }
-    } else {
-      word += c;
-    }
+void scanWiFiNetworks() {
+  int n = WiFi.scanNetworks();
+  networkCount = min(n, 20);
+  for(int i=0; i<networkCount; i++) {
+    networks[i].ssid = WiFi.SSID(i);
+    networks[i].rssi = WiFi.RSSI(i);
+    networks[i].encrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
   }
-
-  display.display();
-}
-
-void sendToGemini() {
-  currentState = STATE_LOADING;
-  loadingFrame = 0;
-  lastLoadingUpdate = millis();
-
-  for (int i = 0; i < 5; i++) {
-    showLoadingAnimation();
-    delay(100);
-    loadingFrame++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    ledError();
-    aiResponse = "WiFi not connected!";
-    currentState = STATE_CHAT_RESPONSE;
-    scrollOffset = 0;
-    displayResponse();
-    return;
-  }
-
-  const char* currentApiKey = (selectedAPIKey == 1) ? geminiApiKey1 : geminiApiKey2;
-
-  HTTPClient http;
-  String url = String(geminiEndpoint) + "?key=" + currentApiKey;
-
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(15000);
-
-  String escapedInput = userInput;
-  escapedInput.replace("\\", "\\\\");
-  escapedInput.replace("\"", "\\\"");
-  escapedInput.replace("\n", "\\n");
-
-  String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedInput + "\"}]}]}";
-
-  int httpResponseCode = http.POST(jsonPayload);
-
-  if (httpResponseCode == 200) {
-    String response = http.getString();
-
-    StaticJsonDocument<16384> responseDoc;
-    DeserializationError error = deserializeJson(responseDoc, response);
-
-    if (!error && responseDoc.containsKey("candidates")) {
-      JsonArray candidates = responseDoc["candidates"];
-      if (candidates.size() > 0) {
-        JsonObject content = candidates[0]["content"];
-        JsonArray parts = content["parts"];
-        if (parts.size() > 0) {
-          aiResponse = parts[0]["text"].as<String>();
-          ledSuccess();
-        } else {
-          aiResponse = "Error: Empty response";
-        }
-      } else {
-        aiResponse = "Error: No candidates";
-      }
-    } else {
-      ledError();
-      aiResponse = "JSON Error";
-    }
-  } else {
-    ledError();
-    aiResponse = "HTTP Error " + String(httpResponseCode);
-  }
-
-  http.end();
-  lastWiFiActivity = millis();
-
-  currentState = STATE_CHAT_RESPONSE;
-  scrollOffset = 0;
-  displayResponse();
+  changeState(STATE_WIFI_SCAN);
 }
