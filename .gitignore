@@ -1,2 +1,5 @@
 # PlatformIO
 .pio/
+
+# Secrets
+src/secrets.h
