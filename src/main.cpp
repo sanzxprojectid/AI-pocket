@@ -7,6 +7,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Adafruit_NeoPixel.h>
+#include <time.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -43,6 +44,7 @@ enum AppState {
   STATE_GAME_SPACE_INVADERS,
   STATE_GAME_SIDE_SCROLLER,
   STATE_GAME_PONG,
+  STATE_GAME_RACING,
   STATE_GAME_SELECT,
   STATE_VIDEO_PLAYER
 };
@@ -87,9 +89,6 @@ const int wifiPerPage = 4;
 // WiFi Auto-off settings
 unsigned long lastWiFiActivity = 0;
 
-// Battery monitoring
-float batteryVoltage = 5.0;
-int batteryPercent = 100;
 
 // Game Effects System
 #define MAX_PARTICLES 30
@@ -296,6 +295,26 @@ Pong pong;
 unsigned long pongResetTimer = 0;
 bool pongResetting = false;
 
+// Turbo Racing Game State
+#define MAX_RACING_CARS 3
+struct TurboRacing {
+  float playerX;
+  float playerSpeed;
+  float roadOffset;
+  int score;
+  bool gameOver;
+  bool clutchPressed;
+
+  struct RacingCar {
+    float x, y;
+    float speed;
+    int type;
+    bool active;
+  };
+  RacingCar cars[MAX_RACING_CARS];
+};
+TurboRacing racing;
+
 AppState currentState = STATE_MAIN_MENU;
 AppState previousState = STATE_MAIN_MENU;
 
@@ -399,12 +418,13 @@ void refreshCurrentScreen() {
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
+    case STATE_GAME_RACING:
     case STATE_VIDEO_PLAYER:
       break;
     default: showMainMenu(x_offset); break;
   }
 }
-void drawBatteryIndicator();
+void drawStatusBar();
 void drawWiFiSignalBars();
 void drawIcon(int x, int y, const unsigned char* icon);
 void sendToGemini();
@@ -436,6 +456,11 @@ void initPong();
 void updatePong();
 void drawPong();
 void handlePongInput();
+
+void initRacing();
+void updateRacing();
+void drawRacing();
+void handleRacingInput();
 
 void drawVideoPlayer();
 
@@ -488,6 +513,9 @@ void setup() {
   setCpuFrequencyMhz(CPU_FREQ);
   psramInit();
   
+  // Initialize NTP
+  configTime(25200, 0, "pool.ntp.org", "time.nist.gov"); // UTC+7 for WIB
+
   Serial.println("\n=== ESP32-S3 Gaming Edition v1.0 ===");
   Serial.printf("CPU Freq: %d MHz\n", getCpuFrequencyMhz());
   Serial.printf("PSRAM Size: %d KB\n", ESP.getPsramSize() / 1024);
@@ -563,11 +591,21 @@ void triggerNeoPixelEffect(uint32_t color, int duration) {
 }
 
 void updateNeoPixel() {
-  if (neoPixelEffectEnd > 0 && millis() > neoPixelEffectEnd) {
-    neoPixelColor = 0;
-    pixels.setPixelColor(0, neoPixelColor);
+  unsigned long now = millis();
+  if (neoPixelEffectEnd > 0) {
+    if (now > neoPixelEffectEnd) {
+      neoPixelEffectEnd = 0;
+      // Effect over, will fall through to default breathing
+    }
+  }
+
+  if (neoPixelEffectEnd == 0) {
+    // Breathing Effect (Default)
+    float val = (exp(sin(now / 2000.0 * PI)) - 0.36787944) * 108.0;
+    // Cool Cyan/Purple breathe
+    uint8_t brightness = (uint8_t)val;
+    pixels.setPixelColor(0, pixels.Color(brightness/4, 0, brightness)); // Purple breathe
     pixels.show();
-    neoPixelEffectEnd = 0;
   }
 }
 
@@ -618,6 +656,7 @@ void loop() {
     if (currentState == STATE_GAME_SPACE_INVADERS) handleSpaceInvadersInput();
     else if (currentState == STATE_GAME_SIDE_SCROLLER) handleSideScrollerInput();
     else if (currentState == STATE_GAME_PONG) handlePongInput();
+    else if (currentState == STATE_GAME_RACING) handleRacingInput();
 
     switch(currentState) {
       case STATE_GAME_SPACE_INVADERS:
@@ -631,6 +670,10 @@ void loop() {
       case STATE_GAME_PONG:
         updatePong();
         drawPong();
+        break;
+      case STATE_GAME_RACING:
+        updateRacing();
+        drawRacing();
         break;
     }
     lastGameUpdate = currentMillis;
@@ -709,17 +752,19 @@ void loop() {
     }
     
     // Touch buttons
-    if (digitalRead(TOUCH_LEFT) == HIGH) {
-      handleLeft();
-      if (currentState == STATE_GAME_SPACE_INVADERS || 
-          currentState == STATE_GAME_SIDE_SCROLLER) {
-        handleSelect(); // Also shoot
+    if (currentState != STATE_KEYBOARD && currentState != STATE_PASSWORD_INPUT) {
+      if (digitalRead(TOUCH_LEFT) == HIGH) {
+        handleLeft();
+        if (currentState == STATE_GAME_SPACE_INVADERS ||
+            currentState == STATE_GAME_SIDE_SCROLLER) {
+          handleSelect(); // Also shoot
+        }
+        buttonPressed = true;
       }
-      buttonPressed = true;
-    }
-    if (digitalRead(TOUCH_RIGHT) == HIGH) {
-      handleRight();
-      buttonPressed = true;
+      if (digitalRead(TOUCH_RIGHT) == HIGH) {
+        handleRight();
+        buttonPressed = true;
+      }
     }
     
     if (buttonPressed) {
@@ -997,7 +1042,7 @@ void drawSpaceInvaders() {
     shakeY = random(-screenShake, screenShake + 1);
   }
 
-  drawBatteryIndicator();
+  drawStatusBar();
   
   // Draw HUD (Fixed position, no shake)
   display.setTextSize(1);
@@ -1364,7 +1409,7 @@ void drawSideScroller() {
     shakeY = random(-screenShake, screenShake + 1);
   }
 
-  drawBatteryIndicator();
+  drawStatusBar();
   
   // Draw HUD
   display.setTextSize(1);
@@ -1605,7 +1650,7 @@ void updatePong() {
 
 void drawPong() {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   int shakeX = 0;
   int shakeY = 0;
@@ -1670,7 +1715,7 @@ void handlePongInput() {
 
 void showGameSelect(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 25, 2);
@@ -1684,11 +1729,12 @@ void showGameSelect(int x_offset) {
     "Neon Invaders",
     "Astro Rush",
     "Vector Pong",
+    "Turbo Racing",
     "Back"
   };
   
-  for (int i = 0; i < 4; i++) {
-    display.setCursor(x_offset + 10, 18 + i * 11);
+  for (int i = 0; i < 5; i++) {
+    display.setCursor(x_offset + 10, 18 + i * 10); // Tightened spacing slightly
     if (i == menuSelection) {
       display.print("> ");
     } else {
@@ -1715,6 +1761,10 @@ void handleGameSelectSelect() {
       changeState(STATE_GAME_PONG);
       break;
     case 3:
+      initRacing();
+      changeState(STATE_GAME_RACING);
+      break;
+    case 4:
       changeState(STATE_MAIN_MENU);
       break;
   }
@@ -1724,7 +1774,7 @@ void handleGameSelectSelect() {
 
 void showWiFiMenu(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 25, 2);
@@ -1818,7 +1868,7 @@ void scanWiFiNetworks() {
 
 void displayWiFiNetworks(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 5, 0);
@@ -1884,7 +1934,7 @@ void displayWiFiNetworks(int x_offset) {
 
 void showAPISelect(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 15, 5);
@@ -1986,7 +2036,7 @@ void showMainMenu(int x_offset) {
   }
 
   // Top and bottom status bar (fixed position)
-  drawBatteryIndicator();
+  drawStatusBar();
   if (WiFi.status() == WL_CONNECTED) {
     drawWiFiSignalBars();
   }
@@ -2046,16 +2096,29 @@ void drawVideoPlayer() {
 
 // ========== UTILITY FUNCTIONS ==========
 
-void drawBatteryIndicator() {
-  int battX = SCREEN_WIDTH - 22;
-  int battY = 2;
+void drawStatusBar() {
+  // Clock (NTP)
+  struct tm timeinfo;
+  if(getLocalTime(&timeinfo)){
+    char timeString[6];
+    strftime(timeString, sizeof(timeString), "%H:%M", &timeinfo);
 
-  display.drawRect(battX, battY, 18, 8, SSD1306_WHITE);
-  display.fillRect(battX + 18, battY + 2, 2, 4, SSD1306_WHITE);
+    // Draw rounded background for time
+    int timeW = 32;
+    int timeX = SCREEN_WIDTH - timeW - 2;
+    int timeY = 0;
 
-  int fill = map(batteryPercent, 0, 100, 0, 14);
-  if (fill > 0) {
-    display.fillRect(battX + 2, battY + 2, fill, 4, SSD1306_WHITE);
+    display.fillRect(timeX, timeY, timeW, 10, SSD1306_BLACK); // Clear BG
+    // display.drawRoundRect(timeX, timeY, timeW, 10, 3, SSD1306_WHITE); // Optional border
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(timeX + 2, timeY + 1);
+    display.print(timeString);
+  } else {
+    // No time yet, maybe dots
+    display.setCursor(SCREEN_WIDTH - 20, 1);
+    display.print("--:--");
   }
 }
 
@@ -2133,7 +2196,7 @@ void showProgressBar(String title, int percent) {
 
 void showLoadingAnimation(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.setCursor(x_offset + 35, 25);
   display.print("Loading...");
@@ -2217,7 +2280,7 @@ void toggleKeyboardMode() {
 
 void drawKeyboard(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.drawRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, SSD1306_WHITE);
 
@@ -2359,6 +2422,9 @@ void handleUp() {
     case STATE_GAME_SIDE_SCROLLER:
       // Handled in handleSideScrollerInput
       break;
+    case STATE_GAME_RACING:
+       // Handled in handleRacingInput
+      break;
   }
 }
 
@@ -2409,6 +2475,9 @@ void handleDown() {
     case STATE_GAME_SIDE_SCROLLER:
        // Handled in handleSideScrollerInput
       break;
+    case STATE_GAME_RACING:
+       // Handled in handleRacingInput
+      break;
   }
 }
 
@@ -2440,6 +2509,9 @@ void handleRight() {
       break;
     case STATE_GAME_SIDE_SCROLLER:
        // Handled in handleSideScrollerInput
+      break;
+    case STATE_GAME_RACING:
+       // Handled in handleRacingInput
       break;
   }
 }
@@ -2574,6 +2646,7 @@ void handleBackButton() {
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
+    case STATE_GAME_RACING:
       changeState(STATE_GAME_SELECT);
       break;
     case STATE_GAME_SELECT:
@@ -2594,7 +2667,7 @@ void handleBackButton() {
 
 void displayResponse() {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -2712,4 +2785,213 @@ void sendToGemini() {
   currentState = STATE_CHAT_RESPONSE;
   scrollOffset = 0;
   displayResponse();
+}
+
+// ========== TURBO RACING GAME ==========
+
+void initRacing() {
+  racing.playerX = SCREEN_WIDTH / 2 - 6;
+  racing.playerSpeed = 0.0f;
+  racing.roadOffset = 0.0f;
+  racing.score = 0;
+  racing.gameOver = false;
+  racing.clutchPressed = false;
+
+  // Init traffic
+  for (int i = 0; i < MAX_RACING_CARS; i++) {
+    racing.cars[i].active = false;
+  }
+}
+
+void updateRacing() {
+  if (racing.gameOver) return;
+
+  updateParticles();
+  if (screenShake > 0) screenShake--;
+
+  // Speed Physics
+  float maxSpeed = 200.0f;
+  float acceleration = 80.0f;
+  float braking = 150.0f;
+  float friction = 30.0f;
+
+  // Apply friction
+  if (racing.playerSpeed > 0) racing.playerSpeed -= friction * deltaTime;
+  else if (racing.playerSpeed < 0) racing.playerSpeed += friction * deltaTime;
+
+  // Clamp near zero
+  if (abs(racing.playerSpeed) < 1.0f) racing.playerSpeed = 0;
+
+  // Road Scrolling
+  racing.roadOffset += racing.playerSpeed * deltaTime;
+  if (racing.roadOffset >= 20.0f) racing.roadOffset -= 20.0f;
+
+  // Spawn Traffic
+  if (random(0, 100) < 2 && racing.playerSpeed > 20) {
+    for (int i = 0; i < MAX_RACING_CARS; i++) {
+      if (!racing.cars[i].active) {
+        racing.cars[i].active = true;
+        racing.cars[i].x = random(20, SCREEN_WIDTH - 30);
+        racing.cars[i].y = -20; // Start above screen
+        racing.cars[i].speed = racing.playerSpeed * 0.5f + random(10, 30); // Slower than player usually
+        racing.cars[i].type = random(0, 3);
+        break;
+      }
+    }
+  }
+
+  // Move Traffic
+  for (int i = 0; i < MAX_RACING_CARS; i++) {
+    if (racing.cars[i].active) {
+      // Traffic moves down relative to player (Player Speed - Car Speed)
+      // Actually simpler: Everything moves down by PlayerSpeed, car moves up by CarSpeed
+      // Net change: y += (PlayerSpeed - CarSpeed) * dt
+
+      racing.cars[i].y += (racing.playerSpeed - racing.cars[i].speed) * deltaTime;
+
+      // Remove if off screen
+      if (racing.cars[i].y > SCREEN_HEIGHT + 10) {
+        racing.cars[i].active = false;
+        racing.score++;
+      }
+      if (racing.cars[i].y < -100) { // Too far behind
+         racing.cars[i].active = false;
+      }
+
+      // Collision
+      if (abs(racing.playerX - racing.cars[i].x) < 10 &&
+          abs((SCREEN_HEIGHT - 20) - racing.cars[i].y) < 12) {
+        racing.gameOver = true;
+        screenShake = 10;
+        triggerNeoPixelEffect(pixels.Color(255, 0, 0), 1000);
+        spawnExplosion(racing.playerX + 6, SCREEN_HEIGHT - 15, 10);
+      }
+    }
+  }
+}
+
+void drawRacing() {
+  display.clearDisplay();
+  drawStatusBar();
+
+  int shakeX = 0;
+  int shakeY = 0;
+  if (screenShake > 0) {
+    shakeX = random(-screenShake, screenShake + 1);
+    shakeY = random(-screenShake, screenShake + 1);
+  }
+
+  // Draw HUD
+  display.setTextSize(1);
+  display.setCursor(2, 2);
+  display.print("SPD:");
+  display.print((int)racing.playerSpeed);
+
+  if (racing.clutchPressed) {
+    display.setCursor(50, 2);
+    display.print("CLUTCH");
+  }
+
+  display.setCursor(90, 2);
+  display.print("SCR:");
+  display.print(racing.score);
+
+  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+
+  // Draw Road
+  int roadLeft = 10;
+  int roadRight = SCREEN_WIDTH - 10;
+  display.drawLine(roadLeft + shakeX, 10, roadLeft + shakeX, SCREEN_HEIGHT, SSD1306_WHITE);
+  display.drawLine(roadRight + shakeX, 10, roadRight + shakeX, SCREEN_HEIGHT, SSD1306_WHITE);
+
+  // Draw Lane Markers
+  for (int y = 10; y < SCREEN_HEIGHT; y += 20) {
+    int drawY = (y + (int)racing.roadOffset) % (SCREEN_HEIGHT - 10) + 10;
+    if (drawY < 10) drawY += (SCREEN_HEIGHT - 10);
+
+    display.fillRect(SCREEN_WIDTH / 2 - 1 + shakeX, drawY + shakeY, 2, 8, SSD1306_WHITE);
+  }
+
+  // Draw Player Car
+  int carX = racing.playerX + shakeX;
+  int carY = SCREEN_HEIGHT - 20 + shakeY;
+
+  // Car Body
+  display.fillRoundRect(carX, carY, 12, 18, 2, SSD1306_WHITE);
+  // Windshield
+  display.fillRect(carX + 2, carY + 10, 8, 3, SSD1306_BLACK);
+  // Stripes
+  display.fillRect(carX + 5, carY, 2, 18, SSD1306_BLACK);
+
+  // Draw Traffic
+  for (int i = 0; i < MAX_RACING_CARS; i++) {
+    if (racing.cars[i].active) {
+      int tx = racing.cars[i].x + shakeX;
+      int ty = racing.cars[i].y + shakeY;
+
+      if (ty > 10 && ty < SCREEN_HEIGHT) {
+        display.drawRoundRect(tx, ty, 12, 18, 2, SSD1306_WHITE);
+        display.fillRect(tx + 2, ty + 2, 8, 4, SSD1306_WHITE); // Rear window
+      }
+    }
+  }
+
+  drawParticles();
+
+  if (racing.gameOver) {
+    display.fillRect(20, 25, 88, 30, SSD1306_BLACK);
+    display.drawRect(20, 25, 88, 30, SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(30, 30);
+    display.print("CRASHED!");
+    display.setCursor(30, 40);
+    display.print("Score: ");
+    display.print(racing.score);
+  }
+
+  display.display();
+}
+
+void handleRacingInput() {
+  if (racing.gameOver) return;
+
+  float turnSpeed = 100.0f;
+  float accel = 100.0f;
+  float brake = 200.0f;
+
+  // Clutch Logic
+  racing.clutchPressed = (digitalRead(BTN_SELECT) == LOW);
+
+  // Gas
+  if (digitalRead(BTN_UP) == LOW) {
+    if (racing.clutchPressed) {
+      // Rev engine effect (visual shake or LED)
+      if (random(0, 5) == 0) screenShake = 1;
+    } else {
+      racing.playerSpeed += accel * deltaTime;
+    }
+  }
+
+  // Brake
+  if (digitalRead(BTN_DOWN) == LOW) {
+    racing.playerSpeed -= brake * deltaTime;
+    if (racing.playerSpeed < 0) racing.playerSpeed = 0;
+  }
+
+  // Steering (only if moving)
+  if (racing.playerSpeed > 5.0f) {
+    if (digitalRead(BTN_LEFT) == LOW) racing.playerX -= turnSpeed * deltaTime;
+    if (digitalRead(BTN_RIGHT) == LOW) racing.playerX += turnSpeed * deltaTime;
+
+    // Touch Steering
+    if (digitalRead(TOUCH_LEFT) == HIGH) racing.playerX -= turnSpeed * deltaTime;
+    if (digitalRead(TOUCH_RIGHT) == HIGH) racing.playerX += turnSpeed * deltaTime;
+  }
+
+  // Clamp Position
+  if (racing.playerX < 12) racing.playerX = 12;
+  if (racing.playerX > SCREEN_WIDTH - 24) racing.playerX = SCREEN_WIDTH - 24;
+
+  // Cap Speed
+  if (racing.playerSpeed > 300.0f) racing.playerSpeed = 300.0f;
 }
