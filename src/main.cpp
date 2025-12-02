@@ -7,6 +7,9 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Adafruit_NeoPixel.h>
+#include <LittleFS.h>
+#include <time.h>
+#include <esp_sntp.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -23,11 +26,15 @@ void updateNeoPixel();
 // Performance settings
 #define CPU_FREQ 240
 #define I2C_FREQ 1000000
-#define TARGET_FPS 60
+#define TARGET_FPS 90
 #define FRAME_TIME (1000 / TARGET_FPS)
+
+#define PHYSICS_FPS 120
+#define PHYSICS_TIME (1000 / PHYSICS_FPS)
 
 // Delta Time for smooth, frame-rate independent movement
 unsigned long lastFrameMillis = 0;
+unsigned long lastPhysicsUpdate = 0;
 float deltaTime = 0.0;
 
 // App State Machine
@@ -43,7 +50,15 @@ enum AppState {
   STATE_GAME_SPACE_INVADERS,
   STATE_GAME_SIDE_SCROLLER,
   STATE_GAME_PONG,
+  STATE_GAME_RACING,
+  STATE_RACING_MODE_SELECT,
   STATE_GAME_SELECT,
+  STATE_SYSTEM_MENU,
+  STATE_SYSTEM_PERF,
+  STATE_SYSTEM_NET,
+  STATE_SYSTEM_DEVICE,
+  STATE_SYSTEM_BENCHMARK,
+  STATE_SYSTEM_POWER,
   STATE_VIDEO_PLAYER
 };
 
@@ -70,7 +85,53 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
+// Centralized Preferences Manager
 Preferences preferences;
+
+void savePreferenceString(const char* key, String value) {
+  preferences.begin("app-config", false); // RW
+  preferences.putString(key, value);
+  preferences.end();
+}
+
+String loadPreferenceString(const char* key, String defaultValue) {
+  preferences.begin("app-config", true); // RO
+  String value = preferences.getString(key, defaultValue);
+  preferences.end();
+  return value;
+}
+
+void savePreferenceInt(const char* key, int value) {
+  preferences.begin("app-config", false); // RW
+  preferences.putInt(key, value);
+  preferences.end();
+}
+
+int loadPreferenceInt(const char* key, int defaultValue) {
+  preferences.begin("app-config", true); // RO
+  int value = preferences.getInt(key, defaultValue);
+  preferences.end();
+  return value;
+}
+
+void savePreferenceBool(const char* key, bool value) {
+  preferences.begin("app-config", false); // RW
+  preferences.putBool(key, value);
+  preferences.end();
+}
+
+bool loadPreferenceBool(const char* key, bool defaultValue) {
+  preferences.begin("app-config", true); // RO
+  bool value = preferences.getBool(key, defaultValue);
+  preferences.end();
+  return value;
+}
+
+void clearPreferenceNamespace() {
+  preferences.begin("app-config", false);
+  preferences.clear();
+  preferences.end();
+}
 
 // WiFi Scanner
 struct WiFiNetwork {
@@ -87,17 +148,14 @@ const int wifiPerPage = 4;
 // WiFi Auto-off settings
 unsigned long lastWiFiActivity = 0;
 
-// Battery monitoring
-float batteryVoltage = 5.0;
-int batteryPercent = 100;
-
 // Game Effects System
-#define MAX_PARTICLES 30
+#define MAX_PARTICLES 40 // Increased for S3
 struct Particle {
   float x, y;
   float vx, vy;
   int life;
   bool active;
+  uint16_t color; // Not really used on monochrome OLED, but good for logic differentiation
 };
 Particle particles[MAX_PARTICLES];
 int screenShake = 0;
@@ -110,10 +168,10 @@ void spawnExplosion(float x, float y, int count) {
         particles[j].x = x;
         particles[j].y = y;
         float angle = random(0, 360) * PI / 180.0;
-        float speed = random(5, 20) / 10.0;
+        float speed = random(5, 30) / 10.0; // Faster particles
         particles[j].vx = cos(angle) * speed;
         particles[j].vy = sin(angle) * speed;
-        particles[j].life = random(10, 30);
+        particles[j].life = random(15, 45); // Longer life
         break;
       }
     }
@@ -134,7 +192,7 @@ void updateParticles() {
 void drawParticles() {
   for (int i = 0; i < MAX_PARTICLES; i++) {
     if (particles[i].active) {
-      if (particles[i].life % 2 == 0) { // Flicker effect
+      if (particles[i].life > 5 || particles[i].life % 2 == 0) {
         display.drawPixel((int)particles[i].x, (int)particles[i].y, SSD1306_WHITE);
       }
     }
@@ -144,6 +202,104 @@ void drawParticles() {
 int loadingFrame = 0;
 unsigned long lastLoadingUpdate = 0;
 int selectedAPIKey = 1;
+
+// Performance Metrics
+unsigned long perfFrameCount = 0;
+unsigned long perfLoopCount = 0;
+unsigned long perfLastTime = 0;
+int perfFPS = 0;
+int perfLPS = 0;
+bool showFPS = false;
+
+int systemMenuSelection = 0;
+float systemMenuScrollY = 0;
+int currentCpuFreq = 240;
+
+// I2C Benchmark Globals
+int currentI2C = 1000000;
+int recommendedI2C = 1000000;
+bool benchmarkDone = false;
+
+struct I2CStats {
+  uint32_t successful = 0;
+  uint32_t failed = 0;
+  void reset() { successful = 0; failed = 0; }
+};
+I2CStats i2cStats;
+
+// Cached Status Bar Data
+int cachedRSSI = 0;
+String cachedTimeStr = "";
+unsigned long lastStatusBarUpdate = 0;
+
+// Chat History
+String chatHistory = "";
+
+void loadChatHistory() {
+  if (LittleFS.exists("/history.txt")) {
+    File file = LittleFS.open("/history.txt", "r");
+    if (file) {
+      // Read up to 2KB to prevent RAM overflow
+      while (file.available() && chatHistory.length() < 2048) {
+        chatHistory += (char)file.read();
+      }
+      file.close();
+    }
+  }
+}
+
+void appendToChatHistory(String userText, String aiText) {
+  String entry = "User: " + userText + "\nAI: " + aiText + "\n";
+
+  // Update RAM (Cap at 2048)
+  if (chatHistory.length() + entry.length() < 2048) {
+    chatHistory += entry;
+  } else {
+    // If full, simplistic approach: clear RAM history to start fresh context in RAM,
+    // but Flash keeps growing until cleared.
+    // Better: shift out old history? For now, just stop growing RAM context.
+    // Ideally we want a rolling buffer, but handling strings on microcontrollers is tricky.
+    // We'll just reset the RAM context if it gets too big to keep it fresh.
+    chatHistory = entry;
+  }
+
+  // Append to Flash
+  File file = LittleFS.open("/history.txt", FILE_APPEND);
+  if (file) {
+    file.print(entry);
+    file.close();
+  }
+}
+
+void showStatus(String message, int delayMs);
+
+void clearChatHistory() {
+  LittleFS.remove("/history.txt");
+  chatHistory = "";
+  showStatus("AI Memory Wiped!", 1000);
+}
+
+void updateStatusBarData() {
+  if (millis() - lastStatusBarUpdate > 1000) {
+    lastStatusBarUpdate = millis();
+
+    // Update RSSI
+    if (WiFi.status() == WL_CONNECTED) {
+       cachedRSSI = WiFi.RSSI();
+    } else {
+       cachedRSSI = 0;
+    }
+
+    // Update Time
+    struct tm timeinfo;
+    // timeout = 0 to avoid blocking
+    if (getLocalTime(&timeinfo, 0)) {
+       char timeStringBuff[10];
+       sprintf(timeStringBuff, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+       cachedTimeStr = String(timeStringBuff);
+    }
+  }
+}
 
 // Keyboard layouts
 const char* keyboardLower[3][10] = {
@@ -291,10 +447,61 @@ struct Pong {
   bool gameOver;
   bool aiMode; // true = vs AI, false = 2 player
   int difficulty; // 1-3
+
+  // Trail for visual effect
+  float trailX[5];
+  float trailY[5];
 };
 Pong pong;
 unsigned long pongResetTimer = 0;
 bool pongResetting = false;
+
+// Turbo Racing Game State
+#define RACING_ROAD_SEGMENTS 20
+#define RACING_MODE_FREE 0
+#define RACING_MODE_CHALLENGE 1
+
+struct Racing {
+  float carX; // -1 to 1 (0 is center)
+  float speed;
+  float rpm; // 0-8000
+  int gear; // 1-5
+  bool clutchPressed;
+  float roadCurvature; // Current curve
+  float trackPosition; // Total distance
+  float playerZ; // Distance into screen (camera)
+  int score;
+  int lives;
+  int mode;
+  bool gameOver;
+
+  float bgOffset; // For parallax background
+
+  // Track data
+  float roadCurves[100]; // Pre-defined track map
+  float roadHeight[100]; // Height map for hills
+  float camHeight;       // Current camera height based on road
+
+  struct RacingEnemy {
+     float z; // Distance from camera
+     float x; // -1 to 1
+     bool active;
+     float speed;
+  };
+  RacingEnemy enemies[5];
+
+  struct RacingObject {
+     float z;
+     float side; // -1 (left) or 1 (right)
+     bool active;
+     int type; // 0=tree, 1=light
+  };
+  RacingObject scenery[10];
+
+  int currentSegment;
+};
+Racing racing;
+
 
 AppState currentState = STATE_MAIN_MENU;
 AppState previousState = STATE_MAIN_MENU;
@@ -304,7 +511,7 @@ enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
 AppState transitionTargetState;
 float transitionProgress = 0.0; // 0.0 to 1.0
-const float transitionSpeed = 2.5f;
+const float transitionSpeed = 3.5f; // Faster transitions
 
 // Main Menu Animation Variables
 float menuScrollY = 0;
@@ -323,8 +530,8 @@ int menuSelection = 0;
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 150;
 
-unsigned long lastGameUpdate = 0;
-const int gameUpdateInterval = FRAME_TIME;
+unsigned long lastUiUpdate = 0;
+const int uiFrameDelay = 1000 / TARGET_FPS;
 
 // Icons (8x8 pixel bitmaps)
 const unsigned char ICON_WIFI[] PROGMEM = {
@@ -343,13 +550,45 @@ const unsigned char ICON_VIDEO[] PROGMEM = {
   0x7E, 0x81, 0x81, 0xBD, 0xBD, 0x81, 0x81, 0x7E
 };
 
+const unsigned char ICON_HEART[] PROGMEM = {
+  0x66, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C, 0x18, 0x00
+};
+
+const unsigned char ICON_SYSTEM[] PROGMEM = {
+  0x3C, 0x7E, 0xDB, 0xFF, 0xC3, 0xFF, 0x7E, 0x3C
+};
+
+// Racing Car Sprites (16x16)
+const unsigned char BITMAP_CAR_STRAIGHT[] PROGMEM = {
+  0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
+  0x33, 0xCC, 0x33, 0xCC, 0x33, 0xCC, 0x3F, 0xFC,
+  0x3F, 0xFC, 0x3F, 0xFC, 0x33, 0xCC, 0x33, 0xCC,
+  0x33, 0xCC, 0x3F, 0xFC, 0x1F, 0xF8, 0x07, 0xE0
+};
+
+const unsigned char BITMAP_CAR_LEFT[] PROGMEM = {
+  0x01, 0xE0, 0x07, 0xF0, 0x0F, 0xF8, 0x1F, 0xFC,
+  0x31, 0xCC, 0x21, 0xC4, 0x61, 0xC6, 0x7F, 0xFE,
+  0x7F, 0xFE, 0x61, 0xC6, 0x61, 0x86, 0x61, 0x86,
+  0x61, 0x86, 0x7F, 0xFE, 0x3F, 0xFC, 0x0F, 0xF0
+};
+
+const unsigned char BITMAP_CAR_RIGHT[] PROGMEM = {
+  0x07, 0x80, 0x0F, 0xE0, 0x1F, 0xF0, 0x3F, 0xF8,
+  0x33, 0x8C, 0x23, 0x84, 0x63, 0x86, 0x7F, 0xFE,
+  0x7F, 0xFE, 0x63, 0x86, 0x61, 0x86, 0x61, 0x86,
+  0x61, 0x86, 0x7F, 0xFE, 0x3F, 0xFC, 0x0F, 0xF0
+};
+
+const unsigned char BITMAP_ENEMY[] PROGMEM = {
+  0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
+  0x38, 0x1C, 0x38, 0x1C, 0x3F, 0xFC, 0x3F, 0xFC,
+  0x3F, 0xFC, 0x39, 0x9C, 0x39, 0x9C, 0x39, 0x9C,
+  0x3F, 0xFC, 0x1F, 0xF8, 0x0F, 0xF0, 0x03, 0xC0
+};
+
 // Video Player Data
-// ==========================================
-// PASTE YOUR VIDEO FRAME ARRAY HERE
-// Format: const unsigned char frame1[] PROGMEM = { ... };
-//         const unsigned char* videoFrames[] = { frame1, frame2, ... };
-// ==========================================
-const unsigned char* videoFrames[] = { NULL }; // Placeholder
+const unsigned char* videoFrames[] = { NULL };
 int videoTotalFrames = 0;
 int videoCurrentFrame = 0;
 unsigned long lastVideoFrameTime = 0;
@@ -360,6 +599,14 @@ void showMainMenu(int x_offset = 0);
 void showWiFiMenu(int x_offset = 0);
 void showAPISelect(int x_offset = 0);
 void showGameSelect(int x_offset = 0);
+void showSystemMenu(int x_offset = 0);
+void showSystemPerf(int x_offset = 0);
+void showSystemNet(int x_offset = 0);
+void showSystemDevice(int x_offset = 0);
+void showSystemBenchmark(int x_offset = 0);
+void showSystemPower(int x_offset = 0);
+void runI2CBenchmark();
+void showRacingModeSelect(int x_offset = 0);
 void showLoadingAnimation(int x_offset = 0);
 void showProgressBar(String title, int percent);
 void displayWiFiNetworks(int x_offset = 0);
@@ -368,6 +615,8 @@ void handleMainMenuSelect();
 void handleWiFiMenuSelect();
 void handleAPISelectSelect();
 void handleGameSelectSelect();
+void handleRacingModeSelect();
+void handleSystemMenuSelect();
 void handleKeyPress();
 void handlePasswordKeyPress();
 void handleBackButton();
@@ -391,6 +640,13 @@ void refreshCurrentScreen() {
     case STATE_WIFI_SCAN: displayWiFiNetworks(x_offset); break;
     case STATE_API_SELECT: showAPISelect(x_offset); break;
     case STATE_GAME_SELECT: showGameSelect(x_offset); break;
+    case STATE_RACING_MODE_SELECT: showRacingModeSelect(x_offset); break;
+    case STATE_SYSTEM_MENU: showSystemMenu(x_offset); break;
+    case STATE_SYSTEM_PERF: showSystemPerf(x_offset); break;
+    case STATE_SYSTEM_NET: showSystemNet(x_offset); break;
+    case STATE_SYSTEM_DEVICE: showSystemDevice(x_offset); break;
+    case STATE_SYSTEM_BENCHMARK: showSystemBenchmark(x_offset); break;
+    case STATE_SYSTEM_POWER: showSystemPower(x_offset); break;
     case STATE_LOADING: showLoadingAnimation(x_offset); break;
     case STATE_KEYBOARD: drawKeyboard(x_offset); break;
     case STATE_PASSWORD_INPUT: drawKeyboard(x_offset); break;
@@ -399,12 +655,13 @@ void refreshCurrentScreen() {
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
+    case STATE_GAME_RACING:
     case STATE_VIDEO_PLAYER:
       break;
     default: showMainMenu(x_offset); break;
   }
 }
-void drawBatteryIndicator();
+void drawStatusBar();
 void drawWiFiSignalBars();
 void drawIcon(int x, int y, const unsigned char* icon);
 void sendToGemini();
@@ -436,6 +693,11 @@ void initPong();
 void updatePong();
 void drawPong();
 void handlePongInput();
+
+void initRacing(int mode);
+void updateRacing();
+void drawRacing();
+void handleRacingInput();
 
 void drawVideoPlayer();
 
@@ -480,19 +742,88 @@ void ledQuickFlash() {
   digitalWrite(LED_BUILTIN, LOW);
 }
 
+void showBootScreen() {
+  const char* bootLogs[] = {
+    "BOOT SEQUENCE INITIATED...",
+    "CPU: ESP32-S3 [OK]",
+    "MEM: PSRAM DETECTED [OK]",
+    "FS: MOUNTING LITTLEFS...",
+    " > FS MOUNTED [SUCCESS]",
+    "NET: WIFI ADAPTER... [UP]",
+    "AI: GEMINI API... [READY]",
+    "GPU: OVERCLOCK I2C... [DONE]",
+    "SYSTEM READY. STARTING UI..."
+  };
+
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  int totalLogs = 9;
+
+  for (int i = 0; i < totalLogs; i++) {
+    display.clearDisplay();
+
+    // Draw logs scrolling up
+    int startY = 0;
+    int maxLines = 6;
+    int startIdx = (i >= maxLines) ? (i - maxLines + 1) : 0;
+
+    for (int j = startIdx; j <= i; j++) {
+      display.setCursor(0, (j - startIdx) * 9);
+      display.println(bootLogs[j]);
+    }
+
+    // Progress Bar with "glitch" effect
+    int progress = map(i, 0, totalLogs - 1, 10, 124);
+    display.drawRect(2, 56, 124, 6, SSD1306_WHITE);
+
+    // Random glitch fill
+    if (random(0, 10) > 2) {
+       display.fillRect(4, 58, progress, 2, SSD1306_WHITE);
+    } else {
+       display.fillRect(4, 58, max(0, progress - 10), 2, SSD1306_WHITE);
+    }
+
+    display.display();
+
+    // Variable delay to simulate processing
+    int waitTime = random(50, 150);
+    if (i == 3) waitTime = 400; // Fake delay on mounting
+    delay(waitTime);
+  }
+
+  // Flash effect
+  display.invertDisplay(true);
+  delay(50);
+  display.invertDisplay(false);
+  delay(50);
+
+  display.clearDisplay();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
 
   // High Performance Setup for ESP32-S3 N16R8
   setCpuFrequencyMhz(CPU_FREQ);
-  psramInit();
   
-  Serial.println("\n=== ESP32-S3 Gaming Edition v1.0 ===");
-  Serial.printf("CPU Freq: %d MHz\n", getCpuFrequencyMhz());
-  Serial.printf("PSRAM Size: %d KB\n", ESP.getPsramSize() / 1024);
+  // PSRAM check (already initialized by Arduino core if flags set)
+  if (psramFound()) {
+      Serial.printf("PSRAM Active: %d KB\n", ESP.getPsramSize() / 1024);
+  } else {
+      Serial.println("PSRAM Not Found!");
+  }
   
-  preferences.begin("wifi-creds", false);
+  Serial.println("\n=== ESP32-S3 Gaming Edition v2.0 (NTP/Racing/MaxPerf) ===");
+
+  // Initialize LittleFS
+  if(!LittleFS.begin(true)){
+    Serial.println("LittleFS Mount Failed");
+  } else {
+    loadChatHistory();
+  }
+
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(I2C_FREQ); // Fast I2C for smoother display updates
   
@@ -518,39 +849,30 @@ void setup() {
     for(;;);
   }
   
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.display();
+  showBootScreen();
   
   ledSuccess();
   
-  preferences.begin("wifi-creds", true);
-  String savedSSID = preferences.getString("ssid", "");
-  String savedPassword = preferences.getString("password", "");
-  preferences.end();
-  
+  showFPS = loadPreferenceBool("showFPS", false);
+  currentI2C = loadPreferenceInt("i2c_freq", 1000000);
+  currentCpuFreq = loadPreferenceInt("cpu_freq", 240);
+  setCpuFrequencyMhz(currentCpuFreq);
+
+  String savedSSID = loadPreferenceString("ssid", "");
+  String savedPassword = loadPreferenceString("password", "");
+
+  // Start WiFi in background if credentials exist
   if (savedSSID.length() > 0) {
-    showProgressBar("WiFi Connect", 0);
     WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
-    
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      ledBlink(100);
-      delay(500);
-      attempts++;
-      showProgressBar("Connecting", attempts * 5);
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      ledSuccess();
-      showProgressBar("Connected!", 100);
-      delay(1000);
-    } else {
-      ledError();
-      showStatus("Connection failed", 2000);
-    }
+    // Init NTP (UTC+7 for WIB) immediately so it syncs once connected
+    configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
   }
+
+  // Apply I2C Clock here to ensure it takes effect
+  Wire.setClock(currentI2C);
+
+  // Show cinematic boot screen (WiFi connects in background during this)
+  showBootScreen();
   
   showMainMenu();
 }
@@ -573,8 +895,18 @@ void updateNeoPixel() {
 
 void loop() {
   unsigned long currentMillis = millis();
+  perfLoopCount++;
+
+  if (currentMillis - perfLastTime >= 1000) {
+      perfFPS = perfFrameCount;
+      perfLPS = perfLoopCount;
+      perfFrameCount = 0;
+      perfLoopCount = 0;
+      perfLastTime = currentMillis;
+  }
   
   updateNeoPixel();
+  updateStatusBarData();
 
   // LED Patterns
   switch(currentState) {
@@ -587,6 +919,7 @@ void loop() {
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
     case STATE_GAME_PONG:
+    case STATE_GAME_RACING:
       {
         int blink = (millis() / 100) % 3;
         digitalWrite(LED_BUILTIN, blink < 2);
@@ -607,33 +940,34 @@ void loop() {
     }
   }
   
-  // Game updates
-  if (currentMillis - lastGameUpdate > gameUpdateInterval) {
+  // Physics updates (120Hz for smooth inputs)
+  if (currentMillis - lastPhysicsUpdate > PHYSICS_TIME) {
     // Calculate Delta Time
     if (lastFrameMillis == 0) lastFrameMillis = currentMillis;
     deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
     lastFrameMillis = currentMillis;
+    lastPhysicsUpdate = currentMillis;
 
     // Poll Game Inputs (Smooth Movement)
     if (currentState == STATE_GAME_SPACE_INVADERS) handleSpaceInvadersInput();
     else if (currentState == STATE_GAME_SIDE_SCROLLER) handleSideScrollerInput();
     else if (currentState == STATE_GAME_PONG) handlePongInput();
+    else if (currentState == STATE_GAME_RACING) handleRacingInput();
 
     switch(currentState) {
       case STATE_GAME_SPACE_INVADERS:
         updateSpaceInvaders();
-        drawSpaceInvaders();
         break;
       case STATE_GAME_SIDE_SCROLLER:
         updateSideScroller();
-        drawSideScroller();
         break;
       case STATE_GAME_PONG:
         updatePong();
-        drawPong();
+        break;
+      case STATE_GAME_RACING:
+        updateRacing();
         break;
     }
-    lastGameUpdate = currentMillis;
   }
 
   if (currentState == STATE_VIDEO_PLAYER) {
@@ -666,17 +1000,30 @@ void loop() {
     }
   }
 
-  // Draw current screen with transition offset
-  // We call this every frame now, not just on input
-  refreshCurrentScreen();
+  // Render UI at 60 FPS
+  if (currentMillis - lastUiUpdate > uiFrameDelay) {
+      lastUiUpdate = currentMillis;
+      perfFrameCount++;
 
-  // Main Menu Animation (Only if not transitioning)
-  if (currentState == STATE_MAIN_MENU && transitionState == TRANSITION_NONE) {
-    if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
-      menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
-    } else if (menuScrollY != menuTargetScrollY) {
-      menuScrollY = menuTargetScrollY;
-    }
+      // Draw current screen with transition offset
+      refreshCurrentScreen();
+
+      // Force Draw for Games (since we removed it from the physics loop)
+      switch(currentState) {
+        case STATE_GAME_SPACE_INVADERS: drawSpaceInvaders(); break;
+        case STATE_GAME_SIDE_SCROLLER: drawSideScroller(); break;
+        case STATE_GAME_PONG: drawPong(); break;
+        case STATE_GAME_RACING: drawRacing(); break;
+      }
+
+      // Main Menu Animation (Only if not transitioning)
+      if (currentState == STATE_MAIN_MENU && transitionState == TRANSITION_NONE) {
+        if (abs(menuScrollY - menuTargetScrollY) > 0.1) {
+          menuScrollY += (menuTargetScrollY - menuScrollY) * 0.3;
+        } else if (menuScrollY != menuTargetScrollY) {
+          menuScrollY = menuTargetScrollY;
+        }
+      }
   }
   
   // Button handling (only if not transitioning)
@@ -708,18 +1055,20 @@ void loop() {
       buttonPressed = true;
     }
     
-    // Touch buttons
-    if (digitalRead(TOUCH_LEFT) == HIGH) {
-      handleLeft();
-      if (currentState == STATE_GAME_SPACE_INVADERS || 
-          currentState == STATE_GAME_SIDE_SCROLLER) {
-        handleSelect(); // Also shoot
+    // Touch buttons (Disable during keyboard typing and Racing)
+    if (currentState != STATE_KEYBOARD && currentState != STATE_PASSWORD_INPUT && currentState != STATE_GAME_RACING) {
+      if (digitalRead(TOUCH_LEFT) == HIGH) {
+        handleLeft();
+        if (currentState == STATE_GAME_SPACE_INVADERS ||
+            currentState == STATE_GAME_SIDE_SCROLLER) {
+          handleSelect(); // Also shoot
+        }
+        buttonPressed = true;
       }
-      buttonPressed = true;
-    }
-    if (digitalRead(TOUCH_RIGHT) == HIGH) {
-      handleRight();
-      buttonPressed = true;
+      if (digitalRead(TOUCH_RIGHT) == HIGH) {
+        handleRight();
+        buttonPressed = true;
+      }
     }
     
     if (buttonPressed) {
@@ -789,7 +1138,7 @@ void updateSpaceInvaders() {
   
   // Smooth Enemy Movement
   bool hitEdge = false;
-  float enemySpeed = 5.0f + (invaders.level * 2.0f); // Speed in pixels per second
+  float enemySpeed = 10.0f + (invaders.level * 2.0f); // Faster
 
   for (int i = 0; i < MAX_ENEMIES; i++) {
     if (invaders.enemies[i].active) {
@@ -889,7 +1238,7 @@ void updateSpaceInvaders() {
               invaders.enemies[j].active = false;
               invaders.score += (invaders.enemies[j].type + 1) * 10;
               
-              spawnExplosion(invaders.enemies[j].x + 4, invaders.enemies[j].y + 3, 5);
+              spawnExplosion(invaders.enemies[j].x + 4, invaders.enemies[j].y + 3, 10);
               triggerNeoPixelEffect(pixels.Color(255, 165, 0), 100); // Orange flash
               screenShake = 2;
 
@@ -997,7 +1346,7 @@ void drawSpaceInvaders() {
     shakeY = random(-screenShake, screenShake + 1);
   }
 
-  drawBatteryIndicator();
+  drawStatusBar();
   
   // Draw HUD (Fixed position, no shake)
   display.setTextSize(1);
@@ -1095,6 +1444,102 @@ void drawSpaceInvaders() {
     display.print(invaders.score);
   }
   
+  display.display();
+}
+
+// ===== I2C BENCHMARK FUNCTIONS =====
+
+bool testI2CConnection(int speed) {
+  Wire.setClock(speed);
+  // Using endTransmission to check for basic connectivity and bus errors
+  // We will try to send a command to the OLED address
+  // 0x00 is command stream byte for SSD1306
+  Wire.beginTransmission(SCREEN_ADDRESS);
+  Wire.write(0x00);
+  Wire.write(0xAF); // Display ON command (safe no-op usually if already on)
+  return (Wire.endTransmission() == 0);
+}
+
+void runI2CBenchmark() {
+  benchmarkDone = false;
+  display.clearDisplay();
+  drawStatusBar();
+  display.setCursor(10, 25);
+  display.print("Running Benchmark...");
+  display.display();
+
+  int speeds[] = {400000, 1000000, 1500000, 2000000, 2500000};
+  const char* labels[] = {"400KHz", "1MHz", "1.5MHz", "2MHz", "2.5MHz"};
+
+  recommendedI2C = 400000; // Safe fallback
+
+  for (int i = 0; i < 5; i++) {
+      display.fillRect(0, 35, SCREEN_WIDTH, 30, SSD1306_BLACK);
+      display.setCursor(10, 35);
+      display.print("Testing ");
+      display.print(labels[i]);
+      display.display();
+
+      delay(200); // Pause before switch
+
+      // Aggressive test: write full frame
+      bool passed = true;
+      if (!testI2CConnection(speeds[i])) {
+          passed = false;
+      } else {
+          // Stress test by clearing screen 10 times
+          Wire.setClock(speeds[i]);
+          for(int k=0; k<10; k++) {
+             display.clearDisplay();
+             display.display(); // This pushes data
+             // Note: Adafruit lib doesn't easily expose transmission errors during display(),
+             // but if the bus locks up, the ESP usually catches it or it hangs.
+             // We rely on endTransmission check above for "is it alive".
+             // Visual corruption is subjective and hard to auto-detect without readback.
+          }
+      }
+
+      if (passed) {
+          recommendedI2C = speeds[i];
+      } else {
+          break; // Stop if we fail
+      }
+  }
+
+  // Restore safe speed for UI
+  Wire.setClock(1000000); // Default reasonable speed
+  benchmarkDone = true;
+}
+
+void showSystemBenchmark(int x_offset) {
+  if (!benchmarkDone) {
+     runI2CBenchmark();
+  }
+
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 20, 5);
+  display.print("I2C BENCHMARK");
+  display.drawLine(x_offset, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
+
+  display.setCursor(x_offset + 5, 25);
+  display.print("Max Stable Speed:");
+
+  display.setCursor(x_offset + 5, 38);
+  display.setTextSize(2);
+  display.print(recommendedI2C / 1000);
+  display.print(" kHz");
+  display.setTextSize(1);
+
+  display.setCursor(x_offset + 5, 56);
+  if (recommendedI2C == currentI2C) {
+      display.print("Current Setting [OK]");
+  } else {
+      display.print("Press SEL to Apply");
+  }
+
   display.display();
 }
 
@@ -1364,7 +1809,7 @@ void drawSideScroller() {
     shakeY = random(-screenShake, screenShake + 1);
   }
 
-  drawBatteryIndicator();
+  drawStatusBar();
   
   // Draw HUD
   display.setTextSize(1);
@@ -1505,6 +1950,11 @@ void initPong() {
   pong.gameOver = false;
   pong.aiMode = true;
   pong.difficulty = 2;
+
+  for(int i=0; i<5; i++) {
+    pong.trailX[i] = pong.ballX;
+    pong.trailY[i] = pong.ballY;
+  }
 }
 
 void updatePong() {
@@ -1516,6 +1966,15 @@ void updatePong() {
   // Move ball
   if (!pongResetting) {
     float effectiveSpeed = pong.ballSpeed * 60.0f; // Base speed at 60fps
+
+    // Update trails
+    for(int i=4; i>0; i--) {
+      pong.trailX[i] = pong.trailX[i-1];
+      pong.trailY[i] = pong.trailY[i-1];
+    }
+    pong.trailX[0] = pong.ballX;
+    pong.trailY[0] = pong.ballY;
+
     pong.ballX += pong.ballDirX * effectiveSpeed * deltaTime;
     pong.ballY += pong.ballDirY * effectiveSpeed * deltaTime;
   }
@@ -1536,7 +1995,7 @@ void updatePong() {
     if (pong.ballY >= pong.paddle1Y - 2 && pong.ballY <= pong.paddle1Y + pong.paddleHeight + 2) {
       pong.ballDirX = 1;
       pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f); // Accelerate
-      spawnExplosion(pong.ballX, pong.ballY, 3);
+      spawnExplosion(pong.ballX, pong.ballY, 5);
 
       // Add spin based on where it hit the paddle
       float hitPos = pong.ballY - (pong.paddle1Y + pong.paddleHeight / 2.0);
@@ -1551,7 +2010,7 @@ void updatePong() {
     if (pong.ballY >= pong.paddle2Y - 2 && pong.ballY <= pong.paddle2Y + pong.paddleHeight + 2) {
       pong.ballDirX = -1;
       pong.ballSpeed = min(pong.ballSpeed + 0.2f, 5.0f); // Accelerate
-      spawnExplosion(pong.ballX, pong.ballY, 3);
+      spawnExplosion(pong.ballX, pong.ballY, 5);
 
       float hitPos = pong.ballY - (pong.paddle2Y + pong.paddleHeight / 2.0);
       pong.ballDirY = hitPos / (pong.paddleHeight / 2.0);
@@ -1605,7 +2064,7 @@ void updatePong() {
 
 void drawPong() {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   int shakeX = 0;
   int shakeY = 0;
@@ -1632,6 +2091,12 @@ void drawPong() {
   display.drawRect(2, pong.paddle1Y + shakeY, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
   display.drawRect(SCREEN_WIDTH - 6, pong.paddle2Y + shakeY, pong.paddleWidth, pong.paddleHeight, SSD1306_WHITE);
   
+  // Draw ball trails
+  for(int i=0; i<5; i++) {
+    if((int)pong.trailX[i] != 0)
+      display.drawPixel(pong.trailX[i] + shakeX, pong.trailY[i] + shakeY, SSD1306_WHITE);
+  }
+
   // Draw ball (Neon Style with pulse)
   float ballPulse = abs(sin(millis() / 150.0f)); // 0.0 to 1.0
   display.drawCircle(pong.ballX + shakeX, pong.ballY + shakeY, 2 + ballPulse, SSD1306_WHITE);
@@ -1666,11 +2131,459 @@ void handlePongInput() {
   if (pong.paddle1Y > SCREEN_HEIGHT - pong.paddleHeight) pong.paddle1Y = SCREEN_HEIGHT - pong.paddleHeight;
 }
 
+// ========== TURBO RACING GAME ==========
+
+void initRacing(int mode) {
+  racing.carX = 0;
+  racing.speed = 0;
+  racing.rpm = 0;
+  racing.gear = 1;
+  racing.clutchPressed = false;
+  racing.roadCurvature = 0;
+  racing.trackPosition = 0;
+  racing.score = 0;
+  racing.lives = 3;
+  racing.mode = mode;
+  racing.gameOver = false;
+  racing.bgOffset = 0;
+  racing.camHeight = 0;
+
+  // Generate track curves and hills
+  for(int i=0; i<100; i++) {
+    // Curves
+    racing.roadCurves[i] = sin(i * 0.1) * random(20, 60) * 0.01f;
+    // Hills - Smooth rolling hills
+    racing.roadHeight[i] = sin(i * 0.2) * 500.0f; // Scale height effect
+  }
+
+  // Init enemies
+  for(int i=0; i<5; i++) {
+    racing.enemies[i].active = false;
+  }
+
+  // Init scenery
+  for(int i=0; i<10; i++) {
+    racing.scenery[i].active = false;
+  }
+}
+
+void updateRacing() {
+  if (racing.gameOver) return;
+
+  updateParticles();
+  if (screenShake > 0) screenShake--;
+
+  // Physics
+  float maxSpeed = 100.0f + (racing.gear * 30.0f);
+  float acceleration = (racing.rpm / 8000.0f) * 100.0f * deltaTime;
+  float friction = 20.0f * deltaTime;
+
+  // Engine
+  if (racing.clutchPressed) {
+    // Engine disconnects
+    if (digitalRead(BTN_UP) == LOW || digitalRead(TOUCH_RIGHT) == HIGH) {
+      racing.rpm += 5000.0f * deltaTime; // Rev fast
+    } else {
+      racing.rpm -= 3000.0f * deltaTime;
+    }
+    // Car coasts
+    racing.speed -= friction * 0.5f;
+  } else {
+    // Engine connected
+    if (digitalRead(BTN_UP) == LOW || digitalRead(TOUCH_RIGHT) == HIGH) {
+       racing.rpm += 2000.0f * deltaTime;
+       racing.speed += acceleration;
+    } else {
+       racing.rpm -= 2000.0f * deltaTime;
+       racing.speed -= friction;
+    }
+
+    // Engine Braking / RPM Matching
+    float targetRPM = (racing.speed / maxSpeed) * 8000.0f;
+    // Simple blend for RPM matching
+    racing.rpm = (racing.rpm * 0.9f) + (targetRPM * 0.1f);
+  }
+
+  // Brake
+  if (digitalRead(BTN_DOWN) == LOW || digitalRead(TOUCH_LEFT) == HIGH) {
+    racing.speed -= 100.0f * deltaTime;
+  }
+
+  // Clamp values
+  if (racing.rpm > 9000) racing.rpm = 9000; // Redline
+  if (racing.rpm < 800) racing.rpm = 800;   // Idle
+  if (racing.speed < 0) racing.speed = 0;
+
+  // Steering
+  if (racing.speed > 0.5f) {
+    // Increased steering sensitivity for snappier response
+    float steerSense = 2.5f + (racing.speed / 40.0f);
+    if (digitalRead(BTN_LEFT) == LOW) racing.carX -= steerSense * deltaTime;
+    if (digitalRead(BTN_RIGHT) == LOW) racing.carX += steerSense * deltaTime;
+  }
+
+  // Track movement
+  racing.trackPosition += racing.speed * deltaTime;
+  int segIndex = ((int)(racing.trackPosition / 100.0f)) % 100;
+  racing.roadCurvature = racing.roadCurves[segIndex];
+
+  // Hill Physics (Gravity)
+  // Calculate slope: height difference between next segment and current segment
+  int nextSegIndex = (segIndex + 1) % 100;
+  float segmentSlope = (racing.roadHeight[nextSegIndex] - racing.roadHeight[segIndex]);
+  // Apply gravity based on slope
+  racing.speed -= segmentSlope * 0.05f * deltaTime;
+
+  // Smooth Camera Height
+  // Camera follows the road height but with some damping/spring
+  float targetCamHeight = racing.roadHeight[segIndex] + 150.0f; // +150 for "eye level"
+  racing.camHeight += (targetCamHeight - racing.camHeight) * 5.0f * deltaTime;
+
+  // Update Background Parallax
+  racing.bgOffset += racing.roadCurvature * (racing.speed / 200.0f) * deltaTime * 10.0f;
+  if (racing.bgOffset > SCREEN_WIDTH) racing.bgOffset -= SCREEN_WIDTH;
+  if (racing.bgOffset < 0) racing.bgOffset += SCREEN_WIDTH;
+
+  // Auto-centering force on curve
+  racing.carX -= racing.roadCurvature * (racing.speed / 100.0f) * deltaTime;
+
+  // Crash off road
+  if (abs(racing.carX) > 1.4f) {
+    racing.speed -= 40.0f * deltaTime; // Linear slowdown
+    if (racing.speed < 10.0f && (digitalRead(BTN_UP) == LOW || digitalRead(TOUCH_RIGHT) == HIGH)) {
+        racing.speed = 10.0f; // Minimum crawl speed if gas pressed
+    } else if (racing.speed < 0) {
+        racing.speed = 0;
+    }
+
+    screenShake = 2;
+    if (racing.speed > 50) spawnExplosion(SCREEN_WIDTH/2 + (racing.carX * 20), SCREEN_HEIGHT-10, 1);
+  }
+
+  racing.score += (int)(racing.speed * deltaTime);
+
+  // Spawn Scenery
+  if (racing.speed > 10.0f && random(0, 100) < 5) {
+      for(int i=0; i<10; i++) {
+         if(!racing.scenery[i].active) {
+             racing.scenery[i].active = true;
+             racing.scenery[i].z = 200; // Far away
+             racing.scenery[i].side = (random(0,2) == 0) ? -1.0f : 1.0f; // Left or Right
+             racing.scenery[i].type = random(0, 2); // Tree or Light
+             break;
+         }
+      }
+  }
+
+  // Update Scenery
+  for(int i=0; i<10; i++) {
+      if (racing.scenery[i].active) {
+          racing.scenery[i].z -= racing.speed * deltaTime; // Scenery moves at full speed
+          if (racing.scenery[i].z < 1.0f) racing.scenery[i].active = false;
+      }
+  }
+
+  // Enemies (Only in Challenge Mode)
+  if (racing.mode == RACING_MODE_CHALLENGE) {
+      if (random(0, 100) < 2) {
+          for(int i=0; i<5; i++) {
+            if (!racing.enemies[i].active) {
+                racing.enemies[i].active = true;
+                racing.enemies[i].z = 200; // Far away
+                racing.enemies[i].x = random(-50, 50) / 100.0f;
+                racing.enemies[i].speed = racing.speed * 0.5f; // Slower traffic
+                break;
+            }
+          }
+      }
+  }
+
+  for(int i=0; i<5; i++) {
+      if (racing.enemies[i].active) {
+          racing.enemies[i].z -= (racing.speed - racing.enemies[i].speed) * deltaTime;
+
+          if (racing.enemies[i].z < 1.0f) {
+              racing.enemies[i].active = false;
+          }
+
+          // Collision
+          if (racing.enemies[i].z < 10.0f && racing.enemies[i].z > 0.0f) {
+             if (abs(racing.carX - racing.enemies[i].x) < 0.3f) {
+                 if (racing.mode == RACING_MODE_CHALLENGE) {
+                     racing.lives--;
+                     if (racing.lives <= 0) {
+                         racing.speed = 0;
+                         racing.rpm = 0;
+                         racing.gameOver = true;
+                     } else {
+                         racing.speed *= 0.5f;
+                     }
+                 } else {
+                     // Free Drive: Just slow down
+                     racing.speed *= 0.7f;
+                 }
+
+                 screenShake = 20;
+                 spawnExplosion(SCREEN_WIDTH/2, SCREEN_HEIGHT/2, 20);
+                 racing.enemies[i].active = false;
+             }
+          }
+      }
+  }
+}
+
+void drawRacing() {
+  display.clearDisplay();
+  drawStatusBar();
+
+  // Horizon
+  int horizonY = 25;
+
+  // Draw Scrolling Mountain Background
+  int bgX = ((int)racing.bgOffset) % 32;
+  for(int x = -bgX; x < SCREEN_WIDTH; x += 32) {
+      // Simple mountain shapes
+      display.drawLine(x, horizonY, x + 16, horizonY - 10, SSD1306_WHITE);
+      display.drawLine(x + 16, horizonY - 10, x + 32, horizonY, SSD1306_WHITE);
+  }
+
+  // Draw Road (Pseudo 3D with Hills)
+  int roadWidth = 200; // Wider road for hill effect
+  int centerX = SCREEN_WIDTH / 2;
+
+  // Track previous segment screen Y to handle occlusion (Painter's algorithm back-to-front)
+  // Actually for lines, we just draw them. Hills require scaling Y based on Z *and* Height.
+
+  for(int i=RACING_ROAD_SEGMENTS - 1; i >= 0; i--) { // Draw Back to Front?
+    // Wait, simple lines is easier Front to Back for optimization, but Back to Front for painters.
+    // Let's stick to simple line drawing loop, but calculate Y with height.
+  }
+
+  // We need to loop i=0 (near) to Max (far) to calculate Z properly, but drawing order depends on sprites.
+  // Let's stick to the current loop direction (0 to Max) which is Near to Far.
+  // Wait, perspective is usually drawn Back to Front (Far to Near) to handle overlap correctly?
+  // But for wireframe road lines, it doesn't matter much unless solid.
+  // Let's keep 0 to Max (Near to Far) for Z calculation simplicity.
+
+  for(int i=0; i<RACING_ROAD_SEGMENTS; i++) {
+    // Calculate Z depth (screen space)
+    float z = i;
+    float scale = 150.0f / (z + 1.0f); // Projection scale factor
+
+    // Calculate Segment Height relative to Camera
+    int segIndex = ((int)(racing.trackPosition + i)) % 100;
+    float worldHeight = racing.roadHeight[segIndex];
+    float heightDiff = worldHeight - racing.camHeight;
+
+    // Project Y
+    // screenY = Horizon + (HeightDiff * Scale) + (BasePitch * i)
+    // We add a base pitch effect to make the road recede down/up naturally
+    int projectedY = (SCREEN_HEIGHT / 2) - (heightDiff * scale * 0.01f) + (i * 2); // i*2 mimics the flat plane recession
+
+    // Clamp to horizon
+    if (projectedY < horizonY) projectedY = horizonY;
+    if (projectedY > SCREEN_HEIGHT) continue;
+
+    // Project X and Width
+    int w = roadWidth * scale * 0.02f;
+    int curveShift = racing.roadCurvature * i * i * 0.5f;
+
+    // Alternating colors
+    int stripe = ((int)(racing.trackPosition + i) % 2 == 0) ? 1 : 0;
+
+    if (stripe) {
+      display.drawLine(centerX - w + curveShift, projectedY, centerX + w + curveShift, projectedY, SSD1306_WHITE);
+    } else {
+      // Draw road edges
+      display.drawPixel(centerX - w + curveShift, projectedY, SSD1306_WHITE);
+      display.drawPixel(centerX + w + curveShift, projectedY, SSD1306_WHITE);
+    }
+  }
+
+  // Re-loop for Sprites (Back to Front would be better, but we only have a few objects)
+  // Let's stick to the simple object loop, but apply the new Y projection.
+
+  // Helper lambda or macro would be nice, but we are in C++.
+  // Let's just copy the Y-projection math.
+  #define PROJECT_Y(idx) ((SCREEN_HEIGHT / 2) - ((racing.roadHeight[((int)(racing.trackPosition + idx)) % 100] - racing.camHeight) * (150.0f / (idx + 1.0f)) * 0.01f) + (idx * 2))
+
+  // Draw Scenery
+  for(int i=0; i<10; i++) {
+     if (racing.scenery[i].active) {
+         float z = racing.scenery[i].z;
+         if (z > 0 && z < RACING_ROAD_SEGMENTS) {
+             int y = PROJECT_Y(z);
+             if (y < horizonY) continue;
+
+             int curveShift = racing.roadCurvature * z * z * 0.5f;
+             float scale = 150.0f / (z + 1.0f);
+             int w = 200 * scale * 0.02f;
+
+             int ex = centerX + curveShift + (racing.scenery[i].side * (w + 20));
+             int size = 16 * (1.0f - z/RACING_ROAD_SEGMENTS);
+
+             if (size > 2) {
+                if (racing.scenery[i].type == 0) { // Tree
+                    display.drawTriangle(ex, y-size, ex-size/2, y, ex+size/2, y, SSD1306_WHITE);
+                    display.drawLine(ex, y, ex, y+size/4, SSD1306_WHITE);
+                } else { // Light
+                     display.drawLine(ex, y, ex, y-size, SSD1306_WHITE);
+                     display.drawPixel(ex + (racing.scenery[i].side > 0 ? -2 : 2), y-size, SSD1306_WHITE);
+                }
+             }
+         }
+     }
+  }
+
+  // Draw Enemies
+  for(int i=0; i<5; i++) {
+     if (racing.enemies[i].active) {
+         float z = racing.enemies[i].z;
+         if (z > 0 && z < RACING_ROAD_SEGMENTS) {
+             int y = PROJECT_Y(z);
+             if (y < horizonY) continue;
+
+             int curveShift = racing.roadCurvature * z * z * 0.5f;
+             float scale = 150.0f / (z + 1.0f);
+             int w = 200 * scale * 0.02f;
+
+             // Project X
+             int ex = (centerX) + (racing.enemies[i].x * w) + curveShift;
+
+             int size = 16 * (1.0f - z/RACING_ROAD_SEGMENTS);
+             if (size > 4) {
+                // Use Enemy Bitmap if large enough
+                if (size >= 12) {
+                   display.drawBitmap(ex - 8, y - 12, BITMAP_ENEMY, 16, 16, SSD1306_WHITE, SSD1306_BLACK);
+                } else {
+                   display.fillRect(ex - size/2, y - size, size, size/2, SSD1306_WHITE);
+                }
+             }
+         }
+     }
+  }
+
+  // Speed Lines (Turbo Effect)
+  if (racing.speed > 150) {
+     int cx = SCREEN_WIDTH / 2;
+     int cy = horizonY;
+     for(int i=0; i<4; i++) {
+         int angle = random(0, 360);
+         float rad = angle * PI / 180.0;
+         int x1 = cx + cos(rad) * 10;
+         int y1 = cy + sin(rad) * 10;
+         int x2 = cx + cos(rad) * 60;
+         int y2 = cy + sin(rad) * 60;
+         display.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+     }
+  }
+
+  // Draw Player Car (Using Bitmaps)
+  int carScreenX = SCREEN_WIDTH/2 + (racing.carX * 30); // Multiplier for lane width
+  int shakeX = (screenShake > 0) ? random(-2, 3) : 0;
+  int carY = SCREEN_HEIGHT - 22; // Position from bottom
+
+  // Select sprite based on steering
+  const unsigned char* carSprite = BITMAP_CAR_STRAIGHT;
+  if (digitalRead(BTN_LEFT) == LOW) carSprite = BITMAP_CAR_LEFT;
+  if (digitalRead(BTN_RIGHT) == LOW) carSprite = BITMAP_CAR_RIGHT;
+
+  // Draw car with background clearing (BLACK) then sprite (WHITE)
+  // drawBitmap(x, y, bitmap, w, h, color, bg)
+  display.drawBitmap(carScreenX - 8 + shakeX, carY, carSprite, 16, 16, SSD1306_WHITE, SSD1306_BLACK);
+
+  drawParticles();
+
+  // Dashboard
+  display.fillRect(0, SCREEN_HEIGHT - 12, SCREEN_WIDTH, 12, SSD1306_BLACK);
+  display.drawLine(0, SCREEN_HEIGHT - 12, SCREEN_WIDTH, SCREEN_HEIGHT - 12, SSD1306_WHITE);
+
+  // Gear
+  display.setTextSize(1);
+  display.setCursor(2, SCREEN_HEIGHT - 10);
+  if (racing.clutchPressed) display.print("N");
+  else display.print(racing.gear);
+
+  // Speed
+  display.setCursor(20, SCREEN_HEIGHT - 10);
+  display.print((int)racing.speed);
+  display.setTextSize(1);
+  display.setCursor(45, SCREEN_HEIGHT - 10);
+  display.print("km/h");
+
+  // RPM Gauge
+  int rpmWidth = map(racing.rpm, 0, 9000, 0, 50);
+  display.drawRect(70, SCREEN_HEIGHT - 10, 52, 8, SSD1306_WHITE);
+  display.fillRect(72, SCREEN_HEIGHT - 8, rpmWidth, 4, SSD1306_WHITE);
+
+  // Redline
+  if (racing.rpm > 8000) {
+      display.fillRect(122, SCREEN_HEIGHT - 10, 4, 8, SSD1306_WHITE); // Shift light
+  }
+
+  // Draw Lives or Mode
+  if (racing.mode == RACING_MODE_CHALLENGE) {
+      for(int i=0; i<racing.lives; i++) {
+         drawIcon(2 + (i*10), 12, ICON_HEART);
+      }
+  } else {
+      display.setCursor(2, 12);
+      display.print("FREE DRIVE");
+  }
+
+  // Game Over
+  if (racing.gameOver) {
+    display.fillRect(10, 20, 108, 30, SSD1306_BLACK);
+    display.drawRect(10, 20, 108, 30, SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(30, 25);
+    display.print("GAME OVER");
+    display.setCursor(25, 38);
+    display.print("Score: ");
+    display.print(racing.score);
+  }
+
+  display.display();
+}
+
+void handleRacingInput() {
+   if (digitalRead(BTN_SELECT) == LOW) {
+       racing.clutchPressed = true;
+   } else {
+       racing.clutchPressed = false;
+   }
+
+   // Shifting Logic (Simple sequential)
+   // In a real car, you use stick. Here we might just use Select to clutch,
+   // but how to shift? Let's say: Clutch + Up = Shift Up, Clutch + Down = Shift Down?
+   // Or maybe automatic shifting is easier?
+   // Let's implement semi-auto: if RPM high > 7000, shift up? No, user wants manual.
+
+   // Let's use Touch buttons for shifting?
+   // Or Clutch + Up/Down.
+   static bool upPressed = false;
+   static bool downPressed = false;
+
+   if (racing.clutchPressed) {
+       if (digitalRead(BTN_UP) == LOW && !upPressed) {
+           if (racing.gear < 5) racing.gear++;
+           upPressed = true;
+       }
+       if (digitalRead(BTN_UP) == HIGH) upPressed = false;
+
+       if (digitalRead(BTN_DOWN) == LOW && !downPressed) {
+           if (racing.gear > 1) racing.gear--;
+           downPressed = true;
+       }
+       if (digitalRead(BTN_DOWN) == HIGH) downPressed = false;
+   }
+}
+
 // ========== GAME SELECT ==========
 
 void showGameSelect(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 25, 2);
@@ -1681,14 +2594,15 @@ void showGameSelect(int x_offset) {
   display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
   
   const char* games[] = {
+    "Turbo Racing",
     "Neon Invaders",
     "Astro Rush",
     "Vector Pong",
     "Back"
   };
   
-  for (int i = 0; i < 4; i++) {
-    display.setCursor(x_offset + 10, 18 + i * 11);
+  for (int i = 0; i < 5; i++) {
+    display.setCursor(x_offset + 10, 18 + i * 9);
     if (i == menuSelection) {
       display.print("> ");
     } else {
@@ -1702,29 +2616,72 @@ void showGameSelect(int x_offset) {
 
 void handleGameSelectSelect() {
   switch(menuSelection) {
-    case 0:
+    case 0: // Turbo Racing
+      menuSelection = 0; // Reset for submenu
+      changeState(STATE_RACING_MODE_SELECT);
+      break;
+    case 1:
       initSpaceInvaders();
       changeState(STATE_GAME_SPACE_INVADERS);
       break;
-    case 1:
+    case 2:
       initSideScroller();
       changeState(STATE_GAME_SIDE_SCROLLER);
       break;
-    case 2:
+    case 3:
       initPong();
       changeState(STATE_GAME_PONG);
       break;
-    case 3:
+    case 4:
       changeState(STATE_MAIN_MENU);
       break;
   }
+}
+
+// ========== RACING MODE SELECT ==========
+
+void showRacingModeSelect(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 20, 5);
+  display.print("SELECT MODE");
+
+  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
+
+  const char* modes[] = {
+    "Berkendara (Free)",
+    "Tantangan (Challenge)"
+  };
+
+  for (int i = 0; i < 2; i++) {
+    display.setCursor(x_offset + 10, 25 + i * 15);
+    if (i == menuSelection) {
+      display.print("> ");
+    } else {
+      display.print("  ");
+    }
+    display.print(modes[i]);
+  }
+
+  display.display();
+}
+
+void handleRacingModeSelect() {
+  if (menuSelection == 0) {
+      initRacing(RACING_MODE_FREE);
+  } else {
+      initRacing(RACING_MODE_CHALLENGE);
+  }
+  changeState(STATE_GAME_RACING);
 }
 
 // ========== WIFI FUNCTIONS ==========
 
 void showWiFiMenu(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 25, 2);
@@ -1818,7 +2775,7 @@ void scanWiFiNetworks() {
 
 void displayWiFiNetworks(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 5, 0);
@@ -1884,7 +2841,7 @@ void displayWiFiNetworks(int x_offset) {
 
 void showAPISelect(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
   
   display.setTextSize(1);
   display.setCursor(x_offset + 15, 5);
@@ -1952,7 +2909,8 @@ void showMainMenu(int x_offset) {
     {"Chat AI", ICON_CHAT},
     {"WiFi", ICON_WIFI},
     {"Games", ICON_GAME},
-    {"Video", ICON_VIDEO}
+    {"Video", ICON_VIDEO},
+    {"System", ICON_SYSTEM}
   };
   
   int numItems = sizeof(menuItems) / sizeof(MenuItem);
@@ -1986,10 +2944,7 @@ void showMainMenu(int x_offset) {
   }
 
   // Top and bottom status bar (fixed position)
-  drawBatteryIndicator();
-  if (WiFi.status() == WL_CONNECTED) {
-    drawWiFiSignalBars();
-  }
+  drawStatusBar();
   
   display.display();
 }
@@ -2014,6 +2969,10 @@ void handleMainMenuSelect() {
     case 3: // Video Player
       videoCurrentFrame = 0;
       changeState(STATE_VIDEO_PLAYER);
+      break;
+    case 4: // System Info
+      systemMenuSelection = 0;
+      changeState(STATE_SYSTEM_MENU);
       break;
   }
 }
@@ -2044,31 +3003,316 @@ void drawVideoPlayer() {
   }
 }
 
+void showSystemMenu(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 25, 2);
+  display.print("SYSTEM MENU");
+
+  drawIcon(x_offset + 10, 2, ICON_SYSTEM);
+
+  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
+
+  const char* items[] = {
+    "Performance",
+    "Network",
+    "Device Info",
+    "Power Mode",
+    "Clear AI Data",
+    "Show FPS: ",
+    "Benchmark I2C",
+    "Reboot",
+    "Back"
+  };
+
+  int itemCount = 9;
+  int itemHeight = 10;
+  int startY = 16;
+  int maxVisible = 4; // 64px height - 16px header = 48px / 10px = ~4 items
+
+  // Smooth scroll logic
+  float targetScroll = 0;
+  if (systemMenuSelection >= maxVisible) {
+      targetScroll = (systemMenuSelection - maxVisible + 1) * itemHeight;
+  } else {
+      targetScroll = 0;
+  }
+
+  // Simple easing
+  if (abs(systemMenuScrollY - targetScroll) > 0.5f) {
+      systemMenuScrollY += (targetScroll - systemMenuScrollY) * 0.3f;
+  } else {
+      systemMenuScrollY = targetScroll;
+  }
+
+  for (int i = 0; i < itemCount; i++) {
+    float y = startY + (i * itemHeight) - systemMenuScrollY;
+
+    // Only draw visible items (with some buffer)
+    if (y > 12 && y < SCREEN_HEIGHT) {
+        display.setCursor(x_offset + 5, y);
+
+        if (i == systemMenuSelection) {
+          // Inverted selection bar
+          display.fillRect(x_offset, y - 1, SCREEN_WIDTH, itemHeight, SSD1306_WHITE);
+          display.setTextColor(SSD1306_BLACK);
+          display.print("> ");
+        } else {
+          display.setTextColor(SSD1306_WHITE);
+          display.print("  ");
+        }
+
+        display.print(items[i]);
+        if (i == 5) {
+            display.print(showFPS ? "ON" : "OFF");
+        }
+    }
+  }
+
+  // Scrollbar indicator
+  if (itemCount > maxVisible) {
+      int barHeight = (SCREEN_HEIGHT - 12) * maxVisible / itemCount;
+      int barY = 12 + (systemMenuScrollY / ((itemCount - maxVisible) * itemHeight)) * (SCREEN_HEIGHT - 12 - barHeight);
+      // Clamp
+      if (barY < 12) barY = 12;
+      if (barY + barHeight > SCREEN_HEIGHT) barY = SCREEN_HEIGHT - barHeight;
+
+      display.fillRect(SCREEN_WIDTH - 2, barY, 2, barHeight, SSD1306_WHITE);
+  }
+
+  display.display();
+}
+
+void handleSystemMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: changeState(STATE_SYSTEM_PERF); break;
+    case 1: changeState(STATE_SYSTEM_NET); break;
+    case 2: changeState(STATE_SYSTEM_DEVICE); break;
+    case 3: changeState(STATE_SYSTEM_POWER); break;
+    case 4: clearChatHistory(); break;
+    case 5:
+      showFPS = !showFPS;
+      savePreferenceBool("showFPS", showFPS);
+      break;
+    case 6: changeState(STATE_SYSTEM_BENCHMARK); break;
+    case 7:
+      display.clearDisplay();
+      display.setCursor(30, 30);
+      display.print("Rebooting...");
+      display.display();
+      delay(500);
+      ESP.restart();
+      break;
+    case 8: changeState(STATE_MAIN_MENU); break;
+  }
+}
+
+void showSystemPerf(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 2, 16);
+  display.print("CPU: ");
+  display.print(temperatureRead(), 1);
+  display.print("C");
+
+  display.setCursor(x_offset + 64, 16);
+  display.print("FPS: ");
+  display.print(perfFPS);
+
+  display.setCursor(x_offset + 2, 26);
+  display.print("LPS: ");
+  display.print(perfLPS);
+
+  display.setCursor(x_offset + 2, 36);
+  display.print("RAM: ");
+  display.print(ESP.getFreeHeap() / 1024);
+  display.print("KB");
+
+  display.setCursor(x_offset + 64, 36);
+  display.print("/");
+  display.print(ESP.getHeapSize() / 1024);
+  display.print("KB");
+
+  display.setCursor(x_offset + 2, 46);
+  display.print("PSR: ");
+  if (psramFound()) {
+      display.print(ESP.getFreePsram() / 1024 / 1024);
+      display.print("MB");
+
+      display.setCursor(x_offset + 64, 46);
+      display.print("/");
+      display.print(ESP.getPsramSize() / 1024 / 1024);
+      display.print("MB");
+  } else {
+      display.print("N/A");
+  }
+
+  display.setCursor(x_offset + 2, 56);
+  display.print("Up: ");
+  unsigned long s = millis() / 1000;
+  int h = s / 3600;
+  int m = (s % 3600) / 60;
+  int sec = s % 60;
+
+  if(h<10) display.print("0");
+  display.print(h);
+  display.print(":");
+  if(m<10) display.print("0");
+  display.print(m);
+  display.print(":");
+  if(sec<10) display.print("0");
+  display.print(sec);
+
+  display.display();
+}
+
+void showSystemPower(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 30, 5);
+  display.print("POWER MODE");
+  display.drawLine(x_offset, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
+
+  const char* modes[] = {
+    "Saver (160 MHz)",
+    "Balanced (200 MHz)", // Note: 200 may fallback if not supported
+    "Perform (240 MHz)"
+  };
+
+  int freqs[] = {160, 200, 240};
+
+  for (int i = 0; i < 3; i++) {
+    int y = 25 + i * 15;
+
+    if (i == menuSelection) {
+        display.fillRect(x_offset + 5, y - 2, SCREEN_WIDTH - 10, 13, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+    } else {
+        display.setTextColor(SSD1306_WHITE);
+    }
+
+    display.setCursor(x_offset + 10, y);
+    display.print(modes[i]);
+
+    if (currentCpuFreq == freqs[i]) {
+       display.setCursor(x_offset + 110, y);
+       display.print("*");
+    }
+  }
+
+  display.display();
+}
+
+void showSystemNet(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+  display.setTextSize(1);
+  display.setCursor(x_offset + 25, 2);
+  display.print("NETWORK INFO");
+  display.drawLine(x_offset, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
+
+  if (WiFi.status() == WL_CONNECTED) {
+      display.setCursor(x_offset + 2, 16);
+      display.print("IP: ");
+      display.print(WiFi.localIP());
+
+      display.setCursor(x_offset + 2, 26);
+      display.print("GW: ");
+      display.print(WiFi.gatewayIP());
+
+      display.setCursor(x_offset + 2, 36);
+      display.print("MAC:");
+      display.print(WiFi.macAddress());
+
+      display.setCursor(x_offset + 2, 46);
+      display.print("SSID:");
+      String ssid = WiFi.SSID();
+      if(ssid.length() > 10) ssid = ssid.substring(0, 10) + "..";
+      display.print(ssid);
+
+      display.setCursor(x_offset + 2, 56);
+      display.print("RSSI:");
+      display.print(WiFi.RSSI());
+      display.print(" dBm");
+  } else {
+      display.setCursor(x_offset + 10, 30);
+      display.print("Not Connected");
+  }
+
+  display.display();
+}
+
+void showSystemDevice(int x_offset) {
+  display.clearDisplay();
+  drawStatusBar();
+  display.setTextSize(1);
+  display.setCursor(x_offset + 25, 2);
+  display.print("DEVICE INFO");
+  display.drawLine(x_offset, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
+
+  display.setCursor(x_offset + 2, 16);
+  display.print("Model: ");
+  display.print(ESP.getChipModel());
+
+  display.setCursor(x_offset + 2, 26);
+  display.print("Rev: ");
+  display.print(ESP.getChipRevision());
+
+  display.setCursor(x_offset + 2, 36);
+  display.print("Cores: ");
+  display.print(ESP.getChipCores());
+
+  display.setCursor(x_offset + 2, 46);
+  display.print("Freq: ");
+  display.print(ESP.getCpuFreqMHz());
+  display.print(" MHz");
+
+  display.setCursor(x_offset + 2, 56);
+  display.print("Flash: ");
+  display.print(ESP.getFlashChipSize() / 1024 / 1024);
+  display.print(" MB");
+
+  display.display();
+}
+
 // ========== UTILITY FUNCTIONS ==========
 
-void drawBatteryIndicator() {
-  int battX = SCREEN_WIDTH - 22;
-  int battY = 2;
+void drawStatusBar() {
+  // Draw WiFi Signal
+  if (WiFi.status() == WL_CONNECTED) {
+     drawWiFiSignalBars();
+  }
 
-  display.drawRect(battX, battY, 18, 8, SSD1306_WHITE);
-  display.fillRect(battX + 18, battY + 2, 2, 4, SSD1306_WHITE);
+  // Draw Time (NTP) - Only in Main Menu
+  if (currentState == STATE_MAIN_MENU && cachedTimeStr.length() > 0) {
+    display.setCursor(0, 2);
+    display.setTextSize(1);
+    display.print(cachedTimeStr);
+  }
 
-  int fill = map(batteryPercent, 0, 100, 0, 14);
-  if (fill > 0) {
-    display.fillRect(battX + 2, battY + 2, fill, 4, SSD1306_WHITE);
+  // Draw Realtime FPS Overlay
+  if (showFPS) {
+      display.setCursor(35, 2);
+      display.setTextSize(1);
+      display.print(perfFPS);
   }
 }
 
 void drawWiFiSignalBars() {
-  int rssi = WiFi.RSSI();
   int bars = 0;
 
-  if (rssi > -55) bars = 4;
-  else if (rssi > -65) bars = 3;
-  else if (rssi > -75) bars = 2;
-  else if (rssi > -85) bars = 1;
+  if (cachedRSSI > -55) bars = 4;
+  else if (cachedRSSI > -65) bars = 3;
+  else if (cachedRSSI > -75) bars = 2;
+  else if (cachedRSSI > -85) bars = 1;
 
-  int x = SCREEN_WIDTH - 35;
+  int x = SCREEN_WIDTH - 15;
   int y = 8;
 
   for (int i = 0; i < 4; i++) {
@@ -2133,7 +3377,7 @@ void showProgressBar(String title, int percent) {
 
 void showLoadingAnimation(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.setCursor(x_offset + 35, 25);
   display.print("Loading...");
@@ -2159,9 +3403,8 @@ void showLoadingAnimation(int x_offset) {
 
 void forgetNetwork() {
   WiFi.disconnect(true, true);
-  preferences.begin("wifi-creds", false);
-  preferences.clear();
-  preferences.end();
+  savePreferenceString("ssid", "");
+  savePreferenceString("password", "");
 
   showStatus("Network forgotten", 1500);
   scanWiFiNetworks();
@@ -2180,12 +3423,14 @@ void connectToWiFi(String ssid, String password) {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    preferences.begin("wifi-creds", false);
-    preferences.putString("ssid", ssid);
-    preferences.putString("password", password);
-    preferences.end();
+    savePreferenceString("ssid", ssid);
+    savePreferenceString("password", password);
 
     showStatus("Connected!", 1500);
+
+    // Sync time
+    configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
+
     changeState(STATE_MAIN_MENU);
   } else {
     showStatus("Failed!", 1500);
@@ -2217,7 +3462,7 @@ void toggleKeyboardMode() {
 
 void drawKeyboard(int x_offset) {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.drawRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, SSD1306_WHITE);
 
@@ -2338,6 +3583,21 @@ void handleUp() {
         menuSelection--;
       }
       break;
+    case STATE_RACING_MODE_SELECT:
+      if (menuSelection > 0) {
+        menuSelection--;
+      }
+      break;
+    case STATE_SYSTEM_POWER:
+      if (menuSelection > 0) {
+        menuSelection--;
+      }
+      break;
+    case STATE_SYSTEM_MENU:
+      if (systemMenuSelection > 0) {
+        systemMenuSelection--;
+      }
+      break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
@@ -2359,13 +3619,16 @@ void handleUp() {
     case STATE_GAME_SIDE_SCROLLER:
       // Handled in handleSideScrollerInput
       break;
+    case STATE_GAME_RACING:
+      // Handled in input loop for gas
+      break;
   }
 }
 
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      if (menuSelection < 3) {
+      if (menuSelection < 4) {
         menuSelection++;
         menuTargetScrollY = menuSelection * 22;
         menuTextScrollX = 0;
@@ -2386,8 +3649,23 @@ void handleDown() {
       }
       break;
     case STATE_GAME_SELECT:
-      if (menuSelection < 3) {
+      if (menuSelection < 4) { // Increased to 4 (5 items)
         menuSelection++;
+      }
+      break;
+    case STATE_RACING_MODE_SELECT:
+      if (menuSelection < 1) { // 2 items: 0 and 1
+        menuSelection++;
+      }
+      break;
+    case STATE_SYSTEM_POWER:
+      if (menuSelection < 2) {
+        menuSelection++;
+      }
+      break;
+    case STATE_SYSTEM_MENU:
+      if (systemMenuSelection < 8) {
+        systemMenuSelection++;
       }
       break;
     case STATE_API_SELECT:
@@ -2409,6 +3687,9 @@ void handleDown() {
     case STATE_GAME_SIDE_SCROLLER:
        // Handled in handleSideScrollerInput
       break;
+    case STATE_GAME_RACING:
+       // Brake handled in input loop
+       break;
   }
 }
 
@@ -2425,6 +3706,9 @@ void handleLeft() {
     case STATE_GAME_SIDE_SCROLLER:
       // Handled in handleSideScrollerInput
       break;
+    case STATE_GAME_RACING:
+      // Steer
+      break;
   }
 }
 
@@ -2440,6 +3724,9 @@ void handleRight() {
       break;
     case STATE_GAME_SIDE_SCROLLER:
        // Handled in handleSideScrollerInput
+      break;
+    case STATE_GAME_RACING:
+       // Steer
       break;
   }
 }
@@ -2468,6 +3755,40 @@ void handleSelect() {
       break;
     case STATE_GAME_SELECT:
       handleGameSelectSelect();
+      break;
+    case STATE_RACING_MODE_SELECT:
+      handleRacingModeSelect();
+      break;
+    case STATE_SYSTEM_MENU:
+      handleSystemMenuSelect();
+      break;
+    case STATE_SYSTEM_POWER:
+      {
+        int targetFreq = 240;
+        if (menuSelection == 0) targetFreq = 160;
+        else if (menuSelection == 1) targetFreq = 200;
+        else targetFreq = 240;
+
+        bool success = setCpuFrequencyMhz(targetFreq);
+        currentCpuFreq = getCpuFrequencyMhz(); // Get actual set freq
+
+        savePreferenceInt("cpu_freq", currentCpuFreq);
+
+        String msg = "CPU: " + String(currentCpuFreq) + " MHz";
+        showStatus(msg, 1000);
+        changeState(STATE_SYSTEM_MENU);
+      }
+      break;
+    case STATE_SYSTEM_BENCHMARK:
+      if (benchmarkDone) {
+          currentI2C = recommendedI2C;
+          Wire.setClock(currentI2C);
+
+          savePreferenceInt("i2c_freq", currentI2C);
+
+          showStatus("Saved!", 1000);
+          changeState(STATE_SYSTEM_MENU);
+      }
       break;
     case STATE_API_SELECT:
       handleAPISelectSelect();
@@ -2539,6 +3860,9 @@ void handleSelect() {
         }
       }
       break;
+    case STATE_GAME_RACING:
+       // Clutch logic handles shift
+       break;
   }
 }
 
@@ -2576,13 +3900,27 @@ void handleBackButton() {
     case STATE_GAME_PONG:
       changeState(STATE_GAME_SELECT);
       break;
+    case STATE_GAME_RACING:
+      changeState(STATE_RACING_MODE_SELECT);
+      break;
+    case STATE_RACING_MODE_SELECT:
+      changeState(STATE_GAME_SELECT);
+      break;
     case STATE_GAME_SELECT:
       changeState(STATE_MAIN_MENU);
       break;
 
     // Other simple cases
+    case STATE_SYSTEM_MENU:
     case STATE_VIDEO_PLAYER:
       changeState(STATE_MAIN_MENU);
+      break;
+    case STATE_SYSTEM_PERF:
+    case STATE_SYSTEM_NET:
+    case STATE_SYSTEM_DEVICE:
+    case STATE_SYSTEM_BENCHMARK:
+    case STATE_SYSTEM_POWER:
+      changeState(STATE_SYSTEM_MENU);
       break;
 
     default:
@@ -2594,7 +3932,7 @@ void handleBackButton() {
 
 void displayResponse() {
   display.clearDisplay();
-  drawBatteryIndicator();
+  drawStatusBar();
 
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -2668,7 +4006,14 @@ void sendToGemini() {
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(15000);
 
-  String escapedInput = userInput;
+  // Construct prompt with history
+  String fullPrompt = "";
+  if (chatHistory.length() > 0) {
+    fullPrompt += "History:\n" + chatHistory + "\n";
+  }
+  fullPrompt += "User: " + userInput;
+
+  String escapedInput = fullPrompt;
   escapedInput.replace("\\", "\\\\");
   escapedInput.replace("\"", "\\\"");
   escapedInput.replace("\n", "\\n");
@@ -2680,16 +4025,17 @@ void sendToGemini() {
   if (httpResponseCode == 200) {
     String response = http.getString();
 
-    StaticJsonDocument<16384> responseDoc;
+    JsonDocument responseDoc;
     DeserializationError error = deserializeJson(responseDoc, response);
 
-    if (!error && responseDoc.containsKey("candidates")) {
+    if (!error && !responseDoc["candidates"].isNull()) {
       JsonArray candidates = responseDoc["candidates"];
       if (candidates.size() > 0) {
         JsonObject content = candidates[0]["content"];
         JsonArray parts = content["parts"];
         if (parts.size() > 0) {
           aiResponse = parts[0]["text"].as<String>();
+          appendToChatHistory(userInput, aiResponse);
           ledSuccess();
         } else {
           aiResponse = "Error: Empty response";
