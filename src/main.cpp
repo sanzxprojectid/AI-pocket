@@ -1048,6 +1048,7 @@ void setup() {
   if (pinLockEnabled) {
       inputPin = "";
       stateAfterUnlock = STATE_MAIN_MENU; // After boot unlock, always go to main menu
+      currentKeyboardMode = MODE_NUMBERS;
       currentState = STATE_PIN_LOCK;
   } else {
       showMainMenu();
@@ -1229,6 +1230,7 @@ void loop() {
             if (pinLockEnabled) {
                 inputPin = "";
                 stateAfterUnlock = stateBeforeScreenSaver;
+                currentKeyboardMode = MODE_NUMBERS;
                 currentState = STATE_PIN_LOCK;
             } else {
                 changeState(stateBeforeScreenSaver);
@@ -3873,6 +3875,8 @@ void handleUp() {
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+    case STATE_PIN_LOCK:
+    case STATE_CHANGE_PIN:
       cursorY--;
       if (cursorY < 0) cursorY = 2; // Wrap to bottom
       break;
