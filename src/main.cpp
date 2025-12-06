@@ -76,12 +76,12 @@ enum AppState {
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Button pins
-#define BTN_UP 10
-#define BTN_DOWN 11
-#define BTN_LEFT 9
-#define BTN_RIGHT 13
-#define BTN_SELECT 14
-#define BTN_BACK 12
+#define BTN_UP 4
+#define BTN_DOWN 6
+#define BTN_LEFT 5
+#define BTN_RIGHT 7
+#define BTN_SELECT 15
+#define BTN_BACK 16
 
 // TTP223 Capacitive Touch Button pins
 #define TOUCH_LEFT 1
@@ -1049,6 +1049,7 @@ void setup() {
       inputPin = "";
       stateAfterUnlock = STATE_MAIN_MENU; // After boot unlock, always go to main menu
       currentState = STATE_PIN_LOCK;
+      currentKeyboardMode = MODE_NUMBERS;
   } else {
       showMainMenu();
   }
@@ -1230,6 +1231,7 @@ void loop() {
                 inputPin = "";
                 stateAfterUnlock = stateBeforeScreenSaver;
                 currentState = STATE_PIN_LOCK;
+                currentKeyboardMode = MODE_NUMBERS;
             } else {
                 changeState(stateBeforeScreenSaver);
             }
@@ -4151,6 +4153,11 @@ void handleSelect() {
 
 void handleBackButton() {
   switch(currentState) {
+    // Lock Security
+    case STATE_PIN_LOCK:
+      // Do nothing, prevent bypass
+      break;
+
     // WiFi Flow
     case STATE_PASSWORD_INPUT:
       changeState(STATE_WIFI_SCAN);
