@@ -60,6 +60,9 @@ enum AppState {
   STATE_SYSTEM_DEVICE,
   STATE_SYSTEM_BENCHMARK,
   STATE_SYSTEM_POWER,
+  STATE_SYSTEM_SUB_STATUS,
+  STATE_SYSTEM_SUB_SETTINGS,
+  STATE_SYSTEM_SUB_TOOLS,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -743,6 +746,18 @@ const unsigned char ICON_SYSTEM[] PROGMEM = {
   0x3C, 0x7E, 0xDB, 0xFF, 0xC3, 0xFF, 0x7E, 0x3C
 };
 
+const unsigned char ICON_SYS_STATUS[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0x18, 0x18, 0x7E, 0x3C, 0x18
+};
+
+const unsigned char ICON_SYS_SETTINGS[] PROGMEM = {
+  0x3C, 0x42, 0x99, 0xBD, 0xBD, 0x99, 0x42, 0x3C
+};
+
+const unsigned char ICON_SYS_TOOLS[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0xFF, 0x5A, 0x24, 0x18, 0x00
+};
+
 // Racing Car Sprites (16x16)
 const unsigned char BITMAP_CAR_STRAIGHT[] PROGMEM = {
   0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
@@ -785,6 +800,9 @@ void showWiFiMenu(int x_offset = 0);
 void showAPISelect(int x_offset = 0);
 void showGameSelect(int x_offset = 0);
 void showSystemMenu(int x_offset = 0);
+void showSystemStatusMenu(int x_offset = 0);
+void showSystemSettingsMenu(int x_offset = 0);
+void showSystemToolsMenu(int x_offset = 0);
 void showSystemPerf(int x_offset = 0);
 void showSystemNet(int x_offset = 0);
 void showSystemDevice(int x_offset = 0);
@@ -831,6 +849,9 @@ void refreshCurrentScreen() {
     case STATE_SYSTEM_DEVICE: showSystemDevice(x_offset); break;
     case STATE_SYSTEM_BENCHMARK: showSystemBenchmark(x_offset); break;
     case STATE_SYSTEM_POWER: showSystemPower(x_offset); break;
+    case STATE_SYSTEM_SUB_STATUS: showSystemStatusMenu(x_offset); break;
+    case STATE_SYSTEM_SUB_SETTINGS: showSystemSettingsMenu(x_offset); break;
+    case STATE_SYSTEM_SUB_TOOLS: showSystemToolsMenu(x_offset); break;
     case STATE_PIN_LOCK: showPinLock(x_offset); break;
     case STATE_CHANGE_PIN: showChangePin(x_offset); break;
     case STATE_SCREEN_SAVER: showScreenSaver(); break;
@@ -3308,36 +3329,27 @@ void drawVideoPlayer() {
   }
 }
 
-void showSystemMenu(int x_offset) {
+void setScreenBrightness(int val) {
+  screenBrightness = constrain(val, 0, 255);
+  display.ssd1306_command(SSD1306_SETCONTRAST);
+  display.ssd1306_command(screenBrightness);
+}
+
+void drawSystemMenuGeneric(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount) {
   display.clearDisplay();
   drawStatusBar();
 
   display.setTextSize(1);
   display.setCursor(x_offset + 25, 2);
-  display.print("SYSTEM MENU");
+  display.print(title);
 
-  drawIcon(x_offset + 10, 2, ICON_SYSTEM);
+  drawIcon(x_offset + 10, 2, icon);
 
   display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
 
-  const char* items[] = {
-    "Performance",
-    "Network",
-    "Device Info",
-    "Power Mode",
-    "PIN Lock: ",
-    "Change PIN",
-    "Clear AI Data",
-    "Show FPS: ",
-    "Benchmark I2C",
-    "Reboot",
-    "Back"
-  };
-
-  int itemCount = 11;
   int itemHeight = 10;
   int startY = 16;
-  int maxVisible = 4; // 64px height - 16px header = 48px / 10px = ~4 items
+  int maxVisible = 4;
 
   // Smooth scroll logic
   float targetScroll = 0;
@@ -3372,11 +3384,16 @@ void showSystemMenu(int x_offset) {
         }
 
         display.print(items[i]);
-        if (i == 4) {
-             display.print(pinLockEnabled ? "ON" : "OFF");
-        }
-        if (i == 7) {
-            display.print(showFPS ? "ON" : "OFF");
+
+        // Dynamic values for Settings Menu
+        if (strcmp(title, "SETTINGS") == 0) {
+           if (i == 1) { // Brightness
+              if (screenBrightness < 50) display.print(" [Low]");
+              else if (screenBrightness < 150) display.print(" [Med]");
+              else display.print(" [High]");
+           }
+           if (i == 2) display.print(showFPS ? " [ON]" : " [OFF]");
+           if (i == 3) display.print(pinLockEnabled ? " [ON]" : " [OFF]");
         }
     }
   }
@@ -3385,42 +3402,109 @@ void showSystemMenu(int x_offset) {
   if (itemCount > maxVisible) {
       int barHeight = (SCREEN_HEIGHT - 12) * maxVisible / itemCount;
       int barY = 12 + (systemMenuScrollY / ((itemCount - maxVisible) * itemHeight)) * (SCREEN_HEIGHT - 12 - barHeight);
-      // Clamp
       if (barY < 12) barY = 12;
       if (barY + barHeight > SCREEN_HEIGHT) barY = SCREEN_HEIGHT - barHeight;
-
       display.fillRect(SCREEN_WIDTH - 2, barY, 2, barHeight, SSD1306_WHITE);
   }
 
   display.display();
 }
 
+void showSystemMenu(int x_offset) {
+  const char* items[] = {
+    "Device Status",
+    "Settings & UI",
+    "Tools & Utils",
+    "Back"
+  };
+  drawSystemMenuGeneric(x_offset, "SYSTEM MENU", ICON_SYSTEM, items, 4);
+}
+
+void showSystemStatusMenu(int x_offset) {
+  const char* items[] = {
+    "Performance",
+    "Network Info",
+    "Device & Storage",
+    "Back"
+  };
+  drawSystemMenuGeneric(x_offset, "STATUS INFO", ICON_SYS_STATUS, items, 4);
+}
+
+void showSystemSettingsMenu(int x_offset) {
+  const char* items[] = {
+    "Power Mode",
+    "Brightness",
+    "Show FPS",
+    "PIN Lock",
+    "Change PIN",
+    "Back"
+  };
+  drawSystemMenuGeneric(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 6);
+}
+
+void showSystemToolsMenu(int x_offset) {
+  const char* items[] = {
+    "Clear AI Data",
+    "I2C Benchmark",
+    "Reboot System",
+    "Back"
+  };
+  drawSystemMenuGeneric(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 4);
+}
+
 void handleSystemMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_STATUS); break;
+    case 1: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_SETTINGS); break;
+    case 2: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_TOOLS); break;
+    case 3: changeState(STATE_MAIN_MENU); break;
+  }
+}
+
+void handleSystemStatusMenuSelect() {
   switch(systemMenuSelection) {
     case 0: changeState(STATE_SYSTEM_PERF); break;
     case 1: changeState(STATE_SYSTEM_NET); break;
     case 2: changeState(STATE_SYSTEM_DEVICE); break;
-    case 3: changeState(STATE_SYSTEM_POWER); break;
-    case 4:
-        pinLockEnabled = !pinLockEnabled;
-        savePreferenceBool("pin_lock", pinLockEnabled);
-        if(pinLockEnabled && pinCode == "") {
-             pinCode = "1234";
-             savePreferenceString("pin_code", pinCode);
-        }
-        break;
-    case 5:
-        inputPin = "";
-        currentKeyboardMode = MODE_NUMBERS;
-        changeState(STATE_CHANGE_PIN);
-        break;
-    case 6: clearChatHistory(); break;
-    case 7:
+    case 3: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 0; break;
+  }
+}
+
+void handleSystemSettingsMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: changeState(STATE_SYSTEM_POWER); break;
+    case 1:
+      // Toggle Brightness
+      if (screenBrightness >= 200) setScreenBrightness(10);
+      else if (screenBrightness >= 100) setScreenBrightness(255);
+      else setScreenBrightness(128);
+      break;
+    case 2:
       showFPS = !showFPS;
       savePreferenceBool("showFPS", showFPS);
       break;
-    case 8: changeState(STATE_SYSTEM_BENCHMARK); break;
-    case 9:
+    case 3:
+      pinLockEnabled = !pinLockEnabled;
+      savePreferenceBool("pin_lock", pinLockEnabled);
+      if(pinLockEnabled && pinCode == "") {
+           pinCode = "1234";
+           savePreferenceString("pin_code", pinCode);
+      }
+      break;
+    case 4:
+      inputPin = "";
+      currentKeyboardMode = MODE_NUMBERS;
+      changeState(STATE_CHANGE_PIN);
+      break;
+    case 5: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 1; break;
+  }
+}
+
+void handleSystemToolsMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: clearChatHistory(); break;
+    case 1: changeState(STATE_SYSTEM_BENCHMARK); break;
+    case 2:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -3428,7 +3512,7 @@ void handleSystemMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 10: changeState(STATE_MAIN_MENU); break;
+    case 3: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -3597,9 +3681,15 @@ void showSystemDevice(int x_offset) {
   display.print(" MHz");
 
   display.setCursor(x_offset + 2, 56);
-  display.print("Flash: ");
-  display.print(ESP.getFlashChipSize() / 1024 / 1024);
-  display.print(" MB");
+  display.print("Storage: ");
+  if (LittleFS.totalBytes() > 0) {
+      display.print(LittleFS.usedBytes() / 1024);
+      display.print("/");
+      display.print(LittleFS.totalBytes() / 1024);
+      display.print("KB");
+  } else {
+      display.print("N/A");
+  }
 
   display.display();
 }
@@ -3921,6 +4011,15 @@ void handleUp() {
         systemMenuSelection--;
       }
       break;
+    case STATE_SYSTEM_SUB_STATUS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
@@ -3992,9 +4091,18 @@ void handleDown() {
       }
       break;
     case STATE_SYSTEM_MENU:
-      if (systemMenuSelection < 10) {
+      if (systemMenuSelection < 3) { // 3 items + back
         systemMenuSelection++;
       }
+      break;
+    case STATE_SYSTEM_SUB_STATUS:
+      if (systemMenuSelection < 3) systemMenuSelection++;
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      if (systemMenuSelection < 5) systemMenuSelection++;
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      if (systemMenuSelection < 3) systemMenuSelection++;
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
@@ -4104,6 +4212,15 @@ void handleSelect() {
       break;
     case STATE_SYSTEM_MENU:
       handleSystemMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_STATUS:
+      handleSystemStatusMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      handleSystemSettingsMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      handleSystemToolsMenuSelect();
       break;
     case STATE_SYSTEM_POWER:
       {
@@ -4267,12 +4384,21 @@ void handleBackButton() {
     case STATE_VIDEO_PLAYER:
       changeState(STATE_MAIN_MENU);
       break;
+    case STATE_SYSTEM_SUB_STATUS:
+    case STATE_SYSTEM_SUB_SETTINGS:
+    case STATE_SYSTEM_SUB_TOOLS:
+      changeState(STATE_SYSTEM_MENU);
+      break;
     case STATE_SYSTEM_PERF:
     case STATE_SYSTEM_NET:
     case STATE_SYSTEM_DEVICE:
+      changeState(STATE_SYSTEM_SUB_STATUS);
+      break;
     case STATE_SYSTEM_BENCHMARK:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
     case STATE_SYSTEM_POWER:
-      changeState(STATE_SYSTEM_MENU);
+      changeState(STATE_SYSTEM_SUB_SETTINGS);
       break;
 
     default:
