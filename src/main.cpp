@@ -253,6 +253,158 @@ String inputPin = "";
 AppState stateBeforeScreenSaver = STATE_MAIN_MENU;
 AppState stateAfterUnlock = STATE_MAIN_MENU;
 
+int screensaverMode = 0; // 0 = Bacteria, 1 = Matrix
+
+// ========== ARTIFICIAL LIFE ENGINE ==========
+#define LIFE_W 64   // Grid Width (128/2)
+#define LIFE_H 32   // Grid Height (64/2)
+#define LIFE_SCALE 2
+
+uint8_t lifeGrid[LIFE_W][LIFE_H];
+uint8_t lifeNext[LIFE_W][LIFE_H];
+unsigned long lastLifeUpdate = 0;
+
+void initLife() {
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      lifeGrid[x][y] = random(0, 2);
+    }
+  }
+}
+
+int countNeighbors(int x, int y) {
+  int sum = 0;
+  for (int i = -1; i < 2; i++) {
+    for (int j = -1; j < 2; j++) {
+      int col = (x + i + LIFE_W) % LIFE_W;
+      int row = (y + j + LIFE_H) % LIFE_H;
+      sum += lifeGrid[col][row];
+    }
+  }
+  sum -= lifeGrid[x][y];
+  return sum;
+}
+
+void updateLifeEngine() {
+  if (millis() - lastLifeUpdate < 100) return;
+  lastLifeUpdate = millis();
+
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      int state = lifeGrid[x][y];
+      int neighbors = countNeighbors(x, y);
+
+      if (state == 0 && neighbors == 3) {
+        lifeNext[x][y] = 1;
+      } else if (state == 1 && (neighbors < 2 || neighbors > 3)) {
+        lifeNext[x][y] = 0;
+      } else {
+        lifeNext[x][y] = state;
+      }
+    }
+  }
+
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      lifeGrid[x][y] = lifeNext[x][y];
+    }
+  }
+}
+
+void drawLife() {
+  display.clearDisplay();
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      if (lifeGrid[x][y] == 1) {
+        display.fillRect(x * LIFE_SCALE, y * LIFE_SCALE, LIFE_SCALE, LIFE_SCALE, SSD1306_WHITE);
+      }
+    }
+  }
+  display.display();
+}
+
+// ========== MATRIX RAIN EFFECT ==========
+#define MATRIX_COLS 22
+#define MATRIX_MIN_SPEED 1
+#define MATRIX_MAX_SPEED 3
+
+struct MatrixDrop {
+  float y;
+  float speed;
+  int length;
+  char chars[10];
+};
+
+MatrixDrop matrixDrops[MATRIX_COLS];
+
+void initMatrix() {
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    matrixDrops[i].y = random(-100, 0);
+    matrixDrops[i].speed = random(10, 30) / 10.0;
+    matrixDrops[i].length = random(4, 8);
+
+    for (int j = 0; j < 10; j++) {
+      matrixDrops[i].chars[j] = (char)random(33, 126);
+    }
+  }
+}
+
+void updateMatrix() {
+  // Simple throttle to avoid running too fast if loop is fast
+  static unsigned long lastMatrixUpdate = 0;
+  if (millis() - lastMatrixUpdate < 33) return; // ~30 FPS
+  lastMatrixUpdate = millis();
+
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    matrixDrops[i].y += matrixDrops[i].speed;
+
+    if (matrixDrops[i].y > SCREEN_HEIGHT + (matrixDrops[i].length * 8)) {
+      matrixDrops[i].y = random(-50, 0);
+      matrixDrops[i].speed = random(15, 40) / 10.0;
+
+      for (int j = 0; j < 10; j++) {
+        matrixDrops[i].chars[j] = (char)random(33, 126);
+      }
+    }
+
+    if (random(0, 20) == 0) {
+       int charIdx = random(0, matrixDrops[i].length);
+       matrixDrops[i].chars[charIdx] = (char)random(33, 126);
+    }
+  }
+}
+
+void drawMatrix() {
+  display.clearDisplay();
+  display.setTextSize(1);
+
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    int x = i * 6;
+
+    for (int j = 0; j < matrixDrops[i].length; j++) {
+      int charY = (int)matrixDrops[i].y - (j * 8);
+
+      if (charY > -8 && charY < SCREEN_HEIGHT) {
+
+        if (j == 0) {
+          display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+        }
+        else {
+          if ((i + j) % 2 == 0) {
+             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+          } else {
+             continue;
+          }
+        }
+
+        display.setCursor(x, charY);
+        display.print(matrixDrops[i].chars[j]);
+      }
+    }
+  }
+  display.display();
+}
+
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
 void drawKeyboard(int x_offset = 0);
@@ -361,35 +513,13 @@ void showChangePin(int x_offset) {
 }
 
 void showScreenSaver() {
-  display.clearDisplay();
-
-  // Bounce effect for time
-  static int x = 10, y = 20;
-  static int dx = 1, dy = 1;
-
-  // Only move every few frames to be less jittery
-  if (millis() % 50 == 0) {
-      x += dx;
-      y += dy;
-      if (x <= 0 || x >= SCREEN_WIDTH - 60) dx *= -1;
-      if (y <= 10 || y >= SCREEN_HEIGHT - 20) dy *= -1;
-  }
-
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  if (cachedTimeStr.length() > 0) {
-      display.setCursor(x, y);
-      display.print(cachedTimeStr);
+  if (screensaverMode == 0) {
+      updateLifeEngine();
+      drawLife();
   } else {
-      display.setCursor(x, y);
-      display.print("00:00");
+      updateMatrix();
+      drawMatrix();
   }
-
-  display.setTextSize(1);
-  display.setCursor(10, 55);
-  display.print("Press any key...");
-
-  display.display();
 }
 
 void drawPinKeyboard(int x_offset) {
@@ -891,6 +1021,12 @@ void changeState(AppState newState) {
     transitionState = TRANSITION_OUT;
     transitionProgress = 0.0f;
     previousState = currentState; // Store where we came from
+
+    // Init Screen Saver
+    if (newState == STATE_SCREEN_SAVER) {
+        if (screensaverMode == 0) initLife();
+        else initMatrix();
+    }
   }
 }
 
@@ -1100,6 +1236,7 @@ void setup() {
 
   pinLockEnabled = loadPreferenceBool("pin_lock", false);
   pinCode = loadPreferenceString("pin_code", "1234");
+  screensaverMode = loadPreferenceInt("saver_mode", 0);
 
   setCpuFrequencyMhz(currentCpuFreq);
 
@@ -3394,6 +3531,7 @@ void drawSystemMenuGeneric(int x_offset, const char* title, const unsigned char*
            }
            if (i == 2) display.print(showFPS ? " [ON]" : " [OFF]");
            if (i == 3) display.print(pinLockEnabled ? " [ON]" : " [OFF]");
+           if (i == 5) display.print(screensaverMode == 0 ? " [Bac]" : " [Mtx]");
         }
     }
   }
@@ -3437,9 +3575,10 @@ void showSystemSettingsMenu(int x_offset) {
     "Show FPS",
     "PIN Lock",
     "Change PIN",
+    "Saver",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 6);
+  drawSystemMenuGeneric(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 7);
 }
 
 void showSystemToolsMenu(int x_offset) {
@@ -3496,7 +3635,11 @@ void handleSystemSettingsMenuSelect() {
       currentKeyboardMode = MODE_NUMBERS;
       changeState(STATE_CHANGE_PIN);
       break;
-    case 5: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 1; break;
+    case 5:
+      screensaverMode = !screensaverMode;
+      savePreferenceInt("saver_mode", screensaverMode);
+      break;
+    case 6: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 1; break;
   }
 }
 
@@ -4099,7 +4242,7 @@ void handleDown() {
       if (systemMenuSelection < 3) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_SETTINGS:
-      if (systemMenuSelection < 5) systemMenuSelection++;
+      if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
       if (systemMenuSelection < 3) systemMenuSelection++;
