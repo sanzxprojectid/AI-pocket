@@ -4385,9 +4385,16 @@ void handleBackButton() {
       changeState(STATE_MAIN_MENU);
       break;
     case STATE_SYSTEM_SUB_STATUS:
+      changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 0;
+      break;
     case STATE_SYSTEM_SUB_SETTINGS:
+      changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 1;
+      break;
     case STATE_SYSTEM_SUB_TOOLS:
       changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 2;
       break;
     case STATE_SYSTEM_PERF:
     case STATE_SYSTEM_NET:
