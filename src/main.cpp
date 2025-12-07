@@ -309,13 +309,14 @@ void showPinLock(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Adjusted layout for 4-row keypad
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 20);
+  display.setCursor(x_offset + 35, 2); // Higher up
   display.print("ENTER PIN");
 
-  display.drawRect(x_offset + 34, 35, 60, 14, SSD1306_WHITE);
+  display.drawRect(x_offset + 34, 12, 60, 14, SSD1306_WHITE);
 
-  display.setCursor(x_offset + 38, 38);
+  display.setCursor(x_offset + 38, 15);
   for(int i=0; i<4; i++) {
       if (i < inputPin.length()) {
           display.print("*");
@@ -327,20 +328,21 @@ void showPinLock(int x_offset) {
       display.print(" ");
   }
 
-  drawKeyboard(x_offset);
+  drawPinKeyboard(x_offset);
 }
 
 void showChangePin(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Adjusted layout for 4-row keypad
   display.setTextSize(1);
-  display.setCursor(x_offset + 15, 20);
+  display.setCursor(x_offset + 30, 2); // Higher up
   display.print("SET NEW PIN");
 
-  display.drawRect(x_offset + 34, 35, 60, 14, SSD1306_WHITE);
+  display.drawRect(x_offset + 34, 12, 60, 14, SSD1306_WHITE);
 
-  display.setCursor(x_offset + 38, 38);
+  display.setCursor(x_offset + 38, 15);
   for(int i=0; i<4; i++) {
       if (i < inputPin.length()) {
           display.print(inputPin.charAt(i));
@@ -352,7 +354,7 @@ void showChangePin(int x_offset) {
       display.print(" ");
   }
 
-  drawKeyboard(x_offset);
+  drawPinKeyboard(x_offset);
 }
 
 void showScreenSaver() {
@@ -387,8 +389,40 @@ void showScreenSaver() {
   display.display();
 }
 
+void drawPinKeyboard(int x_offset) {
+  // Numeric keypad specific layout
+  int startX = x_offset + 19; // Centered roughly (128 - 90)/2
+  int startY = 28; // Start below the input box (ends at 26)
+  int keyW = 28;
+  int keyH = 8; // Reduce height to fit (4*8 + 3*1 = 35px) -> 28+35 = 63
+  int gap = 1;
+
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 3; c++) {
+      int x = startX + c * (keyW + gap);
+      int y = startY + r * (keyH + gap);
+
+      const char* keyLabel = keyboardPin[r][c];
+
+      if (r == cursorY && c == cursorX) {
+        display.fillRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.drawRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      // Center text in key
+      int textX = x + (keyW - (strlen(keyLabel) * 6)) / 2;
+      display.setCursor(textX, y + 1);
+      display.print(keyLabel);
+    }
+  }
+  display.setTextColor(SSD1306_WHITE);
+}
+
 void handlePinLockKeyPress() {
-  const char* key = getCurrentKey();
+  const char* key = keyboardPin[cursorY][cursorX];
 
   if (strcmp(key, "OK") == 0) {
       if (inputPin == pinCode) {
@@ -400,15 +434,13 @@ void handlePinLockKeyPress() {
       }
   } else if (strcmp(key, "<") == 0) {
       if (inputPin.length() > 0) inputPin.remove(inputPin.length()-1);
-  } else if (strcmp(key, "#") == 0) {
-      toggleKeyboardMode();
   } else {
       if (inputPin.length() < 4) inputPin += key;
   }
 }
 
 void handleChangePinKeyPress() {
-  const char* key = getCurrentKey();
+  const char* key = keyboardPin[cursorY][cursorX];
 
   if (strcmp(key, "OK") == 0) {
       if (inputPin.length() == 4) {
@@ -420,8 +452,6 @@ void handleChangePinKeyPress() {
       }
   } else if (strcmp(key, "<") == 0) {
       if (inputPin.length() > 0) inputPin.remove(inputPin.length()-1);
-  } else if (strcmp(key, "#") == 0) {
-      toggleKeyboardMode();
   } else {
       if (inputPin.length() < 4) inputPin += key;
   }
@@ -466,6 +496,13 @@ const char* keyboardNumbers[3][10] = {
   {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
   {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"},
   {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
+};
+
+const char* keyboardPin[4][3] = {
+  {"1", "2", "3"},
+  {"4", "5", "6"},
+  {"7", "8", "9"},
+  {"<", "0", "OK"}
 };
 
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
@@ -3891,10 +3928,13 @@ void handleUp() {
       break;
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+      cursorY--;
+      if (cursorY < 0) cursorY = 2; // Wrap to bottom
+      break;
     case STATE_PIN_LOCK:
     case STATE_CHANGE_PIN:
       cursorY--;
-      if (cursorY < 0) cursorY = 2; // Wrap to bottom
+      if (cursorY < 0) cursorY = 3; // Wrap to bottom (4 rows)
       break;
     case STATE_CHAT_RESPONSE:
       if (scrollOffset > 0) {
@@ -3956,11 +3996,6 @@ void handleDown() {
         systemMenuSelection++;
       }
       break;
-    case STATE_PIN_LOCK:
-    case STATE_CHANGE_PIN:
-       cursorY++;
-       if (cursorY > 2) cursorY = 0;
-       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
         menuSelection++;
@@ -3971,6 +4006,11 @@ void handleDown() {
       cursorY++;
       if (cursorY > 2) cursorY = 0; // Wrap to top
       break;
+    case STATE_PIN_LOCK:
+    case STATE_CHANGE_PIN:
+       cursorY++;
+       if (cursorY > 3) cursorY = 0; // Wrap to top (4 rows)
+       break;
     case STATE_CHAT_RESPONSE:
       scrollOffset += 10;
       break;
@@ -3990,10 +4030,13 @@ void handleLeft() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+      cursorX--;
+      if (cursorX < 0) cursorX = 9; // Wrap to right
+      break;
     case STATE_PIN_LOCK:
     case STATE_CHANGE_PIN:
       cursorX--;
-      if (cursorX < 0) cursorX = 9; // Wrap to right
+      if (cursorX < 0) cursorX = 2; // Wrap to right (3 cols)
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -4011,10 +4054,13 @@ void handleRight() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+      cursorX++;
+      if (cursorX > 9) cursorX = 0; // Wrap to left
+      break;
     case STATE_PIN_LOCK:
     case STATE_CHANGE_PIN:
       cursorX++;
-      if (cursorX > 9) cursorX = 0; // Wrap to left
+      if (cursorX > 2) cursorX = 0; // Wrap to left (3 cols)
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -4214,6 +4260,9 @@ void handleBackButton() {
       break;
 
     // Other simple cases
+    case STATE_PIN_LOCK:
+      // Prevent exit (Security)
+      break;
     case STATE_SYSTEM_MENU:
     case STATE_VIDEO_PLAYER:
       changeState(STATE_MAIN_MENU);
