@@ -1003,17 +1003,22 @@ void sendBeacon(const char* ssid) {
 }
 
 void initSpammer() {
-  WiFi.disconnect();
+  WiFi.mode(WIFI_STA); // Ensure Station mode is active for packet injection
+  WiFi.disconnect();   // Disconnect from any AP
+  delay(100);          // Wait for mode switch stabilization
   esp_wifi_set_promiscuous(true);
 }
 
 void updateSpammer() {
+  // Prevent WDT Reset by yielding
+  delay(1);
+
   spamChannel = (spamChannel % 13) + 1;
   esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
 
   for(int i=0; i<TOTAL_FAKE_SSIDS; i++) {
     sendBeacon(fakeSSIDs[i]);
-    delay(1);
+    delay(10); // Increased delay to prevent congestion/crash
   }
 }
 
@@ -1661,28 +1666,7 @@ void loop() {
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
     
-    // Check any button for activity to reset screen saver timer
-    if (digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW ||
-        digitalRead(BTN_LEFT) == LOW || digitalRead(BTN_RIGHT) == LOW ||
-        digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_BACK) == LOW ||
-        digitalRead(TOUCH_LEFT) == HIGH || digitalRead(TOUCH_RIGHT) == HIGH) {
-
-        lastInputTime = currentMillis;
-
-        if (currentState == STATE_SCREEN_SAVER) {
-            if (pinLockEnabled) {
-                inputPin = "";
-                stateAfterUnlock = stateBeforeScreenSaver;
-                currentKeyboardMode = MODE_NUMBERS;
-                currentState = STATE_PIN_LOCK;
-            } else {
-                changeState(stateBeforeScreenSaver);
-            }
-            lastDebounce = currentMillis;
-            return; // Consume input to exit screen saver
-        }
-    }
-
+    // Check buttons
     if (digitalRead(BTN_UP) == LOW) {
       handleUp();
       buttonPressed = true;
@@ -1728,7 +1712,21 @@ void loop() {
     
     if (buttonPressed) {
       lastDebounce = currentMillis;
-      ledQuickFlash();
+      lastInputTime = currentMillis; // Reset screensaver only on valid input
+
+      // Exit screensaver if active
+      if (currentState == STATE_SCREEN_SAVER) {
+          if (pinLockEnabled) {
+              inputPin = "";
+              stateAfterUnlock = stateBeforeScreenSaver;
+              currentKeyboardMode = MODE_NUMBERS;
+              currentState = STATE_PIN_LOCK;
+          } else {
+              changeState(stateBeforeScreenSaver);
+          }
+      } else {
+          ledQuickFlash();
+      }
     }
   }
 }
@@ -3689,57 +3687,57 @@ void setScreenBrightness(int val) {
   display.ssd1306_command(screenBrightness);
 }
 
-void drawSystemMenuGeneric(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount) {
+void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Header
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
+  display.setCursor(x_offset + 25, 3);
   display.print(title);
+  if(icon) drawIcon(x_offset + 10, 2, icon);
+  display.drawLine(x_offset, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
 
-  drawIcon(x_offset + 10, 2, icon);
-
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-
-  int itemHeight = 10;
+  int itemHeight = 12; // Taller for better look
   int startY = 16;
   int maxVisible = 4;
 
   // Smooth scroll logic
   float targetScroll = 0;
-  if (systemMenuSelection >= maxVisible) {
-      targetScroll = (systemMenuSelection - maxVisible + 1) * itemHeight;
+  if (selection >= maxVisible) {
+      targetScroll = (selection - maxVisible + 1) * itemHeight;
   } else {
       targetScroll = 0;
   }
 
   // Simple easing
-  if (abs(systemMenuScrollY - targetScroll) > 0.5f) {
-      systemMenuScrollY += (targetScroll - systemMenuScrollY) * 0.3f;
+  if (abs(*scrollY - targetScroll) > 0.5f) {
+      *scrollY += (targetScroll - *scrollY) * 0.3f;
   } else {
-      systemMenuScrollY = targetScroll;
+      *scrollY = targetScroll;
   }
 
   for (int i = 0; i < itemCount; i++) {
-    float y = startY + (i * itemHeight) - systemMenuScrollY;
+    float y = startY + (i * itemHeight) - *scrollY;
 
-    // Only draw visible items (with some buffer)
-    if (y > 12 && y < SCREEN_HEIGHT) {
-        display.setCursor(x_offset + 5, y);
-
-        if (i == systemMenuSelection) {
-          // Inverted selection bar
-          display.fillRect(x_offset, y - 1, SCREEN_WIDTH, itemHeight, SSD1306_WHITE);
+    // Only draw visible items
+    if (y > 13 && y < SCREEN_HEIGHT) {
+        if (i == selection) {
+          // Modern Inverted Rounded Rect Selection
+          display.fillRoundRect(x_offset + 2, y, SCREEN_WIDTH - 6, itemHeight - 1, 3, SSD1306_WHITE);
           display.setTextColor(SSD1306_BLACK);
+          display.setCursor(x_offset + 6, y + 2);
           display.print("> ");
         } else {
           display.setTextColor(SSD1306_WHITE);
+          display.setCursor(x_offset + 6, y + 2);
           display.print("  ");
         }
 
         display.print(items[i]);
 
-        // Dynamic values for Settings Menu
+        // Add dynamic value indicators for specific menus (Hack: check title)
+        // Ideally this would be a callback or struct, but for now this works.
         if (strcmp(title, "SETTINGS") == 0) {
            if (i == 1) { // Brightness
               if (screenBrightness < 50) display.print(" [Low]");
@@ -3755,11 +3753,17 @@ void drawSystemMenuGeneric(int x_offset, const char* title, const unsigned char*
 
   // Scrollbar indicator
   if (itemCount > maxVisible) {
-      int barHeight = (SCREEN_HEIGHT - 12) * maxVisible / itemCount;
-      int barY = 12 + (systemMenuScrollY / ((itemCount - maxVisible) * itemHeight)) * (SCREEN_HEIGHT - 12 - barHeight);
-      if (barY < 12) barY = 12;
+      int barHeight = (SCREEN_HEIGHT - 13) * maxVisible / itemCount;
+      int scrollRange = (itemCount - maxVisible) * itemHeight;
+      int barRange = (SCREEN_HEIGHT - 13 - barHeight);
+
+      int barY = 13 + (*scrollY / scrollRange) * barRange;
+
+      // Clamp
+      if (barY < 13) barY = 13;
       if (barY + barHeight > SCREEN_HEIGHT) barY = SCREEN_HEIGHT - barHeight;
-      display.fillRect(SCREEN_WIDTH - 2, barY, 2, barHeight, SSD1306_WHITE);
+
+      display.fillRect(SCREEN_WIDTH - 3, barY, 2, barHeight, SSD1306_WHITE);
   }
 
   display.display();
@@ -3772,7 +3776,7 @@ void showSystemMenu(int x_offset) {
     "Tools & Utils",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "SYSTEM MENU", ICON_SYSTEM, items, 4);
+  drawGenericListMenu(x_offset, "SYSTEM MENU", ICON_SYSTEM, items, 4, systemMenuSelection, &systemMenuScrollY);
 }
 
 void showSystemStatusMenu(int x_offset) {
@@ -3782,7 +3786,7 @@ void showSystemStatusMenu(int x_offset) {
     "Device & Storage",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "STATUS INFO", ICON_SYS_STATUS, items, 4);
+  drawGenericListMenu(x_offset, "STATUS INFO", ICON_SYS_STATUS, items, 4, systemMenuSelection, &systemMenuScrollY);
 }
 
 void showSystemSettingsMenu(int x_offset) {
@@ -3795,7 +3799,7 @@ void showSystemSettingsMenu(int x_offset) {
     "Saver",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 7);
+  drawGenericListMenu(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 7, systemMenuSelection, &systemMenuScrollY);
 }
 
 void showSystemToolsMenu(int x_offset) {
@@ -3807,7 +3811,7 @@ void showSystemToolsMenu(int x_offset) {
     "Reboot System",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 6);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 6, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
