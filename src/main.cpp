@@ -98,6 +98,59 @@ const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/m
 // Centralized Preferences Manager
 Preferences preferences;
 
+// ================================================================
+// GLOBAL VARIABLES (Moved to top to fix scope issues)
+// ================================================================
+
+// Screen Brightness
+int screenBrightness = 255;
+
+// Keyboard & Input Globals
+int cursorX = 0, cursorY = 0;
+String userInput = "";
+String passwordInput = "";
+String selectedSSID = "";
+String aiResponse = "";
+int scrollOffset = 0;
+int menuSelection = 0;
+unsigned long lastDebounce = 0;
+const unsigned long debounceDelay = 150;
+
+// Keyboard layouts
+const char* keyboardLower[3][10] = {
+  {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
+  {"a", "s", "d", "f", "g", "h", "j", "k", "l", "<"},
+  {"#", "z", "x", "c", "v", "b", "n", "m", " ", "OK"}
+};
+
+const char* keyboardUpper[3][10] = {
+  {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
+  {"A", "S", "D", "F", "G", "H", "J", "K", "L", "<"},
+  {"#", "Z", "X", "C", "V", "B", "N", "M", ".", "OK"}
+};
+
+const char* keyboardNumbers[3][10] = {
+  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+  {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"},
+  {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
+};
+
+const char* keyboardPin[4][3] = {
+  {"1", "2", "3"},
+  {"4", "5", "6"},
+  {"7", "8", "9"},
+  {"<", "0", "OK"}
+};
+
+enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
+KeyboardMode currentKeyboardMode = MODE_LOWER;
+
+enum KeyboardContext {
+  CONTEXT_CHAT,
+  CONTEXT_WIFI_PASSWORD
+};
+KeyboardContext keyboardContext = CONTEXT_CHAT;
+
 void savePreferenceString(const char* key, String value) {
   preferences.begin("app-config", false); // RW
   preferences.putString(key, value);
@@ -658,41 +711,6 @@ void updateStatusBarData() {
   }
 }
 
-// Keyboard layouts
-const char* keyboardLower[3][10] = {
-  {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
-  {"a", "s", "d", "f", "g", "h", "j", "k", "l", "<"},
-  {"#", "z", "x", "c", "v", "b", "n", "m", " ", "OK"}
-};
-
-const char* keyboardUpper[3][10] = {
-  {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
-  {"A", "S", "D", "F", "G", "H", "J", "K", "L", "<"},
-  {"#", "Z", "X", "C", "V", "B", "N", "M", ".", "OK"}
-};
-
-const char* keyboardNumbers[3][10] = {
-  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
-  {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"},
-  {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
-};
-
-const char* keyboardPin[4][3] = {
-  {"1", "2", "3"},
-  {"4", "5", "6"},
-  {"7", "8", "9"},
-  {"<", "0", "OK"}
-};
-
-enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
-KeyboardMode currentKeyboardMode = MODE_LOWER;
-
-enum KeyboardContext {
-  CONTEXT_CHAT,
-  CONTEXT_WIFI_PASSWORD
-};
-KeyboardContext keyboardContext = CONTEXT_CHAT;
-
 // Space Invaders Game State
 #define MAX_ENEMIES 15
 #define MAX_BULLETS 5
@@ -883,16 +901,6 @@ float menuTargetScrollY = 0;
 int mainMenuSelection = 0;
 float menuTextScrollX = 0;
 unsigned long lastMenuTextScrollTime = 0;
-
-int cursorX = 0, cursorY = 0;
-String userInput = "";
-String passwordInput = "";
-String selectedSSID = "";
-String aiResponse = "";
-int scrollOffset = 0;
-int menuSelection = 0;
-unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 150;
 
 unsigned long lastUiUpdate = 0;
 const int uiFrameDelay = 1000 / TARGET_FPS;
