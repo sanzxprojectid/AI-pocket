@@ -10,6 +10,7 @@
 #include <LittleFS.h>
 #include <time.h>
 #include <esp_sntp.h>
+#include <esp_wifi.h>
 #include <Fonts/Org_01.h>
 #include "secrets.h"
 
@@ -63,6 +64,8 @@ enum AppState {
   STATE_SYSTEM_SUB_STATUS,
   STATE_SYSTEM_SUB_SETTINGS,
   STATE_SYSTEM_SUB_TOOLS,
+  STATE_TOOL_SPAMMER,
+  STATE_TOOL_DETECTOR,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -404,6 +407,49 @@ void drawMatrix() {
   }
   display.display();
 }
+
+// --- SSID SPAMMER CONFIG ---
+const char* fakeSSIDs[] = {
+  "HP LU KENA VIRUS",
+  "JANGAN MALING WIFI",
+  "HACKED BY ESP32",
+  "RUMAH HANTU 666",
+  "FBI SURVEILLANCE #1",
+  "Awas Ada Copet",
+  "MAKAN GRATIS DISINI",
+  "SYSTEM ERROR 404",
+  "ESP32 ATTACK MODE",
+  "SKIBIDI TOILET",
+  "NETWORK_DESTROYER",
+  "JANGAN_KONEK_SINI"
+};
+const int TOTAL_FAKE_SSIDS = 12;
+uint8_t spamChannel = 1;
+
+// Raw 802.11 Beacon Frame Packet
+uint8_t packet[128] = {
+  0x80, 0x00, // Frame Control (Beacon)
+  0x00, 0x00, // Duration
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Dest Addr (Broadcast)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Src Addr (Placeholder)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // BSSID (Placeholder)
+  0x00, 0x00, // Seq-ctl
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Timestamp
+  0x64, 0x00, // Beacon Interval
+  0x31, 0x04  // Capabilities
+};
+
+// --- DEAUTH DETECTOR CONFIG ---
+int deauthCount = 0;
+unsigned long lastDeauthTime = 0;
+bool underAttack = false;
+
+// Graphing Globals
+#define GRAPH_WIDTH 64
+int deauthHistory[GRAPH_WIDTH];
+int graphHead = 0;
+unsigned long lastGraphUpdate = 0;
+int lastDeauthCount = 0;
 
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
@@ -924,6 +970,177 @@ int videoCurrentFrame = 0;
 unsigned long lastVideoFrameTime = 0;
 const int videoFrameDelay = 70; // 25 FPS
 
+// ---------------- SSID SPAMMER LOGIC ----------------
+void sendBeacon(const char* ssid) {
+  uint8_t randomMac[6];
+  for(int i=0; i<6; i++) randomMac[i] = random(0, 256);
+  randomMac[0] = 0xC0;
+
+  memcpy(&packet[10], randomMac, 6);
+  memcpy(&packet[16], randomMac, 6);
+
+  int ssidLen = strlen(ssid);
+  packet[36] = 0x00;
+  packet[37] = ssidLen;
+  memcpy(&packet[38], ssid, ssidLen);
+
+  int pos = 38 + ssidLen;
+  packet[pos++] = 0x01; packet[pos++] = 0x04;
+  packet[pos++] = 0x82; packet[pos++] = 0x84; packet[pos++] = 0x8b; packet[pos++] = 0x96;
+  packet[pos++] = 0x03; packet[pos++] = 0x01; packet[pos++] = spamChannel;
+
+  esp_wifi_80211_tx(WIFI_IF_STA, packet, pos, true);
+}
+
+void initSpammer() {
+  WiFi.disconnect();
+  esp_wifi_set_promiscuous(true);
+}
+
+void updateSpammer() {
+  spamChannel = (spamChannel % 13) + 1;
+  esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+
+  for(int i=0; i<TOTAL_FAKE_SSIDS; i++) {
+    sendBeacon(fakeSSIDs[i]);
+    delay(1);
+  }
+}
+
+void drawSpammer() {
+  display.clearDisplay();
+
+  if(random(0,10) == 0) display.invertDisplay(true);
+  else display.invertDisplay(false);
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(25, 2);
+  display.print("BEACON FLOOD");
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.println("Broadcasting:");
+
+  display.setCursor(5, 35);
+  display.print("> ");
+  display.print(fakeSSIDs[random(0, TOTAL_FAKE_SSIDS)]);
+
+  display.drawLine(0, 48, SCREEN_WIDTH, 48, SSD1306_WHITE);
+  display.setCursor(0, 52);
+  display.print("CH: "); display.print(spamChannel);
+  display.print(" PKT: "); display.print(millis()/50);
+
+  display.display();
+}
+
+// ---------------- DEAUTH DETECTOR LOGIC ----------------
+void deauth_sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type) {
+  wifi_promiscuous_pkt_t *p = (wifi_promiscuous_pkt_t*)buf;
+  uint8_t *frame = p->payload;
+
+  uint8_t type_bits = (frame[0] >> 2) & 0x03;
+  uint8_t subtype_bits = (frame[0] >> 4) & 0xF;
+
+  if (type_bits == 0 && (subtype_bits == 0xC || subtype_bits == 0xA)) {
+    deauthCount++;
+    lastDeauthTime = millis();
+    underAttack = true;
+  }
+}
+
+void initDetector() {
+  WiFi.disconnect();
+  deauthCount = 0;
+  underAttack = false;
+
+  for(int i=0; i<GRAPH_WIDTH; i++) deauthHistory[i] = 0;
+  graphHead = 0;
+  lastGraphUpdate = millis();
+  lastDeauthCount = 0;
+
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_promiscuous_rx_cb(&deauth_sniffer_callback);
+}
+
+void updateDetector() {
+  if (millis() - lastDeauthTime > 2000) {
+    underAttack = false;
+  }
+
+  if (millis() % 250 == 0) {
+    int ch = (millis() / 250) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+
+  if (millis() - lastGraphUpdate >= 1000) {
+      int currentTotal = deauthCount;
+      int rate = currentTotal - lastDeauthCount;
+      lastDeauthCount = currentTotal;
+      lastGraphUpdate = millis();
+
+      deauthHistory[graphHead] = rate;
+      graphHead = (graphHead + 1) % GRAPH_WIDTH;
+  }
+}
+
+void drawDetector() {
+  display.clearDisplay();
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(20, 2);
+  display.print("WIFI GUARD");
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Draw Graph
+  int graphBaseY = 63;
+  int maxVal = 10;
+  for(int i=0; i<GRAPH_WIDTH; i++) if(deauthHistory[i] > maxVal) maxVal = deauthHistory[i];
+
+  for (int i = 0; i < GRAPH_WIDTH; i++) {
+      int idx = (graphHead + i) % GRAPH_WIDTH;
+      int val = deauthHistory[idx];
+
+      int h = map(val, 0, maxVal, 0, 30);
+      if (h > 0) {
+        display.drawLine(i * 2, graphBaseY, i * 2, graphBaseY - h, SSD1306_WHITE);
+      }
+  }
+
+  if (underAttack) {
+    display.setTextSize(1);
+    display.setCursor(0, 15);
+    display.print("ATTACK DETECTED!");
+    display.setCursor(0, 25);
+    display.print("Total: "); display.print(deauthCount);
+
+    if ((millis() / 200) % 2 == 0) triggerNeoPixelEffect(pixels.Color(255, 0, 0), 50);
+  } else {
+    display.setCursor(0, 15);
+    display.print("Status: Safe");
+    display.setCursor(0, 25);
+    display.print("Scanning...");
+  }
+
+  display.display();
+}
+
+void stopWifiTools() {
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_set_promiscuous_rx_cb(NULL);
+  display.invertDisplay(false);
+
+  // Try to reconnect if credentials exist
+  String savedSSID = loadPreferenceString("ssid", "");
+  String savedPassword = loadPreferenceString("password", "");
+  if (savedSSID.length() > 0) {
+      WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+  }
+}
+
 // Forward declarations
 void showMainMenu(int x_offset = 0);
 void showWiFiMenu(int x_offset = 0);
@@ -989,6 +1206,8 @@ void refreshCurrentScreen() {
     case STATE_KEYBOARD: drawKeyboard(x_offset); break;
     case STATE_PASSWORD_INPUT: drawKeyboard(x_offset); break;
     case STATE_CHAT_RESPONSE: displayResponse(); break;
+    case STATE_TOOL_SPAMMER: drawSpammer(); break;
+    case STATE_TOOL_DETECTOR: drawDetector(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -1368,6 +1587,9 @@ void loop() {
         break;
     }
   }
+
+  if (currentState == STATE_TOOL_SPAMMER) updateSpammer();
+  if (currentState == STATE_TOOL_DETECTOR) updateDetector();
 
   if (currentState == STATE_VIDEO_PLAYER) {
     drawVideoPlayer();
@@ -3585,10 +3807,12 @@ void showSystemToolsMenu(int x_offset) {
   const char* items[] = {
     "Clear AI Data",
     "I2C Benchmark",
+    "SSID Spammer",
+    "Deauth Detect",
     "Reboot System",
     "Back"
   };
-  drawSystemMenuGeneric(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 4);
+  drawSystemMenuGeneric(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 6);
 }
 
 void handleSystemMenuSelect() {
@@ -3648,6 +3872,14 @@ void handleSystemToolsMenuSelect() {
     case 0: clearChatHistory(); break;
     case 1: changeState(STATE_SYSTEM_BENCHMARK); break;
     case 2:
+      initSpammer();
+      changeState(STATE_TOOL_SPAMMER);
+      break;
+    case 3:
+      initDetector();
+      changeState(STATE_TOOL_DETECTOR);
+      break;
+    case 4:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -3655,7 +3887,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 3: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 5: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -4245,7 +4477,7 @@ void handleDown() {
       if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
-      if (systemMenuSelection < 3) systemMenuSelection++;
+      if (systemMenuSelection < 5) systemMenuSelection++;
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
@@ -4549,6 +4781,11 @@ void handleBackButton() {
       break;
     case STATE_SYSTEM_POWER:
       changeState(STATE_SYSTEM_SUB_SETTINGS);
+      break;
+    case STATE_TOOL_SPAMMER:
+    case STATE_TOOL_DETECTOR:
+      stopWifiTools();
+      changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
 
     default:
