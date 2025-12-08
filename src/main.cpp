@@ -626,8 +626,8 @@ void drawPinKeyboard(int x_offset) {
   int startX = x_offset + 19; // Centered roughly (128 - 90)/2
   int startY = 28; // Start below the input box (ends at 26)
   int keyW = 28;
-  int keyH = 8; // Reduce height to fit (4*8 + 3*1 = 35px) -> 28+35 = 63
-  int gap = 1;
+  int keyH = 9; // Slightly taller for better look
+  int gap = 2;  // More spacing
 
   for (int r = 0; r < 4; r++) {
     for (int c = 0; c < 3; c++) {
@@ -637,15 +637,17 @@ void drawPinKeyboard(int x_offset) {
       const char* keyLabel = keyboardPin[r][c];
 
       if (r == cursorY && c == cursorX) {
-        display.fillRect(x, y, keyW, keyH, SSD1306_WHITE);
+        // Selected: Filled Rounded Rect
+        display.fillRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_BLACK);
       } else {
-        display.drawRect(x, y, keyW, keyH, SSD1306_WHITE);
+        // Normal: Outline Rounded Rect
+        display.drawRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_WHITE);
       }
 
       // Center text in key
-      int textX = x + (keyW - (strlen(keyLabel) * 6)) / 2;
+      int textX = x + (keyW - (strlen(keyLabel) * 6)) / 2 + 1;
       display.setCursor(textX, y + 1);
       display.print(keyLabel);
     }
@@ -3274,17 +3276,6 @@ void handleRacingInput() {
 // ========== GAME SELECT ==========
 
 void showGameSelect(int x_offset) {
-  display.clearDisplay();
-  drawStatusBar();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("SELECT GAME");
-  
-  drawIcon(x_offset + 10, 2, ICON_GAME);
-  
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
   const char* games[] = {
     "Turbo Racing",
     "Neon Invaders",
@@ -3292,18 +3283,8 @@ void showGameSelect(int x_offset) {
     "Vector Pong",
     "Back"
   };
-  
-  for (int i = 0; i < 5; i++) {
-    display.setCursor(x_offset + 10, 18 + i * 9);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(games[i]);
-  }
-  
-  display.display();
+  static float gameScrollY = 0;
+  drawGenericListMenu(x_offset, "SELECT GAME", ICON_GAME, games, 5, menuSelection, &gameScrollY);
 }
 
 void handleGameSelectSelect() {
@@ -3333,31 +3314,12 @@ void handleGameSelectSelect() {
 // ========== RACING MODE SELECT ==========
 
 void showRacingModeSelect(int x_offset) {
-  display.clearDisplay();
-  drawStatusBar();
-
-  display.setTextSize(1);
-  display.setCursor(x_offset + 20, 5);
-  display.print("SELECT MODE");
-
-  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
-
   const char* modes[] = {
-    "Berkendara (Free)",
-    "Tantangan (Challenge)"
+    "Free Drive",
+    "Challenge Mode"
   };
-
-  for (int i = 0; i < 2; i++) {
-    display.setCursor(x_offset + 10, 25 + i * 15);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(modes[i]);
-  }
-
-  display.display();
+  static float racingScrollY = 0;
+  drawGenericListMenu(x_offset, "RACING MODE", ICON_GAME, modes, 2, menuSelection, &racingScrollY);
 }
 
 void handleRacingModeSelect() {
@@ -3376,33 +3338,45 @@ void showWiFiMenu(int x_offset) {
   drawStatusBar();
   
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("WiFi MENU");
+  display.setCursor(x_offset + 25, 3);
+  display.print("WiFi MANAGER");
   
   drawIcon(x_offset + 10, 2, ICON_WIFI);
   
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(x_offset + 0, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
+
+  // Status Box
+  display.drawRoundRect(x_offset + 2, 16, SCREEN_WIDTH - 4, 18, 3, SSD1306_WHITE);
+  display.setCursor(x_offset + 6, 21);
   
-  display.setCursor(x_offset + 5, 16);
   if (WiFi.status() == WL_CONNECTED) {
-    display.print("Connected:");
-    display.setCursor(5, 24);
     String ssid = WiFi.SSID();
-    if (ssid.length() > 18) {
-      ssid = ssid.substring(0, 18) + "..";
-    }
+    if (ssid.length() > 16) ssid = ssid.substring(0, 16) + "..";
     display.print(ssid);
+    // RSSI Bar in box
+    int rssi = WiFi.RSSI();
+    int bars = map(rssi, -100, -50, 1, 4);
+    bars = constrain(bars, 1, 4);
+    for(int b=0; b<bars; b++) display.fillRect(x_offset + 115 + (b*3), 28 - (b*2), 2, (b*2)+2, SSD1306_WHITE);
   } else {
-    display.print("Not connected");
+    display.print("Not Connected");
   }
   
   const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
   
+  int startY = 38;
+  int itemHeight = 12; // Same as generic
+
   for (int i = 0; i < 3; i++) {
-    display.setCursor(5, 36 + i * 9);
+    int y = startY + (i * itemHeight);
     if (i == menuSelection) {
+      display.fillRoundRect(x_offset + 2, y, SCREEN_WIDTH - 6, itemHeight - 1, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(x_offset + 6, y + 2);
       display.print("> ");
     } else {
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(x_offset + 6, y + 2);
       display.print("  ");
     }
     display.print(menuItems[i]);
@@ -3536,36 +3510,36 @@ void showAPISelect(int x_offset) {
   drawStatusBar();
   
   display.setTextSize(1);
-  display.setCursor(x_offset + 15, 5);
-  display.print("SELECT GEMINI API");
+  display.setCursor(x_offset + 25, 3);
+  display.print("API SELECTION");
+  drawIcon(x_offset + 10, 2, ICON_SYS_SETTINGS);
+  display.drawLine(x_offset, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
   
-  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
+  const char* items[] = {"Gemini API Key #1", "Gemini API Key #2"};
   
-  int y1 = 25;
-  if (menuSelection == 0) {
-    display.fillRect(5, y1 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(10, y1);
-  display.print("1. Gemini API #1");
-  if (selectedAPIKey == 1) {
-    display.setCursor(100, y1);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
+  int itemHeight = 16; // Taller
+  int startY = 20;
   
-  int y2 = 42;
-  if (menuSelection == 1) {
-    display.fillRect(5, y2 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
+  for (int i = 0; i < 2; i++) {
+    int y = startY + (i * itemHeight);
+
+    if (i == menuSelection) {
+      display.fillRoundRect(x_offset + 5, y, SCREEN_WIDTH - 10, 14, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.drawRoundRect(x_offset + 5, y, SCREEN_WIDTH - 10, 14, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_WHITE);
+    }
+
+    display.setCursor(x_offset + 10, y + 3);
+    display.print(items[i]);
+
+    // Checkmark
+    if (selectedAPIKey == (i + 1)) {
+        display.setCursor(x_offset + 110, y + 3);
+        display.print("*");
+    }
   }
-  display.setCursor(10, y2);
-  display.print("2. Gemini API #2");
-  if (selectedAPIKey == 2) {
-    display.setCursor(100, y2);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
   
   display.display();
 }
@@ -3609,26 +3583,41 @@ void showMainMenu(int x_offset) {
   int numItems = sizeof(menuItems) / sizeof(MenuItem);
   int screenCenterY = SCREEN_HEIGHT / 2;
   
+  // Custom Modern Card Carousel
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 22) - menuScrollY;
+    float itemY = screenCenterY + (i * 24) - menuScrollY; // Spacing 24
     float distance = abs(itemY - screenCenterY);
     
-    // Simple easing function for scaling
-    float scale = 1.0 - (distance / (SCREEN_HEIGHT / 2.0));
-    scale = max(0.5f, scale); // Min scale
-
-    if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
-      int itemX = x_offset + 20 + (distance / 2.5);
-
+    if (itemY > -24 && itemY < SCREEN_HEIGHT + 24) {
       if (i == menuSelection) {
-        // Highlighted item
-        display.drawRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 6, SSD1306_WHITE);
-        drawIcon(x_offset + 12, screenCenterY - 4, menuItems[i].icon);
+        // Selected Item (Big Card)
+        int cardY = screenCenterY - 12;
+        // Shadow
+        display.fillRoundRect(x_offset + 6, cardY + 2, SCREEN_WIDTH - 12, 24, 6, SSD1306_WHITE);
+        // Main Box Inverted
+        display.fillRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_BLACK);
+        display.drawRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_WHITE);
+
+        // Icon
+        drawIcon(x_offset + 12, cardY + 8, menuItems[i].icon);
+
+        // Text
+        display.setTextColor(SSD1306_WHITE);
         display.setTextSize(2);
-        display.setCursor(x_offset + 30, screenCenterY - 7);
+        display.setCursor(x_offset + 30, cardY + 5);
         display.print(menuItems[i].text);
+
+        // Arrows
+        display.setTextSize(1);
+        if(i > 0) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY - 8); display.print("^"); }
+        if(i < numItems -1) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY + 26); display.print("v"); }
+
       } else {
-        // Other items
+        // Other items (Dimmed/Smaller)
+        float scale = max(0.5f, 1.0f - (distance / 100.0f));
+        int itemX = x_offset + 25;
+
+        display.setTextColor(SSD1306_WHITE);
         display.setTextSize(1);
         display.setCursor(itemX, itemY - 3);
         display.print(menuItems[i].text);
@@ -3636,9 +3625,7 @@ void showMainMenu(int x_offset) {
     }
   }
 
-  // Top and bottom status bar (fixed position)
   drawStatusBar();
-  
   display.display();
 }
 
@@ -4148,23 +4135,29 @@ void showStatus(String message, int delayMs) {
 
 void showProgressBar(String title, int percent) {
   display.clearDisplay();
+  drawStatusBar();
+
+  // Center Title
   display.setTextSize(1);
-  display.setCursor(0, 0);
+  int titleW = title.length() * 6;
+  display.setCursor((SCREEN_WIDTH - titleW) / 2, 18);
   display.print(title);
 
-  int barX = 10;
-  int barY = 30;
-  int barW = SCREEN_WIDTH - 20;
-  int barH = 10;
+  int barX = 14;
+  int barY = 32;
+  int barW = SCREEN_WIDTH - 28;
+  int barH = 8;
 
-  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
+  // Modern thin rounded bar
+  display.drawRoundRect(barX, barY, barW, barH, 4, SSD1306_WHITE);
 
   int fillW = map(percent, 0, 100, 0, barW - 4);
   if (fillW > 0) {
-    display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+    display.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 2, SSD1306_WHITE);
   }
 
-  display.setCursor(SCREEN_WIDTH / 2 - 10, barY + 15);
+  // Percentage below
+  display.setCursor(SCREEN_WIDTH / 2 - 6, barY + 12);
   display.print(percent);
   display.print("%");
 
@@ -4260,7 +4253,8 @@ void drawKeyboard(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
-  display.drawRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, SSD1306_WHITE);
+  // Input Box
+  display.drawRoundRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, 4, SSD1306_WHITE);
 
   display.setCursor(x_offset + 5, 5);
   String displayText = "";
@@ -4278,12 +4272,12 @@ void drawKeyboard(int x_offset) {
 
   int startY = 20;
   int keyW = 11;
-  int keyH = 10;
+  int keyH = 11;
   int gap = 1;
 
   for (int r = 0; r < 3; r++) {
     for (int c = 0; c < 10; c++) {
-      int x = 2 + c * (keyW + gap);
+      int x = 3 + c * (keyW + gap); // Shift slightly right
       int y = startY + r * (keyH + gap);
 
       const char* keyLabel;
@@ -4296,21 +4290,28 @@ void drawKeyboard(int x_offset) {
       }
 
       if (r == cursorY && c == cursorX) {
-        display.fillRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.fillRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_BLACK);
       } else {
-        display.drawRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.drawRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_WHITE);
       }
 
-      display.setCursor(x + 3, y + 1);
+      // Center char
+      int tX = x + 3;
+      if(strlen(keyLabel) > 1) tX = x + 1; // Adjust for "OK" or "<"
+
+      display.setCursor(tX, y + 2);
       display.print(keyLabel);
     }
   }
 
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(2, 56);
-  display.print("SEL:Type #:Mode");
+  display.setTextSize(1);
+  display.setCursor(4, 56);
+  display.print(currentKeyboardMode == MODE_LOWER ? "[abc]" : (currentKeyboardMode == MODE_UPPER ? "[ABC]" : "[123]"));
+  display.setCursor(40, 56);
+  display.print("SEL:Enter #:Mode");
 
   display.display();
 }
