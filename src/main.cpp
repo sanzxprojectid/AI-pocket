@@ -467,11 +467,13 @@ void drawMatrix() {
 typedef struct {
   int16_t fctl;
   int16_t duration;
-  uint8_t da[6];
-  uint8_t sa[6];
+  uint8_t dest[6];
+  uint8_t src[6];
   uint8_t bssid[6];
   int16_t seqctl;
 } __attribute__((packed)) mac_hdr_t;
+
+void scanWiFiNetworks();
 
 typedef struct {
   mac_hdr_t hdr;
@@ -503,7 +505,7 @@ wifi_promiscuous_filter_t filt = {
     .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT
 };
 
-extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) { return 0; }
+// extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) { return 0; }
 esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
 
 // --- SSID SPAMMER CONFIG ---
@@ -552,9 +554,12 @@ int lastDeauthCount = 0;
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
 void drawKeyboard(int x_offset = 0);
+void drawPinKeyboard(int x_offset = 0);
 void changeState(AppState newState);
 void toggleKeyboardMode();
 const char* getCurrentKey();
+void ledQuickFlash();
+void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY);
 
 // Chat History
 String chatHistory = "";
