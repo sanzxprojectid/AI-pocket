@@ -1495,6 +1495,7 @@ void setup() {
       stateAfterUnlock = STATE_MAIN_MENU; // After boot unlock, always go to main menu
       currentKeyboardMode = MODE_NUMBERS;
       currentState = STATE_PIN_LOCK;
+      showPinLock(0); // Ensure keyboard is drawn immediately
   } else {
       showMainMenu();
   }
