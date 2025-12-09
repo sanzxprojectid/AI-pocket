@@ -10,6 +10,7 @@
 #include <LittleFS.h>
 #include <time.h>
 #include <esp_sntp.h>
+#include <esp_wifi.h>
 #include <Fonts/Org_01.h>
 #include "secrets.h"
 
@@ -60,6 +61,11 @@ enum AppState {
   STATE_SYSTEM_DEVICE,
   STATE_SYSTEM_BENCHMARK,
   STATE_SYSTEM_POWER,
+  STATE_SYSTEM_SUB_STATUS,
+  STATE_SYSTEM_SUB_SETTINGS,
+  STATE_SYSTEM_SUB_TOOLS,
+  STATE_TOOL_SPAMMER,
+  STATE_TOOL_DETECTOR,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -91,6 +97,59 @@ const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/m
 
 // Centralized Preferences Manager
 Preferences preferences;
+
+// ================================================================
+// GLOBAL VARIABLES (Moved to top to fix scope issues)
+// ================================================================
+
+// Screen Brightness
+int screenBrightness = 255;
+
+// Keyboard & Input Globals
+int cursorX = 0, cursorY = 0;
+String userInput = "";
+String passwordInput = "";
+String selectedSSID = "";
+String aiResponse = "";
+int scrollOffset = 0;
+int menuSelection = 0;
+unsigned long lastDebounce = 0;
+const unsigned long debounceDelay = 150;
+
+// Keyboard layouts
+const char* keyboardLower[3][10] = {
+  {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
+  {"a", "s", "d", "f", "g", "h", "j", "k", "l", "<"},
+  {"#", "z", "x", "c", "v", "b", "n", "m", " ", "OK"}
+};
+
+const char* keyboardUpper[3][10] = {
+  {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
+  {"A", "S", "D", "F", "G", "H", "J", "K", "L", "<"},
+  {"#", "Z", "X", "C", "V", "B", "N", "M", ".", "OK"}
+};
+
+const char* keyboardNumbers[3][10] = {
+  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+  {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"},
+  {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
+};
+
+const char* keyboardPin[4][3] = {
+  {"1", "2", "3"},
+  {"4", "5", "6"},
+  {"7", "8", "9"},
+  {"<", "0", "OK"}
+};
+
+enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
+KeyboardMode currentKeyboardMode = MODE_LOWER;
+
+enum KeyboardContext {
+  CONTEXT_CHAT,
+  CONTEXT_WIFI_PASSWORD
+};
+KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 void savePreferenceString(const char* key, String value) {
   preferences.begin("app-config", false); // RW
@@ -250,6 +309,201 @@ String inputPin = "";
 AppState stateBeforeScreenSaver = STATE_MAIN_MENU;
 AppState stateAfterUnlock = STATE_MAIN_MENU;
 
+int screensaverMode = 0; // 0 = Bacteria, 1 = Matrix
+
+// ========== ARTIFICIAL LIFE ENGINE ==========
+#define LIFE_W 64   // Grid Width (128/2)
+#define LIFE_H 32   // Grid Height (64/2)
+#define LIFE_SCALE 2
+
+uint8_t lifeGrid[LIFE_W][LIFE_H];
+uint8_t lifeNext[LIFE_W][LIFE_H];
+unsigned long lastLifeUpdate = 0;
+
+void initLife() {
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      lifeGrid[x][y] = random(0, 2);
+    }
+  }
+}
+
+int countNeighbors(int x, int y) {
+  int sum = 0;
+  for (int i = -1; i < 2; i++) {
+    for (int j = -1; j < 2; j++) {
+      int col = (x + i + LIFE_W) % LIFE_W;
+      int row = (y + j + LIFE_H) % LIFE_H;
+      sum += lifeGrid[col][row];
+    }
+  }
+  sum -= lifeGrid[x][y];
+  return sum;
+}
+
+void updateLifeEngine() {
+  if (millis() - lastLifeUpdate < 100) return;
+  lastLifeUpdate = millis();
+
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      int state = lifeGrid[x][y];
+      int neighbors = countNeighbors(x, y);
+
+      if (state == 0 && neighbors == 3) {
+        lifeNext[x][y] = 1;
+      } else if (state == 1 && (neighbors < 2 || neighbors > 3)) {
+        lifeNext[x][y] = 0;
+      } else {
+        lifeNext[x][y] = state;
+      }
+    }
+  }
+
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      lifeGrid[x][y] = lifeNext[x][y];
+    }
+  }
+}
+
+void drawLife() {
+  display.clearDisplay();
+  for (int x = 0; x < LIFE_W; x++) {
+    for (int y = 0; y < LIFE_H; y++) {
+      if (lifeGrid[x][y] == 1) {
+        display.fillRect(x * LIFE_SCALE, y * LIFE_SCALE, LIFE_SCALE, LIFE_SCALE, SSD1306_WHITE);
+      }
+    }
+  }
+  display.display();
+}
+
+// ========== MATRIX RAIN EFFECT ==========
+#define MATRIX_COLS 22
+#define MATRIX_MIN_SPEED 1
+#define MATRIX_MAX_SPEED 3
+
+struct MatrixDrop {
+  float y;
+  float speed;
+  int length;
+  char chars[10];
+};
+
+MatrixDrop matrixDrops[MATRIX_COLS];
+
+void initMatrix() {
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    matrixDrops[i].y = random(-100, 0);
+    matrixDrops[i].speed = random(10, 30) / 10.0;
+    matrixDrops[i].length = random(4, 8);
+
+    for (int j = 0; j < 10; j++) {
+      matrixDrops[i].chars[j] = (char)random(33, 126);
+    }
+  }
+}
+
+void updateMatrix() {
+  // Simple throttle to avoid running too fast if loop is fast
+  static unsigned long lastMatrixUpdate = 0;
+  if (millis() - lastMatrixUpdate < 33) return; // ~30 FPS
+  lastMatrixUpdate = millis();
+
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    matrixDrops[i].y += matrixDrops[i].speed;
+
+    if (matrixDrops[i].y > SCREEN_HEIGHT + (matrixDrops[i].length * 8)) {
+      matrixDrops[i].y = random(-50, 0);
+      matrixDrops[i].speed = random(15, 40) / 10.0;
+
+      for (int j = 0; j < 10; j++) {
+        matrixDrops[i].chars[j] = (char)random(33, 126);
+      }
+    }
+
+    if (random(0, 20) == 0) {
+       int charIdx = random(0, matrixDrops[i].length);
+       matrixDrops[i].chars[charIdx] = (char)random(33, 126);
+    }
+  }
+}
+
+void drawMatrix() {
+  display.clearDisplay();
+  display.setTextSize(1);
+
+  for (int i = 0; i < MATRIX_COLS; i++) {
+    int x = i * 6;
+
+    for (int j = 0; j < matrixDrops[i].length; j++) {
+      int charY = (int)matrixDrops[i].y - (j * 8);
+
+      if (charY > -8 && charY < SCREEN_HEIGHT) {
+
+        if (j == 0) {
+          display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+        }
+        else {
+          if ((i + j) % 2 == 0) {
+             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+          } else {
+             continue;
+          }
+        }
+
+        display.setCursor(x, charY);
+        display.print(matrixDrops[i].chars[j]);
+      }
+    }
+  }
+  display.display();
+}
+
+// --- SSID SPAMMER CONFIG ---
+const char* fakeSSIDs[] = {
+  "HP LU KENA VIRUS",
+  "JANGAN MALING WIFI",
+  "HACKED BY ESP32",
+  "RUMAH HANTU 666",
+  "FBI SURVEILLANCE #1",
+  "Awas Ada Copet",
+  "MAKAN GRATIS DISINI",
+  "SYSTEM ERROR 404",
+  "ESP32 ATTACK MODE",
+  "SKIBIDI TOILET",
+  "NETWORK_DESTROYER",
+  "JANGAN_KONEK_SINI"
+};
+const int TOTAL_FAKE_SSIDS = 12;
+uint8_t spamChannel = 1;
+
+// Raw 802.11 Beacon Frame Packet
+uint8_t packet[128] = {
+  0x80, 0x00, // Frame Control (Beacon)
+  0x00, 0x00, // Duration
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Dest Addr (Broadcast)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Src Addr (Placeholder)
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // BSSID (Placeholder)
+  0x00, 0x00, // Seq-ctl
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Timestamp
+  0x64, 0x00, // Beacon Interval
+  0x31, 0x04  // Capabilities
+};
+
+// --- DEAUTH DETECTOR CONFIG ---
+int deauthCount = 0;
+unsigned long lastDeauthTime = 0;
+bool underAttack = false;
+
+// Graphing Globals
+#define GRAPH_WIDTH 64
+int deauthHistory[GRAPH_WIDTH];
+int graphHead = 0;
+unsigned long lastGraphUpdate = 0;
+int lastDeauthCount = 0;
+
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
 void drawKeyboard(int x_offset = 0);
@@ -309,13 +563,14 @@ void showPinLock(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Adjusted layout for 4-row keypad
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 20);
+  display.setCursor(x_offset + 35, 2); // Higher up
   display.print("ENTER PIN");
 
-  display.drawRect(x_offset + 34, 35, 60, 14, SSD1306_WHITE);
+  display.drawRect(x_offset + 34, 12, 60, 14, SSD1306_WHITE);
 
-  display.setCursor(x_offset + 38, 38);
+  display.setCursor(x_offset + 38, 15);
   for(int i=0; i<4; i++) {
       if (i < inputPin.length()) {
           display.print("*");
@@ -327,20 +582,21 @@ void showPinLock(int x_offset) {
       display.print(" ");
   }
 
-  drawKeyboard(x_offset);
+  drawPinKeyboard(x_offset);
 }
 
 void showChangePin(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Adjusted layout for 4-row keypad
   display.setTextSize(1);
-  display.setCursor(x_offset + 15, 20);
+  display.setCursor(x_offset + 30, 2); // Higher up
   display.print("SET NEW PIN");
 
-  display.drawRect(x_offset + 34, 35, 60, 14, SSD1306_WHITE);
+  display.drawRect(x_offset + 34, 12, 60, 14, SSD1306_WHITE);
 
-  display.setCursor(x_offset + 38, 38);
+  display.setCursor(x_offset + 38, 15);
   for(int i=0; i<4; i++) {
       if (i < inputPin.length()) {
           display.print(inputPin.charAt(i));
@@ -352,43 +608,55 @@ void showChangePin(int x_offset) {
       display.print(" ");
   }
 
-  drawKeyboard(x_offset);
+  drawPinKeyboard(x_offset);
 }
 
 void showScreenSaver() {
-  display.clearDisplay();
-
-  // Bounce effect for time
-  static int x = 10, y = 20;
-  static int dx = 1, dy = 1;
-
-  // Only move every few frames to be less jittery
-  if (millis() % 50 == 0) {
-      x += dx;
-      y += dy;
-      if (x <= 0 || x >= SCREEN_WIDTH - 60) dx *= -1;
-      if (y <= 10 || y >= SCREEN_HEIGHT - 20) dy *= -1;
-  }
-
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  if (cachedTimeStr.length() > 0) {
-      display.setCursor(x, y);
-      display.print(cachedTimeStr);
+  if (screensaverMode == 0) {
+      updateLifeEngine();
+      drawLife();
   } else {
-      display.setCursor(x, y);
-      display.print("00:00");
+      updateMatrix();
+      drawMatrix();
   }
+}
 
-  display.setTextSize(1);
-  display.setCursor(10, 55);
-  display.print("Press any key...");
+void drawPinKeyboard(int x_offset) {
+  // Numeric keypad specific layout
+  int startX = x_offset + 19; // Centered roughly (128 - 90)/2
+  int startY = 28; // Start below the input box (ends at 26)
+  int keyW = 28;
+  int keyH = 9; // Slightly taller for better look
+  int gap = 2;  // More spacing
 
-  display.display();
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 3; c++) {
+      int x = startX + c * (keyW + gap);
+      int y = startY + r * (keyH + gap);
+
+      const char* keyLabel = keyboardPin[r][c];
+
+      if (r == cursorY && c == cursorX) {
+        // Selected: Filled Rounded Rect
+        display.fillRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
+        display.setTextColor(SSD1306_BLACK);
+      } else {
+        // Normal: Outline Rounded Rect
+        display.drawRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      // Center text in key
+      int textX = x + (keyW - (strlen(keyLabel) * 6)) / 2 + 1;
+      display.setCursor(textX, y + 1);
+      display.print(keyLabel);
+    }
+  }
+  display.setTextColor(SSD1306_WHITE);
 }
 
 void handlePinLockKeyPress() {
-  const char* key = getCurrentKey();
+  const char* key = keyboardPin[cursorY][cursorX];
 
   if (strcmp(key, "OK") == 0) {
       if (inputPin == pinCode) {
@@ -400,15 +668,13 @@ void handlePinLockKeyPress() {
       }
   } else if (strcmp(key, "<") == 0) {
       if (inputPin.length() > 0) inputPin.remove(inputPin.length()-1);
-  } else if (strcmp(key, "#") == 0) {
-      toggleKeyboardMode();
   } else {
       if (inputPin.length() < 4) inputPin += key;
   }
 }
 
 void handleChangePinKeyPress() {
-  const char* key = getCurrentKey();
+  const char* key = keyboardPin[cursorY][cursorX];
 
   if (strcmp(key, "OK") == 0) {
       if (inputPin.length() == 4) {
@@ -420,8 +686,6 @@ void handleChangePinKeyPress() {
       }
   } else if (strcmp(key, "<") == 0) {
       if (inputPin.length() > 0) inputPin.remove(inputPin.length()-1);
-  } else if (strcmp(key, "#") == 0) {
-      toggleKeyboardMode();
   } else {
       if (inputPin.length() < 4) inputPin += key;
   }
@@ -448,34 +712,6 @@ void updateStatusBarData() {
     }
   }
 }
-
-// Keyboard layouts
-const char* keyboardLower[3][10] = {
-  {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
-  {"a", "s", "d", "f", "g", "h", "j", "k", "l", "<"},
-  {"#", "z", "x", "c", "v", "b", "n", "m", " ", "OK"}
-};
-
-const char* keyboardUpper[3][10] = {
-  {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
-  {"A", "S", "D", "F", "G", "H", "J", "K", "L", "<"},
-  {"#", "Z", "X", "C", "V", "B", "N", "M", ".", "OK"}
-};
-
-const char* keyboardNumbers[3][10] = {
-  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
-  {"!", "@", "#", "$", "%", "^", "&", "*", "(", ")"},
-  {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
-};
-
-enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
-KeyboardMode currentKeyboardMode = MODE_LOWER;
-
-enum KeyboardContext {
-  CONTEXT_CHAT,
-  CONTEXT_WIFI_PASSWORD
-};
-KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 // Space Invaders Game State
 #define MAX_ENEMIES 15
@@ -668,16 +904,6 @@ int mainMenuSelection = 0;
 float menuTextScrollX = 0;
 unsigned long lastMenuTextScrollTime = 0;
 
-int cursorX = 0, cursorY = 0;
-String userInput = "";
-String passwordInput = "";
-String selectedSSID = "";
-String aiResponse = "";
-int scrollOffset = 0;
-int menuSelection = 0;
-unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 150;
-
 unsigned long lastUiUpdate = 0;
 const int uiFrameDelay = 1000 / TARGET_FPS;
 
@@ -704,6 +930,18 @@ const unsigned char ICON_HEART[] PROGMEM = {
 
 const unsigned char ICON_SYSTEM[] PROGMEM = {
   0x3C, 0x7E, 0xDB, 0xFF, 0xC3, 0xFF, 0x7E, 0x3C
+};
+
+const unsigned char ICON_SYS_STATUS[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0x18, 0x18, 0x7E, 0x3C, 0x18
+};
+
+const unsigned char ICON_SYS_SETTINGS[] PROGMEM = {
+  0x3C, 0x42, 0x99, 0xBD, 0xBD, 0x99, 0x42, 0x3C
+};
+
+const unsigned char ICON_SYS_TOOLS[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0xFF, 0x5A, 0x24, 0x18, 0x00
 };
 
 // Racing Car Sprites (16x16)
@@ -742,12 +980,191 @@ int videoCurrentFrame = 0;
 unsigned long lastVideoFrameTime = 0;
 const int videoFrameDelay = 70; // 25 FPS
 
+// ---------------- SSID SPAMMER LOGIC ----------------
+void sendBeacon(const char* ssid) {
+  uint8_t randomMac[6];
+  for(int i=0; i<6; i++) randomMac[i] = random(0, 256);
+  randomMac[0] = 0xC0;
+
+  memcpy(&packet[10], randomMac, 6);
+  memcpy(&packet[16], randomMac, 6);
+
+  int ssidLen = strlen(ssid);
+  packet[36] = 0x00;
+  packet[37] = ssidLen;
+  memcpy(&packet[38], ssid, ssidLen);
+
+  int pos = 38 + ssidLen;
+  packet[pos++] = 0x01; packet[pos++] = 0x04;
+  packet[pos++] = 0x82; packet[pos++] = 0x84; packet[pos++] = 0x8b; packet[pos++] = 0x96;
+  packet[pos++] = 0x03; packet[pos++] = 0x01; packet[pos++] = spamChannel;
+
+  esp_wifi_80211_tx(WIFI_IF_STA, packet, pos, true);
+}
+
+void initSpammer() {
+  WiFi.mode(WIFI_STA); // Ensure Station mode is active for packet injection
+  WiFi.disconnect();   // Disconnect from any AP
+  delay(100);          // Wait for mode switch stabilization
+  esp_wifi_set_promiscuous(true);
+}
+
+void updateSpammer() {
+  // Prevent WDT Reset by yielding
+  delay(1);
+
+  spamChannel = (spamChannel % 13) + 1;
+  esp_wifi_set_channel(spamChannel, WIFI_SECOND_CHAN_NONE);
+
+  for(int i=0; i<TOTAL_FAKE_SSIDS; i++) {
+    sendBeacon(fakeSSIDs[i]);
+    delay(10); // Increased delay to prevent congestion/crash
+  }
+}
+
+void drawSpammer() {
+  display.clearDisplay();
+
+  if(random(0,10) == 0) display.invertDisplay(true);
+  else display.invertDisplay(false);
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(25, 2);
+  display.print("BEACON FLOOD");
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.println("Broadcasting:");
+
+  display.setCursor(5, 35);
+  display.print("> ");
+  display.print(fakeSSIDs[random(0, TOTAL_FAKE_SSIDS)]);
+
+  display.drawLine(0, 48, SCREEN_WIDTH, 48, SSD1306_WHITE);
+  display.setCursor(0, 52);
+  display.print("CH: "); display.print(spamChannel);
+  display.print(" PKT: "); display.print(millis()/50);
+
+  display.display();
+}
+
+// ---------------- DEAUTH DETECTOR LOGIC ----------------
+void deauth_sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type) {
+  wifi_promiscuous_pkt_t *p = (wifi_promiscuous_pkt_t*)buf;
+  uint8_t *frame = p->payload;
+
+  uint8_t type_bits = (frame[0] >> 2) & 0x03;
+  uint8_t subtype_bits = (frame[0] >> 4) & 0xF;
+
+  if (type_bits == 0 && (subtype_bits == 0xC || subtype_bits == 0xA)) {
+    deauthCount++;
+    lastDeauthTime = millis();
+    underAttack = true;
+  }
+}
+
+void initDetector() {
+  WiFi.disconnect();
+  deauthCount = 0;
+  underAttack = false;
+
+  for(int i=0; i<GRAPH_WIDTH; i++) deauthHistory[i] = 0;
+  graphHead = 0;
+  lastGraphUpdate = millis();
+  lastDeauthCount = 0;
+
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_promiscuous_rx_cb(&deauth_sniffer_callback);
+}
+
+void updateDetector() {
+  if (millis() - lastDeauthTime > 2000) {
+    underAttack = false;
+  }
+
+  if (millis() % 250 == 0) {
+    int ch = (millis() / 250) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+
+  if (millis() - lastGraphUpdate >= 1000) {
+      int currentTotal = deauthCount;
+      int rate = currentTotal - lastDeauthCount;
+      lastDeauthCount = currentTotal;
+      lastGraphUpdate = millis();
+
+      deauthHistory[graphHead] = rate;
+      graphHead = (graphHead + 1) % GRAPH_WIDTH;
+  }
+}
+
+void drawDetector() {
+  display.clearDisplay();
+
+  display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(20, 2);
+  display.print("WIFI GUARD");
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Draw Graph
+  int graphBaseY = 63;
+  int maxVal = 10;
+  for(int i=0; i<GRAPH_WIDTH; i++) if(deauthHistory[i] > maxVal) maxVal = deauthHistory[i];
+
+  for (int i = 0; i < GRAPH_WIDTH; i++) {
+      int idx = (graphHead + i) % GRAPH_WIDTH;
+      int val = deauthHistory[idx];
+
+      int h = map(val, 0, maxVal, 0, 30);
+      if (h > 0) {
+        display.drawLine(i * 2, graphBaseY, i * 2, graphBaseY - h, SSD1306_WHITE);
+      }
+  }
+
+  if (underAttack) {
+    display.setTextSize(1);
+    display.setCursor(0, 15);
+    display.print("ATTACK DETECTED!");
+    display.setCursor(0, 25);
+    display.print("Total: "); display.print(deauthCount);
+
+    if ((millis() / 200) % 2 == 0) triggerNeoPixelEffect(pixels.Color(255, 0, 0), 50);
+  } else {
+    display.setCursor(0, 15);
+    display.print("Status: Safe");
+    display.setCursor(0, 25);
+    display.print("Scanning...");
+  }
+
+  display.display();
+}
+
+void stopWifiTools() {
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_set_promiscuous_rx_cb(NULL);
+  display.invertDisplay(false);
+
+  // Try to reconnect if credentials exist
+  String savedSSID = loadPreferenceString("ssid", "");
+  String savedPassword = loadPreferenceString("password", "");
+  if (savedSSID.length() > 0) {
+      WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+  }
+}
+
 // Forward declarations
 void showMainMenu(int x_offset = 0);
 void showWiFiMenu(int x_offset = 0);
 void showAPISelect(int x_offset = 0);
 void showGameSelect(int x_offset = 0);
 void showSystemMenu(int x_offset = 0);
+void showSystemStatusMenu(int x_offset = 0);
+void showSystemSettingsMenu(int x_offset = 0);
+void showSystemToolsMenu(int x_offset = 0);
 void showSystemPerf(int x_offset = 0);
 void showSystemNet(int x_offset = 0);
 void showSystemDevice(int x_offset = 0);
@@ -794,6 +1211,9 @@ void refreshCurrentScreen() {
     case STATE_SYSTEM_DEVICE: showSystemDevice(x_offset); break;
     case STATE_SYSTEM_BENCHMARK: showSystemBenchmark(x_offset); break;
     case STATE_SYSTEM_POWER: showSystemPower(x_offset); break;
+    case STATE_SYSTEM_SUB_STATUS: showSystemStatusMenu(x_offset); break;
+    case STATE_SYSTEM_SUB_SETTINGS: showSystemSettingsMenu(x_offset); break;
+    case STATE_SYSTEM_SUB_TOOLS: showSystemToolsMenu(x_offset); break;
     case STATE_PIN_LOCK: showPinLock(x_offset); break;
     case STATE_CHANGE_PIN: showChangePin(x_offset); break;
     case STATE_SCREEN_SAVER: showScreenSaver(); break;
@@ -801,6 +1221,8 @@ void refreshCurrentScreen() {
     case STATE_KEYBOARD: drawKeyboard(x_offset); break;
     case STATE_PASSWORD_INPUT: drawKeyboard(x_offset); break;
     case STATE_CHAT_RESPONSE: displayResponse(); break;
+    case STATE_TOOL_SPAMMER: drawSpammer(); break;
+    case STATE_TOOL_DETECTOR: drawDetector(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -833,6 +1255,12 @@ void changeState(AppState newState) {
     transitionState = TRANSITION_OUT;
     transitionProgress = 0.0f;
     previousState = currentState; // Store where we came from
+
+    // Init Screen Saver
+    if (newState == STATE_SCREEN_SAVER) {
+        if (screensaverMode == 0) initLife();
+        else initMatrix();
+    }
   }
 }
 
@@ -902,15 +1330,15 @@ void ledQuickFlash() {
 
 void showBootScreen() {
   const char* bootLogs[] = {
-    "BOOT SEQUENCE INITIATED...",
-    "CPU: ESP32-S3 [OK]",
-    "MEM: PSRAM DETECTED [OK]",
-    "FS: MOUNTING LITTLEFS...",
-    " > FS MOUNTED [SUCCESS]",
-    "NET: WIFI ADAPTER... [UP]",
-    "AI: GEMINI API... [READY]",
-    "GPU: OVERCLOCK I2C... [DONE]",
-    "SYSTEM READY. STARTING UI..."
+    "> INIT KERNEL... [OK]",
+    "> CPU: ESP32-S3 @240MHz",
+    "> MEM: PSRAM DETECTED",
+    "> FS: MOUNTING... [OK]",
+    "> SECURITY: BYPASS...",
+    "> NET: SCANNING... [UP]",
+    "> AI CORE: ONLINE",
+    "> GPU: I2C SYNC... [OK]",
+    "> ACCESS GRANTED"
   };
 
   display.setFont(&Org_01);
@@ -918,46 +1346,64 @@ void showBootScreen() {
   display.setTextColor(SSD1306_WHITE);
 
   int totalLogs = 9;
+  int lineHeight = 7;
+  int maxLines = 7;
 
+  // Typewriter effect variables
   for (int i = 0; i < totalLogs; i++) {
-    display.clearDisplay();
+    String currentLine = bootLogs[i];
+    int len = currentLine.length();
 
-    // Draw logs scrolling up
-    // Org_01 is a small font (~6px high). We can fit more lines.
-    // Cursor Y is baseline, so we start at y=6
-    int lineHeight = 7;
-    int maxLines = 7;
-    int startIdx = (i >= maxLines) ? (i - maxLines + 1) : 0;
+    // Type out the current line
+    for (int charIdx = 0; charIdx <= len; charIdx++) {
+      display.clearDisplay();
 
-    for (int j = startIdx; j <= i; j++) {
-      display.setCursor(0, 6 + (j - startIdx) * lineHeight);
-      display.println(bootLogs[j]);
+      // Draw previous lines (scrolling)
+      int startIdx = (i >= maxLines) ? (i - maxLines + 1) : 0;
+      for (int j = startIdx; j < i; j++) {
+        display.setCursor(0, 6 + (j - startIdx) * lineHeight);
+        display.println(bootLogs[j]);
+      }
+
+      // Draw current line being typed
+      if (i >= startIdx) {
+        display.setCursor(0, 6 + (i - startIdx) * lineHeight);
+        display.print(currentLine.substring(0, charIdx));
+        // Blinking cursor
+        if ((millis() / 100) % 2 == 0) {
+            display.print("_");
+        }
+      }
+
+      // Progress Bar
+      int totalProgress = map(i * 100 + map(charIdx, 0, len, 0, 100), 0, totalLogs * 100, 5, 120);
+      display.drawRect(2, 58, 124, 4, SSD1306_WHITE);
+
+      // Glitch fill
+      if (random(0, 10) > 1) {
+          display.fillRect(4, 59, totalProgress, 2, SSD1306_WHITE);
+      } else {
+          // Glitch empty
+          display.fillRect(4, 59, max(0, totalProgress - 5), 2, SSD1306_WHITE);
+      }
+
+      display.display();
+
+      // Typing speed (fast)
+      delay(random(5, 20));
     }
 
-    // Progress Bar with "glitch" effect
-    int progress = map(i, 0, totalLogs - 1, 10, 124);
-    display.drawRect(2, 56, 124, 6, SSD1306_WHITE);
-
-    // Random glitch fill
-    if (random(0, 10) > 2) {
-       display.fillRect(4, 58, progress, 2, SSD1306_WHITE);
-    } else {
-       display.fillRect(4, 58, max(0, progress - 10), 2, SSD1306_WHITE);
-    }
-
-    display.display();
-
-    // Variable delay to simulate processing (Slower)
-    int waitTime = random(150, 400);
-    if (i == 3) waitTime = 800; // Fake delay on mounting
-    delay(waitTime);
+    // Slight pause after each line
+    delay(100);
   }
 
-  // Flash effect
-  display.invertDisplay(true);
-  delay(100);
-  display.invertDisplay(false);
-  delay(100);
+  // Final "ACCESS GRANTED" Flash
+  for(int k=0; k<3; k++) {
+     display.invertDisplay(true);
+     delay(50);
+     display.invertDisplay(false);
+     delay(50);
+  }
 
   display.setFont(NULL); // Reset to default font
   display.clearDisplay();
@@ -1011,8 +1457,6 @@ void setup() {
     for(;;);
   }
   
-  showBootScreen();
-  
   ledSuccess();
   
   showFPS = loadPreferenceBool("showFPS", false);
@@ -1026,6 +1470,7 @@ void setup() {
 
   pinLockEnabled = loadPreferenceBool("pin_lock", false);
   pinCode = loadPreferenceString("pin_code", "1234");
+  screensaverMode = loadPreferenceInt("saver_mode", 0);
 
   setCpuFrequencyMhz(currentCpuFreq);
 
@@ -1048,7 +1493,9 @@ void setup() {
   if (pinLockEnabled) {
       inputPin = "";
       stateAfterUnlock = STATE_MAIN_MENU; // After boot unlock, always go to main menu
+      currentKeyboardMode = MODE_NUMBERS;
       currentState = STATE_PIN_LOCK;
+      showPinLock(0); // Ensure keyboard is drawn immediately
   } else {
       showMainMenu();
   }
@@ -1157,6 +1604,9 @@ void loop() {
     }
   }
 
+  if (currentState == STATE_TOOL_SPAMMER) updateSpammer();
+  if (currentState == STATE_TOOL_DETECTOR) updateDetector();
+
   if (currentState == STATE_VIDEO_PLAYER) {
     drawVideoPlayer();
   }
@@ -1217,27 +1667,7 @@ void loop() {
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
     
-    // Check any button for activity to reset screen saver timer
-    if (digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW ||
-        digitalRead(BTN_LEFT) == LOW || digitalRead(BTN_RIGHT) == LOW ||
-        digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_BACK) == LOW ||
-        digitalRead(TOUCH_LEFT) == HIGH || digitalRead(TOUCH_RIGHT) == HIGH) {
-
-        lastInputTime = currentMillis;
-
-        if (currentState == STATE_SCREEN_SAVER) {
-            if (pinLockEnabled) {
-                inputPin = "";
-                stateAfterUnlock = stateBeforeScreenSaver;
-                currentState = STATE_PIN_LOCK;
-            } else {
-                changeState(stateBeforeScreenSaver);
-            }
-            lastDebounce = currentMillis;
-            return; // Consume input to exit screen saver
-        }
-    }
-
+    // Check buttons
     if (digitalRead(BTN_UP) == LOW) {
       handleUp();
       buttonPressed = true;
@@ -1283,7 +1713,21 @@ void loop() {
     
     if (buttonPressed) {
       lastDebounce = currentMillis;
-      ledQuickFlash();
+      lastInputTime = currentMillis; // Reset screensaver only on valid input
+
+      // Exit screensaver if active
+      if (currentState == STATE_SCREEN_SAVER) {
+          if (pinLockEnabled) {
+              inputPin = "";
+              stateAfterUnlock = stateBeforeScreenSaver;
+              currentKeyboardMode = MODE_NUMBERS;
+              currentState = STATE_PIN_LOCK;
+          } else {
+              changeState(stateBeforeScreenSaver);
+          }
+      } else {
+          ledQuickFlash();
+      }
     }
   }
 }
@@ -2831,17 +3275,6 @@ void handleRacingInput() {
 // ========== GAME SELECT ==========
 
 void showGameSelect(int x_offset) {
-  display.clearDisplay();
-  drawStatusBar();
-  
-  display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("SELECT GAME");
-  
-  drawIcon(x_offset + 10, 2, ICON_GAME);
-  
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-  
   const char* games[] = {
     "Turbo Racing",
     "Neon Invaders",
@@ -2849,18 +3282,8 @@ void showGameSelect(int x_offset) {
     "Vector Pong",
     "Back"
   };
-  
-  for (int i = 0; i < 5; i++) {
-    display.setCursor(x_offset + 10, 18 + i * 9);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(games[i]);
-  }
-  
-  display.display();
+  static float gameScrollY = 0;
+  drawGenericListMenu(x_offset, "SELECT GAME", ICON_GAME, games, 5, menuSelection, &gameScrollY);
 }
 
 void handleGameSelectSelect() {
@@ -2890,31 +3313,12 @@ void handleGameSelectSelect() {
 // ========== RACING MODE SELECT ==========
 
 void showRacingModeSelect(int x_offset) {
-  display.clearDisplay();
-  drawStatusBar();
-
-  display.setTextSize(1);
-  display.setCursor(x_offset + 20, 5);
-  display.print("SELECT MODE");
-
-  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
-
   const char* modes[] = {
-    "Berkendara (Free)",
-    "Tantangan (Challenge)"
+    "Free Drive",
+    "Challenge Mode"
   };
-
-  for (int i = 0; i < 2; i++) {
-    display.setCursor(x_offset + 10, 25 + i * 15);
-    if (i == menuSelection) {
-      display.print("> ");
-    } else {
-      display.print("  ");
-    }
-    display.print(modes[i]);
-  }
-
-  display.display();
+  static float racingScrollY = 0;
+  drawGenericListMenu(x_offset, "RACING MODE", ICON_GAME, modes, 2, menuSelection, &racingScrollY);
 }
 
 void handleRacingModeSelect() {
@@ -2933,33 +3337,45 @@ void showWiFiMenu(int x_offset) {
   drawStatusBar();
   
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("WiFi MENU");
+  display.setCursor(x_offset + 25, 3);
+  display.print("WiFi MANAGER");
   
   drawIcon(x_offset + 10, 2, ICON_WIFI);
   
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.drawLine(x_offset + 0, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
+
+  // Status Box
+  display.drawRoundRect(x_offset + 2, 16, SCREEN_WIDTH - 4, 18, 3, SSD1306_WHITE);
+  display.setCursor(x_offset + 6, 21);
   
-  display.setCursor(x_offset + 5, 16);
   if (WiFi.status() == WL_CONNECTED) {
-    display.print("Connected:");
-    display.setCursor(5, 24);
     String ssid = WiFi.SSID();
-    if (ssid.length() > 18) {
-      ssid = ssid.substring(0, 18) + "..";
-    }
+    if (ssid.length() > 16) ssid = ssid.substring(0, 16) + "..";
     display.print(ssid);
+    // RSSI Bar in box
+    int rssi = WiFi.RSSI();
+    int bars = map(rssi, -100, -50, 1, 4);
+    bars = constrain(bars, 1, 4);
+    for(int b=0; b<bars; b++) display.fillRect(x_offset + 115 + (b*3), 28 - (b*2), 2, (b*2)+2, SSD1306_WHITE);
   } else {
-    display.print("Not connected");
+    display.print("Not Connected");
   }
   
   const char* menuItems[] = {"Scan Networks", "Forget Network", "Back"};
   
+  int startY = 38;
+  int itemHeight = 12; // Same as generic
+
   for (int i = 0; i < 3; i++) {
-    display.setCursor(5, 36 + i * 9);
+    int y = startY + (i * itemHeight);
     if (i == menuSelection) {
+      display.fillRoundRect(x_offset + 2, y, SCREEN_WIDTH - 6, itemHeight - 1, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(x_offset + 6, y + 2);
       display.print("> ");
     } else {
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(x_offset + 6, y + 2);
       display.print("  ");
     }
     display.print(menuItems[i]);
@@ -3093,36 +3509,36 @@ void showAPISelect(int x_offset) {
   drawStatusBar();
   
   display.setTextSize(1);
-  display.setCursor(x_offset + 15, 5);
-  display.print("SELECT GEMINI API");
+  display.setCursor(x_offset + 25, 3);
+  display.print("API SELECTION");
+  drawIcon(x_offset + 10, 2, ICON_SYS_SETTINGS);
+  display.drawLine(x_offset, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
   
-  display.drawLine(x_offset + 0, 15, x_offset + SCREEN_WIDTH, 15, SSD1306_WHITE);
+  const char* items[] = {"Gemini API Key #1", "Gemini API Key #2"};
   
-  int y1 = 25;
-  if (menuSelection == 0) {
-    display.fillRect(5, y1 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(10, y1);
-  display.print("1. Gemini API #1");
-  if (selectedAPIKey == 1) {
-    display.setCursor(100, y1);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
+  int itemHeight = 16; // Taller
+  int startY = 20;
   
-  int y2 = 42;
-  if (menuSelection == 1) {
-    display.fillRect(5, y2 - 2, 118, 12, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
+  for (int i = 0; i < 2; i++) {
+    int y = startY + (i * itemHeight);
+
+    if (i == menuSelection) {
+      display.fillRoundRect(x_offset + 5, y, SCREEN_WIDTH - 10, 14, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.drawRoundRect(x_offset + 5, y, SCREEN_WIDTH - 10, 14, 3, SSD1306_WHITE);
+      display.setTextColor(SSD1306_WHITE);
+    }
+
+    display.setCursor(x_offset + 10, y + 3);
+    display.print(items[i]);
+
+    // Checkmark
+    if (selectedAPIKey == (i + 1)) {
+        display.setCursor(x_offset + 110, y + 3);
+        display.print("*");
+    }
   }
-  display.setCursor(10, y2);
-  display.print("2. Gemini API #2");
-  if (selectedAPIKey == 2) {
-    display.setCursor(100, y2);
-    display.print("[*]");
-  }
-  display.setTextColor(SSD1306_WHITE);
   
   display.display();
 }
@@ -3166,26 +3582,41 @@ void showMainMenu(int x_offset) {
   int numItems = sizeof(menuItems) / sizeof(MenuItem);
   int screenCenterY = SCREEN_HEIGHT / 2;
   
+  // Custom Modern Card Carousel
   for (int i = 0; i < numItems; i++) {
-    float itemY = screenCenterY + (i * 22) - menuScrollY;
+    float itemY = screenCenterY + (i * 24) - menuScrollY; // Spacing 24
     float distance = abs(itemY - screenCenterY);
     
-    // Simple easing function for scaling
-    float scale = 1.0 - (distance / (SCREEN_HEIGHT / 2.0));
-    scale = max(0.5f, scale); // Min scale
-
-    if (itemY > -20 && itemY < SCREEN_HEIGHT + 20) {
-      int itemX = x_offset + 20 + (distance / 2.5);
-
+    if (itemY > -24 && itemY < SCREEN_HEIGHT + 24) {
       if (i == menuSelection) {
-        // Highlighted item
-        display.drawRoundRect(x_offset + 5, screenCenterY - 12, SCREEN_WIDTH - 10, 24, 6, SSD1306_WHITE);
-        drawIcon(x_offset + 12, screenCenterY - 4, menuItems[i].icon);
+        // Selected Item (Big Card)
+        int cardY = screenCenterY - 12;
+        // Shadow
+        display.fillRoundRect(x_offset + 6, cardY + 2, SCREEN_WIDTH - 12, 24, 6, SSD1306_WHITE);
+        // Main Box Inverted
+        display.fillRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_BLACK);
+        display.drawRoundRect(x_offset + 4, cardY, SCREEN_WIDTH - 8, 24, 6, SSD1306_WHITE);
+
+        // Icon
+        drawIcon(x_offset + 12, cardY + 8, menuItems[i].icon);
+
+        // Text
+        display.setTextColor(SSD1306_WHITE);
         display.setTextSize(2);
-        display.setCursor(x_offset + 30, screenCenterY - 7);
+        display.setCursor(x_offset + 30, cardY + 5);
         display.print(menuItems[i].text);
+
+        // Arrows
+        display.setTextSize(1);
+        if(i > 0) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY - 8); display.print("^"); }
+        if(i < numItems -1) { display.setCursor(x_offset + SCREEN_WIDTH/2 - 3, cardY + 26); display.print("v"); }
+
       } else {
-        // Other items
+        // Other items (Dimmed/Smaller)
+        float scale = max(0.5f, 1.0f - (distance / 100.0f));
+        int itemX = x_offset + 25;
+
+        display.setTextColor(SSD1306_WHITE);
         display.setTextSize(1);
         display.setCursor(itemX, itemY - 3);
         display.print(menuItems[i].text);
@@ -3193,9 +3624,7 @@ void showMainMenu(int x_offset) {
     }
   }
 
-  // Top and bottom status bar (fixed position)
   drawStatusBar();
-  
   display.display();
 }
 
@@ -3253,119 +3682,204 @@ void drawVideoPlayer() {
   }
 }
 
-void showSystemMenu(int x_offset) {
+void setScreenBrightness(int val) {
+  screenBrightness = constrain(val, 0, 255);
+  display.ssd1306_command(SSD1306_SETCONTRAST);
+  display.ssd1306_command(screenBrightness);
+}
+
+void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY) {
   display.clearDisplay();
   drawStatusBar();
 
+  // Header
   display.setTextSize(1);
-  display.setCursor(x_offset + 25, 2);
-  display.print("SYSTEM MENU");
+  display.setCursor(x_offset + 25, 3);
+  display.print(title);
+  if(icon) drawIcon(x_offset + 10, 2, icon);
+  display.drawLine(x_offset, 13, x_offset + SCREEN_WIDTH, 13, SSD1306_WHITE);
 
-  drawIcon(x_offset + 10, 2, ICON_SYSTEM);
-
-  display.drawLine(x_offset + 0, 12, x_offset + SCREEN_WIDTH, 12, SSD1306_WHITE);
-
-  const char* items[] = {
-    "Performance",
-    "Network",
-    "Device Info",
-    "Power Mode",
-    "PIN Lock: ",
-    "Change PIN",
-    "Clear AI Data",
-    "Show FPS: ",
-    "Benchmark I2C",
-    "Reboot",
-    "Back"
-  };
-
-  int itemCount = 11;
-  int itemHeight = 10;
+  int itemHeight = 12; // Taller for better look
   int startY = 16;
-  int maxVisible = 4; // 64px height - 16px header = 48px / 10px = ~4 items
+  int maxVisible = 4;
 
   // Smooth scroll logic
   float targetScroll = 0;
-  if (systemMenuSelection >= maxVisible) {
-      targetScroll = (systemMenuSelection - maxVisible + 1) * itemHeight;
+  if (selection >= maxVisible) {
+      targetScroll = (selection - maxVisible + 1) * itemHeight;
   } else {
       targetScroll = 0;
   }
 
   // Simple easing
-  if (abs(systemMenuScrollY - targetScroll) > 0.5f) {
-      systemMenuScrollY += (targetScroll - systemMenuScrollY) * 0.3f;
+  if (abs(*scrollY - targetScroll) > 0.5f) {
+      *scrollY += (targetScroll - *scrollY) * 0.3f;
   } else {
-      systemMenuScrollY = targetScroll;
+      *scrollY = targetScroll;
   }
 
   for (int i = 0; i < itemCount; i++) {
-    float y = startY + (i * itemHeight) - systemMenuScrollY;
+    float y = startY + (i * itemHeight) - *scrollY;
 
-    // Only draw visible items (with some buffer)
-    if (y > 12 && y < SCREEN_HEIGHT) {
-        display.setCursor(x_offset + 5, y);
-
-        if (i == systemMenuSelection) {
-          // Inverted selection bar
-          display.fillRect(x_offset, y - 1, SCREEN_WIDTH, itemHeight, SSD1306_WHITE);
+    // Only draw visible items
+    if (y > 13 && y < SCREEN_HEIGHT) {
+        if (i == selection) {
+          // Modern Inverted Rounded Rect Selection
+          display.fillRoundRect(x_offset + 2, y, SCREEN_WIDTH - 6, itemHeight - 1, 3, SSD1306_WHITE);
           display.setTextColor(SSD1306_BLACK);
+          display.setCursor(x_offset + 6, y + 2);
           display.print("> ");
         } else {
           display.setTextColor(SSD1306_WHITE);
+          display.setCursor(x_offset + 6, y + 2);
           display.print("  ");
         }
 
         display.print(items[i]);
-        if (i == 4) {
-             display.print(pinLockEnabled ? "ON" : "OFF");
-        }
-        if (i == 7) {
-            display.print(showFPS ? "ON" : "OFF");
+
+        // Add dynamic value indicators for specific menus (Hack: check title)
+        // Ideally this would be a callback or struct, but for now this works.
+        if (strcmp(title, "SETTINGS") == 0) {
+           if (i == 1) { // Brightness
+              if (screenBrightness < 50) display.print(" [Low]");
+              else if (screenBrightness < 150) display.print(" [Med]");
+              else display.print(" [High]");
+           }
+           if (i == 2) display.print(showFPS ? " [ON]" : " [OFF]");
+           if (i == 3) display.print(pinLockEnabled ? " [ON]" : " [OFF]");
+           if (i == 5) display.print(screensaverMode == 0 ? " [Bac]" : " [Mtx]");
         }
     }
   }
 
   // Scrollbar indicator
   if (itemCount > maxVisible) {
-      int barHeight = (SCREEN_HEIGHT - 12) * maxVisible / itemCount;
-      int barY = 12 + (systemMenuScrollY / ((itemCount - maxVisible) * itemHeight)) * (SCREEN_HEIGHT - 12 - barHeight);
+      int barHeight = (SCREEN_HEIGHT - 13) * maxVisible / itemCount;
+      int scrollRange = (itemCount - maxVisible) * itemHeight;
+      int barRange = (SCREEN_HEIGHT - 13 - barHeight);
+
+      int barY = 13 + (*scrollY / scrollRange) * barRange;
+
       // Clamp
-      if (barY < 12) barY = 12;
+      if (barY < 13) barY = 13;
       if (barY + barHeight > SCREEN_HEIGHT) barY = SCREEN_HEIGHT - barHeight;
 
-      display.fillRect(SCREEN_WIDTH - 2, barY, 2, barHeight, SSD1306_WHITE);
+      display.fillRect(SCREEN_WIDTH - 3, barY, 2, barHeight, SSD1306_WHITE);
   }
 
   display.display();
 }
 
+void showSystemMenu(int x_offset) {
+  const char* items[] = {
+    "Device Status",
+    "Settings & UI",
+    "Tools & Utils",
+    "Back"
+  };
+  drawGenericListMenu(x_offset, "SYSTEM MENU", ICON_SYSTEM, items, 4, systemMenuSelection, &systemMenuScrollY);
+}
+
+void showSystemStatusMenu(int x_offset) {
+  const char* items[] = {
+    "Performance",
+    "Network Info",
+    "Device & Storage",
+    "Back"
+  };
+  drawGenericListMenu(x_offset, "STATUS INFO", ICON_SYS_STATUS, items, 4, systemMenuSelection, &systemMenuScrollY);
+}
+
+void showSystemSettingsMenu(int x_offset) {
+  const char* items[] = {
+    "Power Mode",
+    "Brightness",
+    "Show FPS",
+    "PIN Lock",
+    "Change PIN",
+    "Saver",
+    "Back"
+  };
+  drawGenericListMenu(x_offset, "SETTINGS", ICON_SYS_SETTINGS, items, 7, systemMenuSelection, &systemMenuScrollY);
+}
+
+void showSystemToolsMenu(int x_offset) {
+  const char* items[] = {
+    "Clear AI Data",
+    "I2C Benchmark",
+    "SSID Spammer",
+    "Deauth Detect",
+    "Reboot System",
+    "Back"
+  };
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 6, systemMenuSelection, &systemMenuScrollY);
+}
+
 void handleSystemMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_STATUS); break;
+    case 1: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_SETTINGS); break;
+    case 2: systemMenuSelection = 0; changeState(STATE_SYSTEM_SUB_TOOLS); break;
+    case 3: changeState(STATE_MAIN_MENU); break;
+  }
+}
+
+void handleSystemStatusMenuSelect() {
   switch(systemMenuSelection) {
     case 0: changeState(STATE_SYSTEM_PERF); break;
     case 1: changeState(STATE_SYSTEM_NET); break;
     case 2: changeState(STATE_SYSTEM_DEVICE); break;
-    case 3: changeState(STATE_SYSTEM_POWER); break;
-    case 4:
-        pinLockEnabled = !pinLockEnabled;
-        savePreferenceBool("pin_lock", pinLockEnabled);
-        if(pinLockEnabled && pinCode == "") {
-             pinCode = "1234";
-             savePreferenceString("pin_code", pinCode);
-        }
-        break;
-    case 5:
-        inputPin = "";
-        currentKeyboardMode = MODE_NUMBERS;
-        changeState(STATE_CHANGE_PIN);
-        break;
-    case 6: clearChatHistory(); break;
-    case 7:
+    case 3: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 0; break;
+  }
+}
+
+void handleSystemSettingsMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: changeState(STATE_SYSTEM_POWER); break;
+    case 1:
+      // Toggle Brightness
+      if (screenBrightness >= 200) setScreenBrightness(10);
+      else if (screenBrightness >= 100) setScreenBrightness(255);
+      else setScreenBrightness(128);
+      break;
+    case 2:
       showFPS = !showFPS;
       savePreferenceBool("showFPS", showFPS);
       break;
-    case 8: changeState(STATE_SYSTEM_BENCHMARK); break;
-    case 9:
+    case 3:
+      pinLockEnabled = !pinLockEnabled;
+      savePreferenceBool("pin_lock", pinLockEnabled);
+      if(pinLockEnabled && pinCode == "") {
+           pinCode = "1234";
+           savePreferenceString("pin_code", pinCode);
+      }
+      break;
+    case 4:
+      inputPin = "";
+      currentKeyboardMode = MODE_NUMBERS;
+      changeState(STATE_CHANGE_PIN);
+      break;
+    case 5:
+      screensaverMode = !screensaverMode;
+      savePreferenceInt("saver_mode", screensaverMode);
+      break;
+    case 6: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 1; break;
+  }
+}
+
+void handleSystemToolsMenuSelect() {
+  switch(systemMenuSelection) {
+    case 0: clearChatHistory(); break;
+    case 1: changeState(STATE_SYSTEM_BENCHMARK); break;
+    case 2:
+      initSpammer();
+      changeState(STATE_TOOL_SPAMMER);
+      break;
+    case 3:
+      initDetector();
+      changeState(STATE_TOOL_DETECTOR);
+      break;
+    case 4:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -3373,7 +3887,7 @@ void handleSystemMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 10: changeState(STATE_MAIN_MENU); break;
+    case 5: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -3542,9 +4056,15 @@ void showSystemDevice(int x_offset) {
   display.print(" MHz");
 
   display.setCursor(x_offset + 2, 56);
-  display.print("Flash: ");
-  display.print(ESP.getFlashChipSize() / 1024 / 1024);
-  display.print(" MB");
+  display.print("Storage: ");
+  if (LittleFS.totalBytes() > 0) {
+      display.print(LittleFS.usedBytes() / 1024);
+      display.print("/");
+      display.print(LittleFS.totalBytes() / 1024);
+      display.print("KB");
+  } else {
+      display.print("N/A");
+  }
 
   display.display();
 }
@@ -3620,23 +4140,29 @@ void showStatus(String message, int delayMs) {
 
 void showProgressBar(String title, int percent) {
   display.clearDisplay();
+  drawStatusBar();
+
+  // Center Title
   display.setTextSize(1);
-  display.setCursor(0, 0);
+  int titleW = title.length() * 6;
+  display.setCursor((SCREEN_WIDTH - titleW) / 2, 18);
   display.print(title);
 
-  int barX = 10;
-  int barY = 30;
-  int barW = SCREEN_WIDTH - 20;
-  int barH = 10;
+  int barX = 14;
+  int barY = 32;
+  int barW = SCREEN_WIDTH - 28;
+  int barH = 8;
 
-  display.drawRect(barX, barY, barW, barH, SSD1306_WHITE);
+  // Modern thin rounded bar
+  display.drawRoundRect(barX, barY, barW, barH, 4, SSD1306_WHITE);
 
   int fillW = map(percent, 0, 100, 0, barW - 4);
   if (fillW > 0) {
-    display.fillRect(barX + 2, barY + 2, fillW, barH - 4, SSD1306_WHITE);
+    display.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 2, SSD1306_WHITE);
   }
 
-  display.setCursor(SCREEN_WIDTH / 2 - 10, barY + 15);
+  // Percentage below
+  display.setCursor(SCREEN_WIDTH / 2 - 6, barY + 12);
   display.print(percent);
   display.print("%");
 
@@ -3732,7 +4258,8 @@ void drawKeyboard(int x_offset) {
   display.clearDisplay();
   drawStatusBar();
 
-  display.drawRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, SSD1306_WHITE);
+  // Input Box
+  display.drawRoundRect(x_offset + 2, 2, SCREEN_WIDTH - 4, 14, 4, SSD1306_WHITE);
 
   display.setCursor(x_offset + 5, 5);
   String displayText = "";
@@ -3750,12 +4277,12 @@ void drawKeyboard(int x_offset) {
 
   int startY = 20;
   int keyW = 11;
-  int keyH = 10;
+  int keyH = 11;
   int gap = 1;
 
   for (int r = 0; r < 3; r++) {
     for (int c = 0; c < 10; c++) {
-      int x = 2 + c * (keyW + gap);
+      int x = 3 + c * (keyW + gap); // Shift slightly right
       int y = startY + r * (keyH + gap);
 
       const char* keyLabel;
@@ -3768,21 +4295,28 @@ void drawKeyboard(int x_offset) {
       }
 
       if (r == cursorY && c == cursorX) {
-        display.fillRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.fillRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_BLACK);
       } else {
-        display.drawRect(x, y, keyW, keyH, SSD1306_WHITE);
+        display.drawRoundRect(x, y, keyW, keyH, 2, SSD1306_WHITE);
         display.setTextColor(SSD1306_WHITE);
       }
 
-      display.setCursor(x + 3, y + 1);
+      // Center char
+      int tX = x + 3;
+      if(strlen(keyLabel) > 1) tX = x + 1; // Adjust for "OK" or "<"
+
+      display.setCursor(tX, y + 2);
       display.print(keyLabel);
     }
   }
 
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(2, 56);
-  display.print("SEL:Type #:Mode");
+  display.setTextSize(1);
+  display.setCursor(4, 56);
+  display.print(currentKeyboardMode == MODE_LOWER ? "[abc]" : (currentKeyboardMode == MODE_UPPER ? "[ABC]" : "[123]"));
+  display.setCursor(40, 56);
+  display.print("SEL:Enter #:Mode");
 
   display.display();
 }
@@ -3866,6 +4400,15 @@ void handleUp() {
         systemMenuSelection--;
       }
       break;
+    case STATE_SYSTEM_SUB_STATUS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      if (systemMenuSelection > 0) systemMenuSelection--;
+      break;
     case STATE_API_SELECT:
       if (menuSelection > 0) {
         menuSelection--;
@@ -3875,6 +4418,11 @@ void handleUp() {
     case STATE_PASSWORD_INPUT:
       cursorY--;
       if (cursorY < 0) cursorY = 2; // Wrap to bottom
+      break;
+    case STATE_PIN_LOCK:
+    case STATE_CHANGE_PIN:
+      cursorY--;
+      if (cursorY < 0) cursorY = 3; // Wrap to bottom (4 rows)
       break;
     case STATE_CHAT_RESPONSE:
       if (scrollOffset > 0) {
@@ -3932,15 +4480,19 @@ void handleDown() {
       }
       break;
     case STATE_SYSTEM_MENU:
-      if (systemMenuSelection < 10) {
+      if (systemMenuSelection < 3) { // 3 items + back
         systemMenuSelection++;
       }
       break;
-    case STATE_PIN_LOCK:
-    case STATE_CHANGE_PIN:
-       cursorY++;
-       if (cursorY > 2) cursorY = 0;
-       break;
+    case STATE_SYSTEM_SUB_STATUS:
+      if (systemMenuSelection < 3) systemMenuSelection++;
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      if (systemMenuSelection < 6) systemMenuSelection++;
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      if (systemMenuSelection < 5) systemMenuSelection++;
+      break;
     case STATE_API_SELECT:
       if (menuSelection < 1) {
         menuSelection++;
@@ -3951,6 +4503,11 @@ void handleDown() {
       cursorY++;
       if (cursorY > 2) cursorY = 0; // Wrap to top
       break;
+    case STATE_PIN_LOCK:
+    case STATE_CHANGE_PIN:
+       cursorY++;
+       if (cursorY > 3) cursorY = 0; // Wrap to top (4 rows)
+       break;
     case STATE_CHAT_RESPONSE:
       scrollOffset += 10;
       break;
@@ -3970,10 +4527,13 @@ void handleLeft() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+      cursorX--;
+      if (cursorX < 0) cursorX = 9; // Wrap to right
+      break;
     case STATE_PIN_LOCK:
     case STATE_CHANGE_PIN:
       cursorX--;
-      if (cursorX < 0) cursorX = 9; // Wrap to right
+      if (cursorX < 0) cursorX = 2; // Wrap to right (3 cols)
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -3991,10 +4551,13 @@ void handleRight() {
   switch(currentState) {
     case STATE_KEYBOARD:
     case STATE_PASSWORD_INPUT:
+      cursorX++;
+      if (cursorX > 9) cursorX = 0; // Wrap to left
+      break;
     case STATE_PIN_LOCK:
     case STATE_CHANGE_PIN:
       cursorX++;
-      if (cursorX > 9) cursorX = 0; // Wrap to left
+      if (cursorX > 2) cursorX = 0; // Wrap to left (3 cols)
       break;
     case STATE_GAME_SPACE_INVADERS:
       // Handled in handleSpaceInvadersInput
@@ -4038,6 +4601,15 @@ void handleSelect() {
       break;
     case STATE_SYSTEM_MENU:
       handleSystemMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_STATUS:
+      handleSystemStatusMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      handleSystemSettingsMenuSelect();
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      handleSystemToolsMenuSelect();
       break;
     case STATE_SYSTEM_POWER:
       {
@@ -4194,16 +4766,40 @@ void handleBackButton() {
       break;
 
     // Other simple cases
+    case STATE_PIN_LOCK:
+      // Prevent exit (Security)
+      break;
     case STATE_SYSTEM_MENU:
     case STATE_VIDEO_PLAYER:
       changeState(STATE_MAIN_MENU);
       break;
+    case STATE_SYSTEM_SUB_STATUS:
+      changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 0;
+      break;
+    case STATE_SYSTEM_SUB_SETTINGS:
+      changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 1;
+      break;
+    case STATE_SYSTEM_SUB_TOOLS:
+      changeState(STATE_SYSTEM_MENU);
+      systemMenuSelection = 2;
+      break;
     case STATE_SYSTEM_PERF:
     case STATE_SYSTEM_NET:
     case STATE_SYSTEM_DEVICE:
+      changeState(STATE_SYSTEM_SUB_STATUS);
+      break;
     case STATE_SYSTEM_BENCHMARK:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
+      break;
     case STATE_SYSTEM_POWER:
-      changeState(STATE_SYSTEM_MENU);
+      changeState(STATE_SYSTEM_SUB_SETTINGS);
+      break;
+    case STATE_TOOL_SPAMMER:
+    case STATE_TOOL_DETECTOR:
+      stopWifiTools();
+      changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
 
     default:
