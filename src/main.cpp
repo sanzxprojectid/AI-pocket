@@ -563,6 +563,7 @@ uint8_t packet[128] = {
 int deauthCount = 0;
 unsigned long lastDeauthTime = 0;
 bool underAttack = false;
+String attackerMAC = "Unknown";
 
 // Graphing Globals
 #define GRAPH_WIDTH 64
@@ -1374,6 +1375,12 @@ void deauth_sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type) {
     deauthCount++;
     lastDeauthTime = millis();
     underAttack = true;
+
+    // AMBIL MAC ADDRESS PELAKU (Byte 10 s/d 15 di frame management)
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
+    attackerMAC = String(macStr);
   }
 }
 
@@ -1415,14 +1422,31 @@ void updateDetector() {
 void drawDetector() {
   display.clearDisplay();
 
+  // --- EFEK SENTINEL: LAYAR GLITCH SAAT DISERANG ---
+  if (underAttack) {
+      // Layar kedip-kedip (Invert) setiap 100ms biar panik
+      bool blink = (millis() / 100) % 2;
+      display.invertDisplay(blink);
+
+      // Flash LED Merah (Tanda Bahaya)
+      if ((millis() / 50) % 2 == 0) pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+      else pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+      pixels.show();
+  } else {
+      display.invertDisplay(false); // Balikin layar normal kalau aman
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0)); // Matikan LED
+      pixels.show();
+  }
+
+  // Header
   display.fillRect(0, 0, SCREEN_WIDTH, 12, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setCursor(20, 2);
-  display.print("WIFI GUARD");
+  display.print(underAttack ? "! WARNING !" : "WIFI GUARD");
 
   display.setTextColor(SSD1306_WHITE);
 
-  // Draw Graph
+  // Gambar Grafik Sinyal (Sama kayak yang lama)
   int graphBaseY = 63;
   int maxVal = 10;
   for(int i=0; i<GRAPH_WIDTH; i++) if(deauthHistory[i] > maxVal) maxVal = deauthHistory[i];
@@ -1430,26 +1454,37 @@ void drawDetector() {
   for (int i = 0; i < GRAPH_WIDTH; i++) {
       int idx = (graphHead + i) % GRAPH_WIDTH;
       int val = deauthHistory[idx];
-
       int h = map(val, 0, maxVal, 0, 30);
       if (h > 0) {
         display.drawLine(i * 2, graphBaseY, i * 2, graphBaseY - h, SSD1306_WHITE);
       }
   }
 
+  // --- TAMPILAN INFO PELAKU ---
   if (underAttack) {
     display.setTextSize(1);
+
     display.setCursor(0, 15);
     display.print("ATTACK DETECTED!");
-    display.setCursor(0, 25);
-    display.print("Total: "); display.print(deauthCount);
 
-    if ((millis() / 200) % 2 == 0) triggerNeoPixelEffect(pixels.Color(255, 0, 0), 50);
+    // Tampilkan MAC Address Pelaku
+    display.setCursor(0, 25);
+    display.print("SRC: ");
+    display.print(attackerMAC);
+
+    display.setCursor(0, 35);
+    display.print("Pkts: "); display.print(deauthCount);
+
   } else {
+    // Tampilan Standar (Lagi Nyari)
     display.setCursor(0, 15);
     display.print("Status: Safe");
+
     display.setCursor(0, 25);
-    display.print("Scanning...");
+    display.print("Scanning Air...");
+
+    display.setCursor(0, 35);
+    display.print("Pkts: "); display.print(deauthCount);
   }
 
   display.display();
