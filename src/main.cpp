@@ -1031,6 +1031,10 @@ const unsigned char ICON_BLE[] PROGMEM = {
   0x18, 0x5A, 0xDB, 0x5A, 0x18, 0x18, 0x18, 0x18
 };
 
+const unsigned char ICON_TRUCK[] PROGMEM = {
+  0x00, 0x18, 0x7E, 0x7E, 0x7E, 0x24, 0x00, 0x00
+};
+
 // Racing Car Sprites (16x16)
 const unsigned char BITMAP_CAR_STRAIGHT[] PROGMEM = {
   0x03, 0xC0, 0x0F, 0xF0, 0x1F, 0xF8, 0x3F, 0xFC,
@@ -4209,9 +4213,10 @@ void showMainMenu(int x_offset) {
     {"WIFI MGR",  "SCAN/ATTACK",   ICON_WIFI},
     {"GAMES",     "ARCADE ZONE",   ICON_GAME},
     {"VIDEO",     "BAD APPLE",     ICON_VIDEO},
+    {"COURIER",   "LIVE TRACK",    ICON_TRUCK},
     {"SYSTEM",    "DEVICE INFO",   ICON_SYSTEM}
   };
-  int numItems = 5;
+  int numItems = 6;
 
   // --- BAGIAN 1: SIDEBAR (KIRI) ---
   int sidebarWidth = 26;
@@ -4282,6 +4287,17 @@ void showMainMenu(int x_offset) {
     }
   }
   else if (menuSelection == 4) {
+    // Tampilan COURIER: Peta Mini
+    display.setCursor(contentX + 2, widgetY + 2); display.print("TRACKING:");
+    // Draw simple map path
+    display.drawLine(contentX + 10, widgetY + 25, contentX + 30, widgetY + 15, SSD1306_WHITE);
+    display.drawLine(contentX + 30, widgetY + 15, contentX + 60, widgetY + 20, SSD1306_WHITE);
+    display.fillCircle(contentX + 10, widgetY + 25, 2, SSD1306_WHITE); // Start
+    display.fillCircle(contentX + 60, widgetY + 20, 2, SSD1306_WHITE); // End
+    // Blink curr pos
+    if((millis()/500)%2) display.drawCircle(contentX + 30, widgetY + 15, 3, SSD1306_WHITE);
+  }
+  else if (menuSelection == 5) {
     // Tampilan SYSTEM: Memory Block
     display.setCursor(contentX + 2, widgetY + 2); display.print("MEM_DUMP:");
     for(int y=0; y<3; y++) {
@@ -4336,7 +4352,10 @@ void handleMainMenuSelect() {
       videoCurrentFrame = 0;
       changeState(STATE_VIDEO_PLAYER);
       break;
-    case 4: // System Info
+    case 4: // Courier
+      changeState(STATE_TOOL_COURIER);
+      break;
+    case 5: // System Info
       systemMenuSelection = 0;
       changeState(STATE_SYSTEM_MENU);
       break;
@@ -5163,7 +5182,7 @@ void handleUp() {
 void handleDown() {
   switch(currentState) {
     case STATE_MAIN_MENU:
-      if (menuSelection < 4) {
+      if (menuSelection < 5) {
         menuSelection++;
         menuTargetScrollY = menuSelection * 22;
         menuTextScrollX = 0;
@@ -5560,7 +5579,8 @@ void handleBackButton() {
       changeState(STATE_TOOL_BLE_MENU);
       break;
     case STATE_TOOL_COURIER:
-      changeState(STATE_SYSTEM_SUB_TOOLS);
+      if (previousState == STATE_MAIN_MENU) changeState(STATE_MAIN_MENU);
+      else changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
 
     default:
