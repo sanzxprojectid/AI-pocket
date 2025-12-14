@@ -71,6 +71,7 @@ enum AppState {
   STATE_TOOL_DETECTOR,
   STATE_DEAUTH_SELECT,
   STATE_TOOL_DEAUTH,
+  STATE_TOOL_PROBE_SNIFFER,
   STATE_TOOL_BLE_MENU,
   STATE_TOOL_BLE_RUN,
   STATE_PIN_LOCK,
@@ -565,6 +566,12 @@ unsigned long lastDeauthTime = 0;
 bool underAttack = false;
 String attackerMAC = "Unknown";
 
+// --- PROBE SNIFFER CONFIG ---
+String detectedProbeSSID = "Searching...";
+String detectedProbeMAC = "Listening...";
+String probeHistory[5]; // Simpan 5 jejak terakhir
+int probeHistoryIndex = 0;
+
 // Graphing Globals
 #define GRAPH_WIDTH 64
 int deauthHistory[GRAPH_WIDTH];
@@ -581,6 +588,8 @@ void toggleKeyboardMode();
 const char* getCurrentKey();
 void ledQuickFlash();
 void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY);
+void drawProbeSniffer();
+void updateProbeSniffer();
 
 // Chat History
 String chatHistory = "";
@@ -1367,21 +1376,124 @@ void drawSpammer() {
 void deauth_sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type) {
   wifi_promiscuous_pkt_t *p = (wifi_promiscuous_pkt_t*)buf;
   uint8_t *frame = p->payload;
+  int len = p->rx_ctrl.sig_len;
 
+  // Cek Frame Control
   uint8_t type_bits = (frame[0] >> 2) & 0x03;
   uint8_t subtype_bits = (frame[0] >> 4) & 0xF;
 
+  // --- LOGIKA 1: DEAUTH DETECTOR (Yang tadi) ---
   if (type_bits == 0 && (subtype_bits == 0xC || subtype_bits == 0xA)) {
     deauthCount++;
     lastDeauthTime = millis();
     underAttack = true;
-
-    // AMBIL MAC ADDRESS PELAKU (Byte 10 s/d 15 di frame management)
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
              frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
     attackerMAC = String(macStr);
   }
+
+  // --- LOGIKA 2: PROBE REQUEST SNIFFER (Fitur Baru) ---
+  // Subtype 4 = Probe Request (HP nyari WiFi)
+  if (type_bits == 0 && subtype_bits == 0x4) {
+
+    // Ambil MAC Address HP Pengirim (Byte 10-15)
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             frame[10], frame[11], frame[12], frame[13], frame[14], frame[15]);
+
+    // Parsing SSID (Nama WiFi yang dicari)
+    // Payload manajemen frame mulai di byte 24
+    int pos = 24;
+
+    // Loop parsing Tagged Parameters (Tag Number, Tag Length, Data)
+    while (pos < len) {
+      uint8_t tagNum = frame[pos];
+      uint8_t tagLen = frame[pos+1];
+
+      if (pos + 2 + tagLen > len) break; // Safety check
+
+      // Tag 0 adalah SSID
+      if (tagNum == 0 && tagLen > 0) {
+        char ssidBuf[33];
+        // Copy SSID (max 32 chars)
+        int copyLen = (tagLen > 32) ? 32 : tagLen;
+        memcpy(ssidBuf, &frame[pos+2], copyLen);
+        ssidBuf[copyLen] = '\0'; // Null terminate
+
+        String newSSID = String(ssidBuf);
+
+        // Filter nama kosong/sampah
+        if (newSSID.length() > 0 && newSSID != detectedProbeSSID) {
+           detectedProbeSSID = newSSID;
+           detectedProbeMAC = String(macStr);
+
+           // Simpan ke History (Geser array)
+           for(int i=4; i>0; i--) probeHistory[i] = probeHistory[i-1];
+           probeHistory[0] = "[" + newSSID + "]";
+
+           // Efek Visual (Flash Pixel Biru - Intel style)
+           triggerNeoPixelEffect(pixels.Color(0, 0, 255), 50);
+        }
+        break; // Udah dapet SSID, keluar loop
+      }
+
+      pos += 2 + tagLen; // Lanjut ke tag berikutnya
+    }
+  }
+}
+
+void initProbeSniffer() {
+    WiFi.disconnect();
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_promiscuous_rx_cb(&deauth_sniffer_callback);
+}
+
+// 3. FUNGSI UPDATE (Panggil ini di loop saat mode Probe Sniffer aktif)
+// Kita perlu Channel Hopping biar dapet sinyal dari semua frekuensi
+void updateProbeSniffer() {
+  // Ganti channel setiap 200ms
+  if (millis() % 200 == 0) {
+    int ch = (millis() / 200) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+}
+
+// 4. TAMPILAN LAYAR (Copy fungsi baru ini)
+void drawProbeSniffer() {
+  display.clearDisplay();
+  drawStatusBar(); // Pake status bar yang udah ada
+
+  // Header Keren
+  display.fillRect(0, 10, SCREEN_WIDTH, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(25, 12);
+  display.print("PROBE HUNTER");
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Tampilkan data terakhir yang ketangkep
+  display.setTextSize(1);
+  display.setCursor(0, 25);
+  display.print("SRC: "); display.print(detectedProbeMAC);
+
+  display.setCursor(0, 35);
+  display.print("ASK: ");
+
+  // Highlight SSID yang dicari
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); // Invert text
+  display.print(detectedProbeSSID);
+  display.setTextColor(SSD1306_WHITE); // Balikin normal
+
+  // Tampilkan History Singkat di bawah
+  display.drawLine(0, 46, SCREEN_WIDTH, 46, SSD1306_WHITE);
+  display.setCursor(0, 50);
+  display.setTextSize(1);
+  // Cuma nampilin history terakhir biar layar gak penuh
+  display.print("Hist: ");
+  display.print(probeHistory[1]);
+
+  display.display();
 }
 
 void initDetector() {
@@ -1704,6 +1816,7 @@ void refreshCurrentScreen() {
     case STATE_TOOL_DETECTOR: drawDetector(); break;
     case STATE_DEAUTH_SELECT: drawDeauthSelect(x_offset); break;
     case STATE_TOOL_DEAUTH: drawDeauthTool(); break;
+    case STATE_TOOL_PROBE_SNIFFER: drawProbeSniffer(); break;
     case STATE_TOOL_BLE_MENU: drawBLEMenu(x_offset); break;
     case STATE_TOOL_BLE_RUN: drawBLERun(); break;
     // Game states handle their own drawing, so no call here
@@ -2023,6 +2136,7 @@ void loop() {
 
   if (currentState == STATE_TOOL_SPAMMER) updateSpammer();
   if (currentState == STATE_TOOL_DETECTOR) updateDetector();
+  if (currentState == STATE_TOOL_PROBE_SNIFFER) updateProbeSniffer();
   if (currentState == STATE_TOOL_BLE_RUN) updateBLESpam();
 
   if (currentState == STATE_VIDEO_PLAYER) {
@@ -4227,12 +4341,13 @@ void showSystemToolsMenu(int x_offset) {
     "I2C Benchmark",
     "SSID Spammer",
     "Deauth Detect",
+    "Probe Sniffer",
     "WiFi Deauther",
     "BLE Spammer",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 8, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 9, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -4300,13 +4415,17 @@ void handleSystemToolsMenuSelect() {
       changeState(STATE_TOOL_DETECTOR);
       break;
     case 4:
-      scanForDeauth();
+      initProbeSniffer();
+      changeState(STATE_TOOL_PROBE_SNIFFER);
       break;
     case 5:
+      scanForDeauth();
+      break;
+    case 6:
       menuSelection = 0;
       changeState(STATE_TOOL_BLE_MENU);
       break;
-    case 6:
+    case 7:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -4314,7 +4433,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 7: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 8: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -5259,6 +5378,7 @@ void handleBackButton() {
       break;
     case STATE_TOOL_SPAMMER:
     case STATE_TOOL_DETECTOR:
+    case STATE_TOOL_PROBE_SNIFFER:
       stopWifiTools();
       changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
