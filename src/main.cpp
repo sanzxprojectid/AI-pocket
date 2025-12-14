@@ -15,6 +15,9 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
+#include <WebServer.h>
+#include <Update.h>
+#include <ESPmDNS.h>
 #include "secrets.h"
 
 // NeoPixel LED settings
@@ -582,6 +585,8 @@ int lastDeauthCount = 0;
 
 // Forward Declarations for Screen Saver & Lock
 void drawStatusBar();
+void drawHeader(String text); // Forward declaration
+void drawBar(int percent, int y); // Forward declaration
 void drawKeyboard(int x_offset = 0);
 void drawPinKeyboard(int x_offset = 0);
 void changeState(AppState newState);
@@ -1833,6 +1838,110 @@ void checkResiReal() {
     isTracking = false;
 }
 
+// ==========================================
+// RECOVERY MODE & OTA
+// ==========================================
+WebServer server(80);
+
+const char* updatePage =
+"<style>body{background:black;color:cyan;font-family:Courier;text-align:center;margin-top:20%} .btn{background:#003333;color:white;padding:15px;border:1px solid cyan;cursor:pointer;margin-top:20px}</style>"
+"<h1>// RECOVERY SYSTEM //</h1>"
+"<form method='POST' action='/update' enctype='multipart/form-data'>"
+"<input type='file' name='update' style='color:white'><br>"
+"<input type='submit' value='FLASH FIRMWARE' class='btn'></form>";
+
+void drawHeader(String text) {
+  display.fillRect(0, 0, 128, 12, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(5, 2); display.print(text);
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void drawBar(int percent, int y) {
+  display.drawRect(10, y, 108, 8, SSD1306_WHITE);
+  int w = map(percent, 0, 100, 0, 106);
+  display.fillRect(12, y+2, w, 4, SSD1306_WHITE);
+}
+
+void runRecoveryMode() {
+  WiFi.disconnect();
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("S3-RECOVERY", "admin12345");
+
+  server.on("/", HTTP_GET, []() { server.send(200, "text/html", updatePage); });
+  server.on("/update", HTTP_POST, []() {
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    delay(1000);
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      display.clearDisplay(); drawHeader("RECOVERY MODE");
+      display.setCursor(20, 30); display.print("FLASHING..."); display.display();
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) Update.printError(Serial);
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) { display.clearDisplay(); display.setCursor(40,30); display.print("DONE!"); display.display(); }
+    }
+  });
+  server.begin();
+
+  display.clearDisplay();
+  drawHeader("! RECOVERY MODE !");
+  display.setTextSize(1);
+  display.setCursor(0, 20); display.print("WiFi: S3-RECOVERY");
+  display.setCursor(0, 35); display.print("IP  : 192.168.4.1");
+  display.setCursor(0, 50); display.print("Open IP in Browser");
+  display.display();
+
+  while(true) {
+      server.handleClient();
+      delay(1);
+      // Blink LED
+      if((millis()/500)%2) digitalWrite(LED_BUILTIN, HIGH); else digitalWrite(LED_BUILTIN, LOW);
+  }
+}
+
+void checkBootloader() {
+  // Check BOOT (GPIO 0) and SELECT (GPIO 14)
+  pinMode(0, INPUT_PULLUP); // BOOT
+  // BTN_SELECT is already GPIO 14, defined macros used in setup but we need it early here
+  // We re-init pinmode just in case
+  pinMode(14, INPUT_PULLUP);
+
+  unsigned long start = millis();
+  bool enterRecovery = false;
+
+  // Show prompt for 3 seconds
+  while (millis() - start < 3000) {
+    int timeLeft = 3 - ((millis() - start) / 1000);
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(10, 10); display.print("HOLD [OK] TO ENTER");
+    display.setCursor(25, 20); display.print("RECOVERY MODE");
+
+    display.setTextSize(2);
+    display.setCursor(60, 35); display.print(timeLeft);
+
+    int bar = map(millis() - start, 0, 3000, 0, 100);
+    drawBar(bar, 55);
+    display.display();
+
+    // Check buttons (Active LOW)
+    if (digitalRead(0) == LOW || digitalRead(14) == LOW) {
+        enterRecovery = true;
+        break;
+    }
+    delay(10);
+  }
+
+  if (enterRecovery) {
+      runRecoveryMode();
+  }
+}
+
 void stopWifiTools() {
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(NULL);
@@ -2118,6 +2227,9 @@ void setup() {
 
   // Show cinematic boot screen (WiFi connects in background during this)
   showBootScreen();
+
+  // Check for Recovery Mode entry
+  checkBootloader();
 
   if (pinLockEnabled) {
       inputPin = "";
@@ -4529,10 +4641,11 @@ void showSystemToolsMenu(int x_offset) {
     "WiFi Deauther",
     "BLE Spammer",
     "Courier Check",
+    "Recovery Mode",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 10, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 11, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -4614,6 +4727,9 @@ void handleSystemToolsMenuSelect() {
       changeState(STATE_TOOL_COURIER);
       break;
     case 8:
+      runRecoveryMode();
+      break;
+    case 9:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -4621,7 +4737,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 9: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 10: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -5239,7 +5355,7 @@ void handleDown() {
       if (systemMenuSelection < 6) systemMenuSelection++;
       break;
     case STATE_SYSTEM_SUB_TOOLS:
-      if (systemMenuSelection < 9) systemMenuSelection++;
+      if (systemMenuSelection < 10) systemMenuSelection++;
       break;
     case STATE_DEAUTH_SELECT:
       if (selectedNetwork < networkCount - 1) {
