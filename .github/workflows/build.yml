@@ -17,6 +17,7 @@ jobs:
       run: |
         cp src/main.cpp AI-pocket.ino
         cp src/secrets.h secrets.h
+        rm -rf src
 
     - name: SETUP ARDUINO CLI (LOAD THE GUN)
       uses: arduino/setup-arduino-cli@v1
