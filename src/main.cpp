@@ -74,6 +74,7 @@ enum AppState {
   STATE_TOOL_PROBE_SNIFFER,
   STATE_TOOL_BLE_MENU,
   STATE_TOOL_BLE_RUN,
+  STATE_TOOL_COURIER,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_SCREEN_SAVER,
@@ -590,6 +591,8 @@ void ledQuickFlash();
 void drawGenericListMenu(int x_offset, const char* title, const unsigned char* icon, const char** items, int itemCount, int selection, float* scrollY);
 void drawProbeSniffer();
 void updateProbeSniffer();
+void drawCourierTool();
+void checkResiReal();
 
 // Chat History
 String chatHistory = "";
@@ -1735,6 +1738,95 @@ void drawBLERun() {
   display.display();
 }
 
+// --- COURIER TRACKER LOGIC ---
+String rajaOngkirApiKey = "YOUR_API_KEY_HERE";
+String courierType = "jnt";
+String courierResi = "JX123456789";
+String courierStatus = "Ready";
+String courierLastLoc = "-";
+
+void drawCourierTool() {
+    display.clearDisplay();
+    drawStatusBar();
+
+    display.setTextSize(1);
+    display.setCursor(25, 0);
+    display.print("COURIER CHECK");
+    display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+
+    display.setCursor(0, 15);
+    display.print("RESI: "); display.print(courierResi);
+
+    display.setCursor(0, 25);
+    display.print("EXP : "); display.print(courierType);
+
+    display.drawLine(0, 35, SCREEN_WIDTH, 35, SSD1306_WHITE);
+
+    display.setCursor(0, 38);
+    display.print("STS: "); display.print(courierStatus);
+
+    display.setCursor(0, 48);
+    String loc = courierLastLoc;
+    if(loc.length() > 21) loc = loc.substring(0, 21);
+    display.print(loc);
+
+    display.setCursor(0, 56);
+    display.print("[SEL] CHECK");
+
+    display.display();
+}
+
+void checkResiReal() {
+    if(WiFi.status() != WL_CONNECTED) {
+        courierStatus = "No WiFi!";
+        return;
+    }
+
+    courierStatus = "Checking...";
+    drawCourierTool(); // Force update
+    display.display();
+
+    HTTPClient http;
+    http.begin("https://api.rajaongkir.com/starter/waybill");
+    http.addHeader("key", rajaOngkirApiKey);
+    http.addHeader("content-type", "application/x-www-form-urlencoded");
+
+    String body = "waybill=" + courierResi + "&courier=" + courierType;
+    int httpCode = http.POST(body);
+
+    if(httpCode > 0) {
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if(!error) {
+             JsonObject raja = doc["rajaongkir"];
+             int status = raja["status"]["code"];
+             if(status == 200) {
+                 String delivery = raja["result"]["delivery_status"]["status"];
+                 courierStatus = delivery;
+
+                 JsonArray manifest = raja["result"]["manifest"];
+                 if(manifest.size() > 0) {
+                     String city = manifest[0]["city_name"];
+                     String desc = manifest[0]["manifest_description"];
+                     courierLastLoc = "[" + city + "] " + desc;
+                 } else {
+                     courierLastLoc = "No History";
+                 }
+             } else {
+                 String err = raja["status"]["description"];
+                 courierStatus = err;
+             }
+        } else {
+            courierStatus = "JSON Error";
+        }
+    } else {
+        courierStatus = "HTTP Error";
+    }
+    http.end();
+}
+
 void stopWifiTools() {
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(NULL);
@@ -1819,6 +1911,7 @@ void refreshCurrentScreen() {
     case STATE_TOOL_PROBE_SNIFFER: drawProbeSniffer(); break;
     case STATE_TOOL_BLE_MENU: drawBLEMenu(x_offset); break;
     case STATE_TOOL_BLE_RUN: drawBLERun(); break;
+    case STATE_TOOL_COURIER: drawCourierTool(); break;
     // Game states handle their own drawing, so no call here
     case STATE_GAME_SPACE_INVADERS:
     case STATE_GAME_SIDE_SCROLLER:
@@ -4405,10 +4498,11 @@ void showSystemToolsMenu(int x_offset) {
     "Probe Sniffer",
     "WiFi Deauther",
     "BLE Spammer",
+    "Courier Check",
     "Reboot System",
     "Back"
   };
-  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 9, systemMenuSelection, &systemMenuScrollY);
+  drawGenericListMenu(x_offset, "TOOLS", ICON_SYS_TOOLS, items, 10, systemMenuSelection, &systemMenuScrollY);
 }
 
 void handleSystemMenuSelect() {
@@ -4487,6 +4581,9 @@ void handleSystemToolsMenuSelect() {
       changeState(STATE_TOOL_BLE_MENU);
       break;
     case 7:
+      changeState(STATE_TOOL_COURIER);
+      break;
+    case 8:
       display.clearDisplay();
       display.setCursor(30, 30);
       display.print("Rebooting...");
@@ -4494,7 +4591,7 @@ void handleSystemToolsMenuSelect() {
       delay(500);
       ESP.restart();
       break;
-    case 8: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
+    case 9: changeState(STATE_SYSTEM_MENU); systemMenuSelection = 2; break;
   }
 }
 
@@ -5280,6 +5377,9 @@ void handleSelect() {
     case STATE_TOOL_BLE_MENU:
       handleBLEMenuSelect();
       break;
+    case STATE_TOOL_COURIER:
+      checkResiReal();
+      break;
     case STATE_API_SELECT:
       handleAPISelectSelect();
       break;
@@ -5457,6 +5557,9 @@ void handleBackButton() {
       stopBLESpam();
       display.invertDisplay(false);
       changeState(STATE_TOOL_BLE_MENU);
+      break;
+    case STATE_TOOL_COURIER:
+      changeState(STATE_SYSTEM_SUB_TOOLS);
       break;
 
     default:
