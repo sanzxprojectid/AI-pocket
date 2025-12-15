@@ -1798,11 +1798,10 @@ void checkResiReal() {
     courierStatus = "FETCHING...";
     drawCourierTool(); // Force update
 
-    WiFiClientSecure client;
-    client.setInsecure(); // Bypass SSL Certificate Check
+    WiFiClient client;
 
     HTTPClient http;
-    String url = "https://api.binderbyte.com/v1/track?api_key=" + bb_apiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
+    String url = "http://api.binderbyte.com/v1/track?api_key=" + bb_apiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
 
     http.begin(client, url);
     int httpCode = http.GET();
