@@ -297,6 +297,8 @@ struct ConversationContext {
 // Forward declaration needed for extractEnhancedContext
 String getRecentChatContext(int maxMessages);
 
+void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
+
 ConversationContext extractEnhancedContext() {
   ConversationContext ctx;
   ctx.totalInteractions = chatMessageCount;
@@ -881,7 +883,7 @@ void initESPNow() {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
-  esp_now_register_recv_cb(esp_now_recv_cb_t(onDataRecv));
+  esp_now_register_recv_cb(onDataRecv);
 
   for(const auto& p : peers) {
     esp_now_peer_info_t peerInfo = {};
@@ -1271,7 +1273,7 @@ void showESPNowChat(int x_offset) {
        }
     }
   }
-  
+
   // Input Hint
   canvas.drawFastHLine(0, SCREEN_HEIGHT - 20, SCREEN_WIDTH, COLOR_DIM);
   canvas.setTextColor(COLOR_DIM);
@@ -2271,6 +2273,7 @@ void setup() {
   
   String savedSSID = loadPreferenceString("ssid", "");
   String savedPassword = loadPreferenceString("password", "");
+  WiFi.mode(WIFI_STA);
   if (savedSSID.length() > 0) {
     Serial.print("Connecting to: ");
     Serial.println(savedSSID);
