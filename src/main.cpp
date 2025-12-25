@@ -18,6 +18,8 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ESPmDNS.h>
+#include <esp_now.h>
+#include <vector>
 #include "secrets.h"
 
 // ============ TFT PINS & CONFIG ============
@@ -74,7 +76,11 @@ enum AppState {
   STATE_CHAT_RESPONSE,
   STATE_LOADING,
   STATE_SYSTEM_PERF,
-  STATE_TOOL_COURIER
+  STATE_TOOL_COURIER,
+  STATE_ESPNOW_MENU,
+  STATE_ESPNOW_CHAT,
+  STATE_ESPNOW_ADD_MAC,
+  STATE_ESPNOW_ADD_NAME
 };
 
 AppState currentState = STATE_BOOT;
@@ -137,7 +143,14 @@ const char* keyboardNumbers[3][10] = {
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME };
+enum KeyboardContext {
+  CONTEXT_CHAT,
+  CONTEXT_WIFI_PASSWORD,
+  CONTEXT_BLE_NAME,
+  CONTEXT_ESPNOW_MAC,
+  CONTEXT_ESPNOW_NAME,
+  CONTEXT_ESPNOW_MSG
+};
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 // ============ WIFI SCANNER ============
@@ -170,6 +183,22 @@ unsigned long lastStatusBarUpdate = 0;
 
 unsigned long lastInputTime = 0;
 String chatHistory = "";
+
+// ============ ESP-NOW CHAT ============
+struct ChatPeer {
+  String name;
+  uint8_t mac[6];
+};
+struct ChatMessage {
+  String sender; // "Me" or Peer Name
+  String text;
+  bool isSelf;
+};
+std::vector<ChatPeer> peers;
+std::vector<ChatMessage> espNowChatHistory;
+String newPeerMacStr = "";
+String newPeerName = "";
+int selectedPeerIndex = 0;
 
 enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
@@ -264,6 +293,9 @@ struct ConversationContext {
   int totalInteractions;      // Total interaksi
   String lastConversation;    // Percakapan terakhir untuk konteks immediate
 };
+
+// Forward declaration needed for extractEnhancedContext
+String getRecentChatContext(int maxMessages);
 
 ConversationContext extractEnhancedContext() {
   ConversationContext ctx;
@@ -767,6 +799,140 @@ bool loadPreferenceBool(const char* key, bool defaultValue) {
   return value;
 }
 
+// ============ ESP-NOW FUNCTIONS ============
+void savePeers() {
+  File file = LittleFS.open("/peers.json", "w");
+  if (!file) return;
+
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (const auto& peer : peers) {
+    JsonObject obj = array.add<JsonObject>();
+    obj["name"] = peer.name;
+    char macStr[18];
+    sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+      peer.mac[0], peer.mac[1], peer.mac[2], peer.mac[3], peer.mac[4], peer.mac[5]);
+    obj["mac"] = String(macStr);
+  }
+  serializeJson(doc, file);
+  file.close();
+}
+
+void loadPeers() {
+  peers.clear();
+  if (!LittleFS.exists("/peers.json")) return;
+
+  File file = LittleFS.open("/peers.json", "r");
+  if (!file) return;
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (!error) {
+    JsonArray array = doc.as<JsonArray>();
+    for (JsonObject obj : array) {
+      ChatPeer p;
+      p.name = obj["name"].as<String>();
+      String macStr = obj["mac"].as<String>();
+      int values[6];
+      if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+          &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) == 6) {
+        for (int i=0; i<6; i++) p.mac[i] = (uint8_t)values[i];
+        peers.push_back(p);
+      }
+    }
+  }
+}
+
+void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+  String senderName = String(macStr);
+  for(const auto& p : peers) {
+    bool match = true;
+    for(int i=0; i<6; i++) if(p.mac[i] != mac[i]) match = false;
+    if(match) { senderName = p.name; break; }
+  }
+
+  String msgText = "";
+  for(int i=0; i<len; i++) msgText += (char)incomingData[i];
+
+  ChatMessage msg;
+  msg.sender = senderName;
+  msg.text = msgText;
+  msg.isSelf = false;
+  espNowChatHistory.push_back(msg);
+
+  if (espNowChatHistory.size() > 50) {
+    espNowChatHistory.erase(espNowChatHistory.begin());
+  }
+
+  // Visual notification
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(50);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void initESPNow() {
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  esp_now_register_recv_cb(esp_now_recv_cb_t(onDataRecv));
+
+  for(const auto& p : peers) {
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, p.mac, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (!esp_now_is_peer_exist(p.mac)) {
+      esp_now_add_peer(&peerInfo);
+    }
+  }
+}
+
+void sendESPNowMessage(String text) {
+  if (selectedPeerIndex < 0 || selectedPeerIndex >= peers.size()) return;
+
+  const uint8_t* peerAddr = peers[selectedPeerIndex].mac;
+  esp_err_t result = esp_now_send(peerAddr, (uint8_t *)text.c_str(), text.length());
+
+  if (result == ESP_OK) {
+    ChatMessage msg;
+    msg.sender = "Me";
+    msg.text = text;
+    msg.isSelf = true;
+    espNowChatHistory.push_back(msg);
+    if (espNowChatHistory.size() > 50) espNowChatHistory.erase(espNowChatHistory.begin());
+  } else {
+    // showStatus("Send Failed", 1000); // Can't call showStatus here easily without flickering if in loop
+    Serial.println("ESP-NOW Send Failed");
+  }
+}
+
+void addNewPeer(String name, String macStr) {
+  ChatPeer p;
+  p.name = name;
+  unsigned int values[6]; // Changed to unsigned int to match sscanf format %x
+  if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
+      &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) == 6) {
+    for (int i=0; i<6; i++) p.mac[i] = (uint8_t)values[i];
+    peers.push_back(p);
+    savePeers();
+
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, p.mac, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (!esp_now_is_peer_exist(p.mac)) {
+      esp_now_add_peer(&peerInfo);
+    }
+  }
+}
+
 // ============ NEOPIXEL ============
 void triggerNeoPixelEffect(uint32_t color, int duration) {
   neoPixelColor = color;
@@ -940,38 +1106,178 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ MAIN MENU ============
+// ============ MAIN MENU (NEW UI) ============
 void showMainMenu(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
   
-  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  const char* items[] = {"AI CHAT", "ESP-NOW", "WIFI MGR", "COURIER", "SYSTEM"};
+  const char* descriptions[] = {
+    "Gemini Assistant", "P2P Messaging", "Scan & Connect", "Package Tracker", "Device Settings"
+  };
+  int itemCount = 5;
+
+  // Center Item (Selected)
+  int centerY = 70;
+  int boxH = 50;
+  int boxW = 220;
+  int boxX = (SCREEN_WIDTH - boxW) / 2;
+
+  // Draw Selected Item
+  canvas.fillRoundRect(boxX + x_offset, centerY, boxW, boxH, 8, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  String label = items[menuSelection];
+  int labelW = label.length() * 12;
+  canvas.setCursor(boxX + x_offset + (boxW - labelW)/2, centerY + 10);
+  canvas.print(label);
+
+  canvas.setTextSize(1);
+  String desc = descriptions[menuSelection];
+  int descW = desc.length() * 6;
+  canvas.setCursor(boxX + x_offset + (boxW - descW)/2, centerY + 32);
+  canvas.print(desc);
+
+  // Draw Previous Item
+  if (menuSelection > 0) {
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setTextSize(2);
+    String prev = items[menuSelection - 1];
+    int prevW = prev.length() * 12;
+    canvas.setCursor(SCREEN_WIDTH/2 - prevW/2 + x_offset, centerY - 35);
+    canvas.print(prev);
+  }
+
+  // Draw Next Item
+  if (menuSelection < itemCount - 1) {
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setTextSize(2);
+    String next = items[menuSelection + 1];
+    int nextW = next.length() * 12;
+    canvas.setCursor(SCREEN_WIDTH/2 - nextW/2 + x_offset, centerY + boxH + 20);
+    canvas.print(next);
+  }
+
+  // Draw indicators (scroll dots)
+  int dotStartX = SCREEN_WIDTH - 20;
+  int dotStartY = centerY;
+  for(int i=0; i<itemCount; i++) {
+      if (i == menuSelection) canvas.fillCircle(dotStartX, dotStartY + (i*10) - (menuSelection*10) + 25, 3, COLOR_PRIMARY);
+      else canvas.drawCircle(dotStartX, dotStartY + (i*10) - (menuSelection*10) + 25, 2, COLOR_DIM);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ ESP-NOW MENU ============
+void showESPNowMenu(int x_offset) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(2);
   canvas.setCursor(10, 2);
-  canvas.print("MAIN MENU");
-  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.print("CHAT PEERS");
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "COURIER", "SYSTEM"};
-  int itemHeight = 30;
-  int startY = 35;
+  int startY = 30;
+  int itemH = 25;
   
-  for (int i = 0; i < 4; i++) {
-    int y = startY + (i * itemHeight);
+  // Peers + "Add New"
+  int totalItems = peers.size() + 1;
+  int listStart = 0;
+  if (menuSelection > 3) listStart = menuSelection - 3;
+
+  for (int i = listStart; i < min(totalItems, listStart + 5); i++) {
+    int y = startY + ((i - listStart) * itemH);
+    bool selected = (i == menuSelection);
     
-    if (i == menuSelection) {
-      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 5, COLOR_PRIMARY);
+    if (selected) {
+      canvas.fillRoundRect(5 + x_offset, y, SCREEN_WIDTH - 10, itemH - 2, 4, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 5, COLOR_BORDER);
+      canvas.drawRoundRect(5 + x_offset, y, SCREEN_WIDTH - 10, itemH - 2, 4, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     
-    canvas.setTextSize(2);
-    canvas.setCursor(15, y + 8);
-    canvas.print(items[i]);
+    canvas.setTextSize(1);
+    canvas.setCursor(15 + x_offset, y + 8);
+
+    if (i < peers.size()) {
+      canvas.print(peers[i].name);
+      canvas.setCursor(150 + x_offset, y + 8);
+      char macShort[20];
+      sprintf(macShort, "%02X:%02X..%02X", peers[i].mac[0], peers[i].mac[1], peers[i].mac[5]);
+      canvas.print(macShort);
+    } else {
+      canvas.print("+ ADD NEW PEER");
+    }
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ ESP-NOW CHAT SCREEN ============
+void showESPNowChat(int x_offset) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(1);
+  canvas.setCursor(5, 21);
+  if (selectedPeerIndex < peers.size()) {
+    canvas.print("Chat: ");
+    canvas.print(peers[selectedPeerIndex].name);
+  } else {
+    canvas.print("Chat: Unknown");
+  }
+
+  // Messages Area
+  int bottomY = SCREEN_HEIGHT - 25;
+  int currentY = bottomY;
+
+  // Iterate backwards through history
+  for (int i = espNowChatHistory.size() - 1; i >= 0; i--) {
+    ChatMessage msg = espNowChatHistory[i];
+
+    // Filter logic: In a real app we filter by MAC. Here we assume one timeline or match names.
+    bool relevant = false;
+    if (msg.isSelf) relevant = true;
+    else if (selectedPeerIndex < peers.size() && msg.sender == peers[selectedPeerIndex].name) relevant = true;
+
+    if (relevant) {
+       int msgH = 15;
+       if (msg.text.length() > 25) msgH = 25; // Simple multiline check
+
+       currentY -= msgH;
+       if (currentY < 35) break; // Top of chat area
+
+       if (msg.isSelf) {
+         // Right aligned, White Bubble
+         int bubbleW = (msg.text.length()*6) + 10;
+         canvas.fillRoundRect(SCREEN_WIDTH - 10 - bubbleW + x_offset, currentY, bubbleW, msgH - 2, 4, COLOR_PRIMARY);
+         canvas.setTextColor(COLOR_BG);
+         canvas.setCursor(SCREEN_WIDTH - 10 - bubbleW + 5 + x_offset, currentY + 4);
+         canvas.print(msg.text);
+       } else {
+         // Left aligned, Outlined Bubble
+         int bubbleW = (msg.text.length()*6) + 10;
+         canvas.drawRoundRect(10 + x_offset, currentY, bubbleW, msgH - 2, 4, COLOR_PRIMARY);
+         canvas.setTextColor(COLOR_PRIMARY);
+         canvas.setCursor(15 + x_offset, currentY + 4);
+         canvas.print(msg.text);
+       }
+    }
   }
   
+  // Input Hint
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 20, SCREEN_WIDTH, COLOR_DIM);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(5, SCREEN_HEIGHT - 12);
+  canvas.print("SELECT to Type | L+R Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -1682,9 +1988,8 @@ void changeState(AppState newState) {
 // ============ MENU HANDLERS ============
 void handleMainMenuSelect() {
   switch(menuSelection) {
-    case 0:
+    case 0: // AI CHAT
       if (WiFi.status() == WL_CONNECTED) {
-        // Show AI mode selection screen
         isSelectingMode = true;
         showAIModeSelection(0);
       } else {
@@ -1692,16 +1997,36 @@ void handleMainMenuSelect() {
         showStatus("WiFi not connected!", 1500);
       }
       break;
-    case 1:
+    case 1: // ESP-NOW
+      menuSelection = 0;
+      changeState(STATE_ESPNOW_MENU);
+      break;
+    case 2: // WIFI MGR
       menuSelection = 0;
       changeState(STATE_WIFI_MENU);
       break;
-    case 2:
+    case 3: // COURIER
       changeState(STATE_TOOL_COURIER);
       break;
-    case 3:
+    case 4: // SYSTEM
       changeState(STATE_SYSTEM_PERF);
       break;
+  }
+}
+
+void handleEspNowMenuSelect() {
+  if (menuSelection == peers.size()) {
+    // Add New Peer
+    newPeerMacStr = "";
+    newPeerName = "";
+    keyboardContext = CONTEXT_ESPNOW_MAC;
+    cursorX = 0; cursorY = 0;
+    userInput = "";
+    changeState(STATE_ESPNOW_ADD_MAC);
+  } else {
+    // Select Peer
+    selectedPeerIndex = menuSelection;
+    changeState(STATE_ESPNOW_CHAT);
   }
 }
 
@@ -1729,6 +2054,23 @@ void handleKeyPress() {
       if (userInput.length() > 0) {
         sendToGemini();
       }
+    } else if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+      newPeerMacStr = userInput;
+      keyboardContext = CONTEXT_ESPNOW_NAME;
+      userInput = "";
+      cursorX = 0; cursorY = 0;
+      changeState(STATE_ESPNOW_ADD_NAME);
+    } else if (keyboardContext == CONTEXT_ESPNOW_NAME) {
+      newPeerName = userInput;
+      addNewPeer(newPeerName, newPeerMacStr);
+      showStatus("Peer Added!", 1000);
+      menuSelection = peers.size() - 1; // Select the new peer
+      changeState(STATE_ESPNOW_MENU);
+    } else if (keyboardContext == CONTEXT_ESPNOW_MSG) {
+      if (userInput.length() > 0) {
+         sendESPNowMessage(userInput);
+         userInput = ""; // Clear after sending
+      }
     }
   } else if (strcmp(key, "<") == 0) {
     if (userInput.length() > 0) {
@@ -1737,7 +2079,23 @@ void handleKeyPress() {
   } else if (strcmp(key, "#") == 0) {
     toggleKeyboardMode();
   } else {
-    userInput += key;
+    // Input Filtering
+    if (keyboardContext == CONTEXT_ESPNOW_MAC) {
+      // Allow 0-9, A-F only. Auto-add colons.
+      // Reuse key from standard keyboard, but check validity.
+      char c = key[0];
+      if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+        userInput += key;
+        // Auto-colon
+        int len = userInput.length();
+        if (len == 2 || len == 5 || len == 8 || len == 11 || len == 14) {
+          userInput += ":";
+        }
+        if (userInput.length() > 17) userInput = userInput.substring(0, 17);
+      }
+    } else {
+      userInput += key;
+    }
   }
 }
 
@@ -1798,6 +2156,16 @@ void refreshCurrentScreen() {
     case STATE_TOOL_COURIER:
       drawCourierTool();
       break;
+    case STATE_ESPNOW_MENU:
+      showESPNowMenu(x_offset);
+      break;
+    case STATE_ESPNOW_CHAT:
+      showESPNowChat(x_offset);
+      break;
+    case STATE_ESPNOW_ADD_MAC:
+    case STATE_ESPNOW_ADD_NAME:
+      drawKeyboard(x_offset); // Reusing keyboard drawer
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -1851,8 +2219,11 @@ void setup() {
     Serial.println("⚠ LittleFS Mount Failed");
   } else {
     Serial.println("✓ LittleFS Mounted");
+    loadPeers();
   }
   
+  initESPNow();
+
   pinMode(BTN_SELECT, INPUT);
   pinMode(BTN_UP, INPUT);
   pinMode(BTN_DOWN, INPUT);
@@ -2072,6 +2443,14 @@ void loop() {
         case STATE_CHAT_RESPONSE:
           if (scrollOffset > 0) scrollOffset -= 10;
           break;
+        case STATE_ESPNOW_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
+          cursorY--;
+          if (cursorY < 0) cursorY = 2;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -2079,7 +2458,7 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 3) menuSelection++;
+          if (menuSelection < 4) menuSelection++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
@@ -2092,11 +2471,16 @@ void loop() {
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
           cursorY++;
           if (cursorY > 2) cursorY = 0;
           break;
         case STATE_CHAT_RESPONSE:
           scrollOffset += 10;
+          break;
+        case STATE_ESPNOW_MENU:
+          if (menuSelection < peers.size()) menuSelection++;
           break;
         default: break;
       }
@@ -2106,6 +2490,8 @@ void loop() {
       switch(currentState) {
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
           cursorX--;
           if (cursorX < 0) cursorX = 9;
           break;
@@ -2117,6 +2503,8 @@ void loop() {
       switch(currentState) {
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
           cursorX++;
           if (cursorX > 9) cursorX = 0;
           break;
@@ -2158,6 +2546,20 @@ void loop() {
         case STATE_TOOL_COURIER:
           checkResiReal();
           break;
+        case STATE_ESPNOW_MENU:
+          handleEspNowMenuSelect();
+          break;
+        case STATE_ESPNOW_CHAT:
+          // In chat, select opens keyboard to type
+          keyboardContext = CONTEXT_ESPNOW_MSG;
+          userInput = "";
+          cursorX = 0; cursorY = 0;
+          changeState(STATE_KEYBOARD);
+          break;
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
+          handleKeyPress();
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -2174,6 +2576,7 @@ void loop() {
         case STATE_WIFI_MENU:
         case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
+        case STATE_ESPNOW_MENU:
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_CHAT_RESPONSE:
@@ -2182,9 +2585,18 @@ void loop() {
         case STATE_KEYBOARD:
           if (keyboardContext == CONTEXT_CHAT) {
             changeState(STATE_MAIN_MENU);
+          } else if (keyboardContext == CONTEXT_ESPNOW_MSG) {
+             changeState(STATE_ESPNOW_CHAT);
           } else {
             changeState(STATE_WIFI_SCAN);
           }
+          break;
+        case STATE_ESPNOW_CHAT:
+          changeState(STATE_ESPNOW_MENU);
+          break;
+        case STATE_ESPNOW_ADD_MAC:
+        case STATE_ESPNOW_ADD_NAME:
+          changeState(STATE_ESPNOW_MENU);
           break;
         default:
           changeState(STATE_MAIN_MENU);
