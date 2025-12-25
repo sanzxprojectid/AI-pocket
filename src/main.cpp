@@ -297,7 +297,12 @@ struct ConversationContext {
 // Forward declaration needed for extractEnhancedContext
 String getRecentChatContext(int maxMessages);
 
-void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
+// Determine ESP-NOW Callback Signature based on Arduino Core Version
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  void onDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, int len);
+#else
+  void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len);
+#endif
 
 ConversationContext extractEnhancedContext() {
   ConversationContext ctx;
@@ -847,7 +852,12 @@ void loadPeers() {
   }
 }
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, int len) {
+  const uint8_t* mac = info->src_addr;
+#else
 void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+#endif
   char macStr[18];
   snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -918,13 +928,30 @@ void sendESPNowMessage(String text) {
 void addNewPeer(String name, String macStr) {
   ChatPeer p;
   p.name = name;
-  unsigned int values[6]; // Changed to unsigned int to match sscanf format %x
+  unsigned int values[6];
   if (sscanf(macStr.c_str(), "%x:%x:%x:%x:%x:%x",
       &values[0], &values[1], &values[2], &values[3], &values[4], &values[5]) == 6) {
     for (int i=0; i<6; i++) p.mac[i] = (uint8_t)values[i];
-    peers.push_back(p);
+
+    // Check if peer exists (Rename)
+    bool exists = false;
+    for (auto& existingPeer : peers) {
+      bool match = true;
+      for(int i=0; i<6; i++) if(existingPeer.mac[i] != p.mac[i]) match = false;
+      if (match) {
+        existingPeer.name = name; // Update name
+        exists = true;
+        break;
+      }
+    }
+
+    if (!exists) {
+      peers.push_back(p);
+    }
+
     savePeers();
 
+    // Ensure ESP-NOW peer is registered
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, p.mac, 6);
     peerInfo.channel = 0;
@@ -2224,8 +2251,6 @@ void setup() {
     loadPeers();
   }
   
-  initESPNow();
-
   pinMode(BTN_SELECT, INPUT);
   pinMode(BTN_UP, INPUT);
   pinMode(BTN_DOWN, INPUT);
@@ -2274,6 +2299,8 @@ void setup() {
   String savedSSID = loadPreferenceString("ssid", "");
   String savedPassword = loadPreferenceString("password", "");
   WiFi.mode(WIFI_STA);
+  initESPNow(); // Initialize ESP-NOW after WiFi is ON
+
   if (savedSSID.length() > 0) {
     Serial.print("Connecting to: ");
     Serial.println(savedSSID);
