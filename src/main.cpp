@@ -142,7 +142,8 @@ struct ESPNowPeer {
 
 ESPNowMessage espnowMessages[MAX_ESPNOW_MESSAGES];
 int espnowMessageCount = 0;
-int espnowScrollOffset = 0;
+int espnowScrollIndex = 0;
+bool espnowAutoScroll = true;
 
 ESPNowPeer espnowPeers[MAX_ESPNOW_PEERS];
 int espnowPeerCount = 0;
@@ -184,8 +185,12 @@ const char* keyboardNumbers[3][10] = {
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME };
+enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
+
+// ============ CHAT THEME & ANIMATION ============
+int chatTheme = 0; // 0: Modern, 1: Bubble, 2: Cyberpunk
+float chatAnimProgress = 1.0f;
 
 // ============ WIFI SCANNER ============
 struct WiFiNetwork {
@@ -321,7 +326,7 @@ void handleESPNowKeyPress();
 void refreshCurrentScreen();
 bool initESPNow();
 void sendESPNowMessage(String message);
-void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len);
+void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void addESPNowPeer(const uint8_t *mac, String nickname, int rssi);
 void drawESPNowChat();
@@ -329,10 +334,10 @@ void drawESPNowMenu();
 void drawESPNowPeerList();
 String getRecentChatContext(int maxMessages);
 
+const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
 // ============ ESP-NOW FUNCTIONS ============
-void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
-  const uint8_t *mac = recv_info->src_addr;
-  
+void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
   memcpy(&incomingMsg, data, sizeof(incomingMsg));
   
   Serial.print("ESP-NOW Received from: ");
@@ -379,6 +384,7 @@ void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, i
       espnowMessages[espnowMessageCount].isFromMe = false;
       espnowMessageCount++;
       
+      chatAnimProgress = 0.0f; // Trigger animation
       triggerNeoPixelEffect(pixels.Color(100, 200, 255), 800);
       ledQuickFlash();
     }
@@ -388,7 +394,7 @@ void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, i
   }
   
   if (currentState == STATE_ESPNOW_CHAT) {
-    espnowScrollOffset = espnowMessageCount * 15;
+    espnowAutoScroll = true;
   }
 }
 
@@ -424,7 +430,7 @@ bool initESPNow() {
   // Add broadcast peer
   esp_now_peer_info_t peerInfo = {};
   memset(&peerInfo, 0, sizeof(peerInfo));
-  memcpy(peerInfo.peer_addr, (uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, 6);
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
   
@@ -440,7 +446,7 @@ bool initESPNow() {
   outgoingMsg.type = 'H';
   strncpy(outgoingMsg.nickname, myNickname.c_str(), 31);
   outgoingMsg.timestamp = millis();
-  esp_now_send((uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+  esp_now_send(broadcastAddress, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
   
   return true;
 }
@@ -461,7 +467,7 @@ void sendESPNowMessage(String message) {
   esp_err_t result;
   
   if (espnowBroadcastMode) {
-    result = esp_now_send((uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+    result = esp_now_send(broadcastAddress, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
   } else {
     if (selectedPeer < espnowPeerCount) {
       result = esp_now_send(espnowPeers[selectedPeer].mac, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
@@ -479,7 +485,8 @@ void sendESPNowMessage(String message) {
       espnowMessages[espnowMessageCount].timestamp = millis();
       espnowMessages[espnowMessageCount].isFromMe = true;
       espnowMessageCount++;
-      espnowScrollOffset = espnowMessageCount * 15;
+      espnowAutoScroll = true;
+      chatAnimProgress = 0.0f; // Trigger animation
     }
   } else {
     showStatus("Send Failed!", 1000);
@@ -506,24 +513,60 @@ void drawESPNowChat() {
   
   // Messages area
   int startY = 45;
-  int msgHeight = 15;
-  int visibleMsgs = (SCREEN_HEIGHT - startY - 10) / msgHeight;
-  int startIdx = max(0, espnowMessageCount - visibleMsgs);
+  int visibleMsgs = (SCREEN_HEIGHT - startY - 20) / 22; // Approx 22px per msg
+
+  if (espnowAutoScroll) {
+      espnowScrollIndex = max(0, espnowMessageCount - visibleMsgs);
+  }
   
-  canvas.setTextSize(1);
   int y = startY;
   
-  for (int i = startIdx; i < espnowMessageCount; i++) {
+  for (int i = espnowScrollIndex; i < espnowMessageCount; i++) {
+    if (y > SCREEN_HEIGHT - 20) break;
+
     ESPNowMessage &msg = espnowMessages[i];
     
+    // Animation Logic
+    int animYOffset = 0;
+    if (i == espnowMessageCount - 1 && chatAnimProgress < 1.0f) {
+      animYOffset = (1.0f - chatAnimProgress) * 20; // Slide up effect
+    }
+
+    int drawY = y + animYOffset;
+    if (drawY > SCREEN_HEIGHT) continue; // Skip if animated out of view
+
+    String text = String(msg.text);
+    int textW = text.length() * 6;
+    int bubbleW = textW + 10;
+    int bubbleH = 18;
+
+    uint16_t bubbleColor;
+    uint16_t textColor;
+
+    if (chatTheme == 0) { // Modern
+        bubbleColor = msg.isFromMe ? 0x2124 : 0x4208; // Dark Slate Blue / Dark Gray
+        textColor = 0xFFFF;
+    } else if (chatTheme == 1) { // Bubble (Light)
+        bubbleColor = msg.isFromMe ? 0x051D : 0xE71C; // Cyan / Light Grey
+        textColor = 0x0000;
+    } else { // Cyberpunk
+        bubbleColor = msg.isFromMe ? 0xF800 : 0x07E0; // Red / Green
+        textColor = 0xFFFF;
+    }
+
     if (msg.isFromMe) {
-      canvas.setTextColor(COLOR_PRIMARY);
-      canvas.setCursor(SCREEN_WIDTH - 10 - (strlen(msg.text) * 6), y);
-      canvas.print(msg.text);
+      int x = SCREEN_WIDTH - 10 - bubbleW;
+      if (chatTheme == 1) {
+         canvas.fillRoundRect(x, drawY, bubbleW, bubbleH, 8, bubbleColor);
+      } else {
+         canvas.fillRect(x, drawY, bubbleW, bubbleH, bubbleColor);
+         canvas.drawRect(x, drawY, bubbleW, bubbleH, COLOR_BORDER);
+      }
       
-      canvas.drawFastHLine(SCREEN_WIDTH - 10 - (strlen(msg.text) * 6), y + 10, strlen(msg.text) * 6, COLOR_DIM);
+      canvas.setTextColor(textColor);
+      canvas.setCursor(x + 5, drawY + 5);
+      canvas.print(text);
     } else {
-      // Find nickname
       String senderName = "Unknown";
       for (int p = 0; p < espnowPeerCount; p++) {
         if (memcmp(espnowPeers[p].mac, msg.senderMAC, 6) == 0) {
@@ -532,15 +575,30 @@ void drawESPNowChat() {
         }
       }
       
-      canvas.setTextColor(COLOR_SECONDARY);
-      canvas.setCursor(10, y);
-      canvas.print(senderName);
-      canvas.print(": ");
-      canvas.setTextColor(COLOR_TEXT);
-      canvas.print(msg.text);
+      // Draw Sender Name small above bubble
+      canvas.setTextSize(1);
+      canvas.setTextColor(COLOR_DIM);
+      canvas.setCursor(10, drawY - 2);
+      // canvas.print(senderName); // Actually better inside or omit to save space
+
+      int x = 10;
+      if (chatTheme == 1) {
+         canvas.fillRoundRect(x, drawY, bubbleW, bubbleH, 8, bubbleColor);
+      } else {
+         canvas.fillRect(x, drawY, bubbleW, bubbleH, bubbleColor);
+         canvas.drawRect(x, drawY, bubbleW, bubbleH, COLOR_BORDER);
+      }
+
+      canvas.setTextColor(textColor);
+      canvas.setCursor(x + 5, drawY + 5);
+      canvas.print(text);
+
+      // Show name to the right/left or top?
+      // Let's show it above the bubble if space allows, or just rely on color.
+      // For now, simple bubble.
     }
     
-    y += msgHeight;
+    y += bubbleH + 4;
   }
   
   // Input indicator
@@ -577,22 +635,29 @@ void drawESPNowMenu() {
   canvas.print(" | Msgs: ");
   canvas.print(espnowMessageCount);
   
-  const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Back"};
+  const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Add Peer (MAC)", "Chat Theme", "Back"};
   int startY = 75;
-  int itemHeight = 22;
+  int itemHeight = 18; // Reduced height to fit more items
   
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 6; i++) {
     int y = startY + (i * itemHeight);
     if (i == menuSelection) {
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_PRIMARY);
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_BORDER);
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     canvas.setTextSize(1);
-    canvas.setCursor(20, y + 7);
-    canvas.print(menuItems[i]);
+    canvas.setCursor(20, y + 5);
+    if (i == 4) {
+       canvas.print("Theme: ");
+       if (chatTheme == 0) canvas.print("Modern");
+       else if (chatTheme == 1) canvas.print("Bubble");
+       else canvas.print("Cyber");
+    } else {
+       canvas.print(menuItems[i]);
+    }
   }
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -2011,6 +2076,17 @@ void handleESPNowMenuSelect() {
       changeState(STATE_KEYBOARD);
       break;
     case 3:
+      userInput = "";
+      keyboardContext = CONTEXT_ESPNOW_ADD_MAC;
+      cursorX = 0;
+      cursorY = 0;
+      currentKeyboardMode = MODE_NUMBERS;
+      changeState(STATE_KEYBOARD);
+      break;
+    case 4:
+      chatTheme = (chatTheme + 1) % 3;
+      break;
+    case 5:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -2036,6 +2112,69 @@ void handleKeyPress() {
         savePreferenceString("espnow_nick", myNickname);
         showStatus("Nickname\nsaved!", 1000);
         changeState(STATE_ESPNOW_MENU);
+      }
+    } else if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+      if (userInput.length() == 12 || userInput.length() == 17) {
+        // Parse MAC
+        uint8_t mac[6];
+        int values[6];
+        int parsed = 0;
+        if (userInput.indexOf(':') != -1) {
+           parsed = sscanf(userInput.c_str(), "%x:%x:%x:%x:%x:%x",
+                           &values[0], &values[1], &values[2],
+                           &values[3], &values[4], &values[5]);
+        } else {
+           // Handle no colons if user just typed AABBCCDDEEFF
+           // This is harder with sscanf but we can split
+           if (userInput.length() == 12) {
+               char buffer[3];
+               buffer[2] = 0;
+               parsed = 6;
+               for(int i=0; i<6; i++) {
+                   buffer[0] = userInput[i*2];
+                   buffer[1] = userInput[i*2+1];
+                   values[i] = strtol(buffer, NULL, 16);
+               }
+           }
+        }
+
+        if (parsed == 6) {
+           for(int i=0; i<6; i++) mac[i] = (uint8_t)values[i];
+
+           bool exists = false;
+           for(int i=0; i<espnowPeerCount; i++) {
+               if(memcmp(espnowPeers[i].mac, mac, 6) == 0) exists = true;
+           }
+
+           if (!exists && espnowPeerCount < MAX_ESPNOW_PEERS) {
+              memcpy(espnowPeers[espnowPeerCount].mac, mac, 6);
+              espnowPeers[espnowPeerCount].nickname = "Manual Peer";
+              espnowPeers[espnowPeerCount].lastSeen = millis();
+              espnowPeers[espnowPeerCount].isActive = true;
+              espnowPeerCount++;
+
+              esp_now_peer_info_t peerInfo = {};
+              memcpy(peerInfo.peer_addr, mac, 6);
+              peerInfo.channel = 0;
+              peerInfo.encrypt = false;
+              esp_now_add_peer(&peerInfo);
+
+              showStatus("Peer Added!", 1000);
+              changeState(STATE_ESPNOW_MENU);
+           } else {
+              showStatus("Exists or Full", 1000);
+           }
+        } else {
+           showStatus("Invalid Format", 1000);
+        }
+      } else {
+         showStatus("Invalid Length", 1000);
+      }
+    } else if (keyboardContext == CONTEXT_ESPNOW_RENAME_PEER) {
+      if (userInput.length() > 0 && selectedPeer < espnowPeerCount) {
+         espnowPeers[selectedPeer].nickname = userInput;
+         showStatus("Renamed!", 1000);
+         changeState(STATE_ESPNOW_PEER_SCAN);
       }
     }
   } else if (strcmp(key, "<") == 0) {
@@ -2289,6 +2428,12 @@ void loop() {
     perfLoopCount = 0;
     perfLastTime = currentMillis;
   }
+
+  if (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f) {
+      chatAnimProgress += 2.0f * (currentMillis - lastFrameMillis) / 1000.0f; // Fast animation
+      if (chatAnimProgress > 1.0f) chatAnimProgress = 1.0f;
+  }
+
   updateNeoPixel();
   updateStatusBarData();
   
@@ -2388,7 +2533,8 @@ void loop() {
           if (scrollOffset > 0) scrollOffset -= 10;
           break;
         case STATE_ESPNOW_CHAT:
-          if (espnowScrollOffset > 0) espnowScrollOffset -= 15;
+          espnowAutoScroll = false;
+          if (espnowScrollIndex > 0) espnowScrollIndex--;
           break;
         default: break;
       }
@@ -2424,7 +2570,10 @@ void loop() {
           scrollOffset += 10;
           break;
         case STATE_ESPNOW_CHAT:
-          espnowScrollOffset += 15;
+          if (espnowScrollIndex < espnowMessageCount - 1) {
+              espnowScrollIndex++;
+              if (espnowScrollIndex >= espnowMessageCount - 4) espnowAutoScroll = true;
+          }
           break;
         default: break;
       }
@@ -2441,6 +2590,16 @@ void loop() {
         case STATE_ESPNOW_CHAT:
           espnowBroadcastMode = !espnowBroadcastMode;
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
+          break;
+        case STATE_ESPNOW_PEER_SCAN:
+          if (espnowPeerCount > 0) {
+             userInput = espnowPeers[selectedPeer].nickname;
+             keyboardContext = CONTEXT_ESPNOW_RENAME_PEER;
+             cursorX = 0;
+             cursorY = 0;
+             currentKeyboardMode = MODE_LOWER;
+             changeState(STATE_KEYBOARD);
+          }
           break;
         default: break;
       }
