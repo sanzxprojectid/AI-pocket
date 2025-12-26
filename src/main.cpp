@@ -326,7 +326,11 @@ void handleESPNowKeyPress();
 void refreshCurrentScreen();
 bool initESPNow();
 void sendESPNowMessage(String message);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
+#else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
+#endif
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void addESPNowPeer(const uint8_t *mac, String nickname, int rssi);
 void drawESPNowChat();
@@ -337,7 +341,12 @@ String getRecentChatContext(int maxMessages);
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ============ ESP-NOW FUNCTIONS ============
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+  const uint8_t *mac = recv_info->src_addr;
+#else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
+#endif
   memcpy(&incomingMsg, data, sizeof(incomingMsg));
   
   Serial.print("ESP-NOW Received from: ");
