@@ -182,6 +182,12 @@ const char* keyboardNumbers[3][10] = {
   {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
 };
 
+const char* keyboardMac[3][10] = {
+  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+  {"A", "B", "C", "D", "E", "F", ":", "-", " ", "<"},
+  {" ", " ", " ", " ", " ", " ", " ", " ", " ", "OK"}
+};
+
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
@@ -1524,6 +1530,10 @@ void displayWiFiNetworks(int x_offset) {
 
 // ============ KEYBOARD ============
 const char* getCurrentKey() {
+  if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+    return keyboardMac[cursorY][cursorX];
+  }
+
   if (currentKeyboardMode == MODE_LOWER) {
     return keyboardLower[cursorY][cursorX];
   } else if (currentKeyboardMode == MODE_UPPER) {
@@ -1534,6 +1544,8 @@ const char* getCurrentKey() {
 }
 
 void toggleKeyboardMode() {
+  if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) return; // No mode switching for MAC keyboard
+
   if (currentKeyboardMode == MODE_LOWER) {
     currentKeyboardMode = MODE_UPPER;
   } else if (currentKeyboardMode == MODE_UPPER) {
@@ -1558,6 +1570,8 @@ void drawKeyboard(int x_offset) {
     canvas.print("[ESP-NOW]");
   } else if (keyboardContext == CONTEXT_ESPNOW_NICKNAME) {
     canvas.print("[NICKNAME]");
+  } else if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+    canvas.print("[MAC ADDR]");
   }
   
   canvas.drawRect(5, 18, SCREEN_WIDTH - 10, 24, COLOR_BORDER);
@@ -1589,12 +1603,16 @@ void drawKeyboard(int x_offset) {
       int y = startY + r * (keyH + gapY);
       
       const char* keyLabel;
-      if (currentKeyboardMode == MODE_LOWER) {
-         keyLabel = keyboardLower[r][c];
-      } else if (currentKeyboardMode == MODE_UPPER) {
-         keyLabel = keyboardUpper[r][c];
+      if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+         keyLabel = keyboardMac[r][c];
       } else {
-         keyLabel = keyboardNumbers[r][c];
+        if (currentKeyboardMode == MODE_LOWER) {
+           keyLabel = keyboardLower[r][c];
+        } else if (currentKeyboardMode == MODE_UPPER) {
+           keyLabel = keyboardUpper[r][c];
+        } else {
+           keyLabel = keyboardNumbers[r][c];
+        }
       }
       
       if (r == cursorY && c == cursorX) {
