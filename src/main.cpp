@@ -645,11 +645,23 @@ void drawESPNowMenu() {
   canvas.print(espnowMessageCount);
   
   const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Add Peer (MAC)", "Chat Theme", "Back"};
-  int startY = 75;
-  int itemHeight = 18; // Reduced height to fit more items
+  int startY = 66; // Moved up to fit
+  int itemHeight = 18;
+  int menuScroll = 0;
   
+  // Simple scrolling logic for menu items
+  if (menuSelection > 4) {
+      menuScroll = (menuSelection - 4) * itemHeight;
+  }
+
+  int drawY = startY;
+
   for (int i = 0; i < 6; i++) {
-    int y = startY + (i * itemHeight);
+    int y = drawY + (i * itemHeight) - menuScroll;
+
+    // Skip if off screen
+    if (y < startY || y > SCREEN_HEIGHT - 20) continue;
+
     if (i == menuSelection) {
       canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
