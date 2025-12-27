@@ -83,7 +83,11 @@ enum AppState {
   STATE_VPET,
   STATE_TOOL_SNIFFER,
   STATE_TOOL_NETSCAN,
-  STATE_TOOL_FILE_MANAGER
+  STATE_TOOL_FILE_MANAGER,
+  STATE_VISUALS_MENU,
+  STATE_VIS_STARFIELD,
+  STATE_VIS_LIFE,
+  STATE_VIS_FIRE
 };
 
 AppState currentState = STATE_BOOT;
@@ -145,6 +149,31 @@ struct Particle {
 #define NUM_PARTICLES 30
 Particle particles[NUM_PARTICLES];
 bool particlesInit = false;
+
+// ============ VISUALS GLOBALS ============
+// Starfield
+#define NUM_STARS 100
+struct Star {
+  int x, y, z;
+};
+Star stars[NUM_STARS];
+bool starsInit = false;
+
+// Game of Life
+#define LIFE_W 32
+#define LIFE_H 17
+#define LIFE_SCALE 10
+uint8_t lifeGrid[LIFE_W][LIFE_H];
+uint8_t nextGrid[LIFE_W][LIFE_H];
+bool lifeInit = false;
+unsigned long lastLifeUpdate = 0;
+
+// Fire
+#define FIRE_W 32
+#define FIRE_H 17
+uint8_t firePixels[FIRE_W * FIRE_H];
+uint16_t firePalette[37];
+bool fireInit = false;
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -246,7 +275,18 @@ const unsigned char icon_files[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files};
+const unsigned char icon_visuals[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+0x00, 0x3F, 0xFC, 0x00, 0x00, 0xF0, 0x0F, 0x00, 0x03, 0xC0, 0x03, 0xC0, 0x0F, 0x00, 0x00, 0xF0,
+0x1C, 0x07, 0xE0, 0x38, 0x38, 0x1F, 0xF8, 0x1C, 0x70, 0x3E, 0x7C, 0x0E, 0x60, 0x78, 0x1E, 0x06,
+0xE0, 0xF0, 0x0F, 0x07, 0xC0, 0xE0, 0x07, 0x03, 0xC1, 0xC0, 0x03, 0x83, 0xC1, 0xC0, 0x03, 0x83,
+0xC0, 0xE0, 0x07, 0x03, 0xE0, 0xF0, 0x0F, 0x07, 0x60, 0x78, 0x1E, 0x06, 0x70, 0x3E, 0x7C, 0x0E,
+0x38, 0x1F, 0xF8, 0x1C, 0x1C, 0x07, 0xE0, 0x38, 0x0F, 0x00, 0x00, 0xF0, 0x03, 0xC0, 0x03, 0xC0,
+0x00, 0xF0, 0x0F, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files, icon_visuals};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -516,6 +556,10 @@ void savePetData();
 void drawSniffer();
 void drawNetScan();
 void drawFileManager();
+void drawVisualsMenu();
+void drawStarfield();
+void drawGameOfLife();
+void drawFireEffect();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -802,6 +846,199 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ VISUAL EFFECTS ============
+void drawVisualsMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 2);
+  canvas.print("VISUALS");
+  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+
+  const char* items[] = {"Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  int itemHeight = 30;
+  int startY = 40;
+
+  for (int i = 0; i < 4; i++) {
+    int y = startY + (i * itemHeight);
+
+    if (i == menuSelection) { // Reusing menuSelection var
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    canvas.setCursor(20, y + 6);
+    canvas.print(items[i]);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawStarfield() {
+  if (!starsInit) {
+    for(int i=0; i<NUM_STARS; i++) {
+      stars[i].x = random(-SCREEN_WIDTH, SCREEN_WIDTH);
+      stars[i].y = random(-SCREEN_HEIGHT, SCREEN_HEIGHT);
+      stars[i].z = random(10, 255);
+    }
+    starsInit = true;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  int cx = SCREEN_WIDTH / 2;
+  int cy = SCREEN_HEIGHT / 2;
+  float speed = 4.0f;
+  if (digitalRead(BTN_UP) == BTN_ACT) speed = 8.0f;
+  if (digitalRead(BTN_DOWN) == BTN_ACT) speed = 2.0f;
+
+  for(int i=0; i<NUM_STARS; i++) {
+    stars[i].z -= speed;
+    if (stars[i].z <= 0) {
+       stars[i].x = random(-SCREEN_WIDTH, SCREEN_WIDTH);
+       stars[i].y = random(-SCREEN_HEIGHT, SCREEN_HEIGHT);
+       stars[i].z = 255;
+    }
+
+    int x = (stars[i].x * 128) / stars[i].z + cx;
+    int y = (stars[i].y * 128) / stars[i].z + cy;
+
+    if (x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT) {
+      int size = (255 - stars[i].z) / 64;
+      uint16_t color = (stars[i].z > 200) ? COLOR_DIM : COLOR_PRIMARY;
+      if (size > 1) canvas.fillRect(x, y, size, size, color);
+      else canvas.drawPixel(x, y, color);
+    }
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 10);
+  canvas.print("UP/DN=Speed | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawGameOfLife() {
+  if (!lifeInit) {
+    for(int x=0; x<LIFE_W; x++) {
+       for(int y=0; y<LIFE_H; y++) {
+          lifeGrid[x][y] = random(0, 2);
+       }
+    }
+    lifeInit = true;
+  }
+
+  if (millis() - lastLifeUpdate > 100) {
+    // Logic
+    for(int x=0; x<LIFE_W; x++) {
+      for(int y=0; y<LIFE_H; y++) {
+        int neighbors = 0;
+        for(int i=-1; i<=1; i++) {
+          for(int j=-1; j<=1; j++) {
+            if(i==0 && j==0) continue;
+            int nx = (x + i + LIFE_W) % LIFE_W;
+            int ny = (y + j + LIFE_H) % LIFE_H;
+            if(lifeGrid[nx][ny]) neighbors++;
+          }
+        }
+        if(lifeGrid[x][y]) {
+           nextGrid[x][y] = (neighbors == 2 || neighbors == 3) ? 1 : 0;
+        } else {
+           nextGrid[x][y] = (neighbors == 3) ? 1 : 0;
+        }
+      }
+    }
+    // Swap
+    memcpy(lifeGrid, nextGrid, sizeof(lifeGrid));
+    lastLifeUpdate = millis();
+
+    // Auto reset check (crude)
+    if(random(0, 500) == 0) lifeInit = false;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  for(int x=0; x<LIFE_W; x++) {
+    for(int y=0; y<LIFE_H; y++) {
+      if(lifeGrid[x][y]) {
+        canvas.fillRect(x*LIFE_SCALE, y*LIFE_SCALE, LIFE_SCALE-1, LIFE_SCALE-1, 0x07E0); // Green
+      }
+    }
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) lifeInit = false; // Manual reset
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 10);
+  canvas.print("SEL=Reset | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawFireEffect() {
+  if (!fireInit) {
+    // Generate palette (Black->Red->Yellow->White)
+    for(int i=0; i<37; i++) {
+       // Simple gradient approx
+       uint8_t r = min(255, i * 20);
+       uint8_t g = (i > 12) ? min(255, (i-12) * 20) : 0;
+       uint8_t b = (i > 24) ? min(255, (i-24) * 40) : 0;
+       firePalette[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+    memset(firePixels, 0, sizeof(firePixels));
+    fireInit = true;
+  }
+
+  // Seed bottom row
+  for(int x=0; x<FIRE_W; x++) {
+     firePixels[(FIRE_H-1)*FIRE_W + x] = random(0, 37); // Max heat
+  }
+
+  // Propagate
+  for(int x=0; x<FIRE_W; x++) {
+     for(int y=1; y<FIRE_H; y++) {
+        int src = y * FIRE_W + x;
+        int pixel = firePixels[src];
+        if (pixel == 0) {
+           firePixels[(y-1)*FIRE_W + x] = 0;
+        } else {
+           int randIdx = random(0, 3);
+           int dst = (y-1)*FIRE_W + (x - randIdx + 1);
+           if(dst >= 0 && dst < FIRE_W*FIRE_H) {
+              firePixels[dst] = max(0, pixel - (randIdx & 1));
+           }
+        }
+     }
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  int scaleX = SCREEN_WIDTH / FIRE_W;
+  int scaleY = SCREEN_HEIGHT / FIRE_H;
+
+  for(int y=0; y<FIRE_H; y++) {
+    for(int x=0; x<FIRE_W; x++) {
+       int colorIdx = firePixels[y*FIRE_W + x];
+       if(colorIdx > 0) {
+          if(colorIdx > 36) colorIdx = 36;
+          canvas.fillRect(x*scaleX, y*scaleY, scaleX, scaleY, firePalette[colorIdx]);
+       }
+    }
+  }
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(10, 10);
+  canvas.print("DOOM FIRE | L+R=Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -2783,6 +3020,28 @@ void handleMainMenuSelect() {
       fileListCount = 0; // Force refresh
       changeState(STATE_TOOL_FILE_MANAGER);
       break;
+    case 9: // Visuals
+      menuSelection = 0; // Reuse selection for sub-menu
+      changeState(STATE_VISUALS_MENU);
+      break;
+  }
+}
+
+void handleVisualsMenuSelect() {
+  switch(menuSelection) {
+    case 0:
+      changeState(STATE_VIS_STARFIELD);
+      break;
+    case 1:
+      changeState(STATE_VIS_LIFE);
+      break;
+    case 2:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 3:
+      menuSelection = 0;
+      changeState(STATE_MAIN_MENU);
+      break;
   }
 }
 
@@ -3011,6 +3270,18 @@ void refreshCurrentScreen() {
       break;
     case STATE_TOOL_FILE_MANAGER:
       drawFileManager();
+      break;
+    case STATE_VISUALS_MENU:
+      drawVisualsMenu();
+      break;
+    case STATE_VIS_STARFIELD:
+      drawStarfield();
+      break;
+    case STATE_VIS_LIFE:
+      drawGameOfLife();
+      break;
+    case STATE_VIS_FIRE:
+      drawFireEffect();
       break;
     default:
       showMainMenu(x_offset);
@@ -3321,7 +3592,13 @@ void loop() {
           // Vertical layout isn't used for V-Pet menu, left/right is used
           break;
         case STATE_TOOL_FILE_MANAGER:
-          if (fileListScroll > 0) fileListScroll--;
+          if (fileListSelection > 0) {
+              fileListSelection--;
+              if (fileListSelection < fileListScroll) fileListScroll = fileListSelection;
+          }
+          break;
+        case STATE_VISUALS_MENU:
+          if (menuSelection > 0) menuSelection--;
           break;
         case STATE_ESPNOW_CHAT:
           espnowAutoScroll = false;
@@ -3359,6 +3636,15 @@ void loop() {
           break;
         case STATE_CHAT_RESPONSE:
           scrollOffset += 10;
+          break;
+        case STATE_TOOL_FILE_MANAGER:
+          if (fileListSelection < fileListCount - 1) {
+              fileListSelection++;
+              if (fileListSelection >= fileListScroll + 5) fileListScroll++;
+          }
+          break;
+        case STATE_VISUALS_MENU:
+          if (menuSelection < 3) menuSelection++;
           break;
         case STATE_ESPNOW_CHAT:
           if (espnowScrollIndex < espnowMessageCount - 1) {
@@ -3421,7 +3707,7 @@ void loop() {
           if (petMenuSelection < 3) petMenuSelection++;
           break;
         case STATE_TOOL_FILE_MANAGER:
-           if (fileListScroll < fileListCount - 5) fileListScroll++;
+           // Removed horizontal scroll for file manager, moved to vertical
            break;
         default: break;
       }
@@ -3433,11 +3719,29 @@ void loop() {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
           break;
+        case STATE_VISUALS_MENU:
+          handleVisualsMenuSelect();
+          break;
+        case STATE_TOOL_SNIFFER:
+          // Toggle active/passive or just reset stats
+          snifferPacketCount = 0;
+          memset(snifferHistory, 0, sizeof(snifferHistory));
+          showStatus("Reset Sniffer", 500);
+          break;
         case STATE_TOOL_NETSCAN:
           scanWiFiNetworks();
           break;
         case STATE_TOOL_FILE_MANAGER:
-          // Implement File Open
+          // Simple selection feedback
+          if (fileListCount > 0) {
+             String selected = fileList[fileListSelection];
+             if (selected.endsWith(".txt") || selected.endsWith(".log")) {
+                showStatus("Opening...\n" + selected, 500);
+                // In a real app we would read file content here
+             } else {
+                showStatus("Selected:\n" + selected, 1000);
+             }
+          }
           break;
         case STATE_VPET:
           if (petMenuSelection == 0) { // Feed
@@ -3524,6 +3828,10 @@ void loop() {
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
+        case STATE_VISUALS_MENU:
+        case STATE_VIS_STARFIELD:
+        case STATE_VIS_LIFE:
+        case STATE_VIS_FIRE:
           // Cleanup
           if (currentState == STATE_TOOL_SNIFFER) {
              esp_wifi_set_promiscuous(false);
