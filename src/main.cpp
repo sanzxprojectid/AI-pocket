@@ -79,7 +79,17 @@ enum AppState {
   STATE_TOOL_COURIER,
   STATE_ESPNOW_CHAT,
   STATE_ESPNOW_MENU,
-  STATE_ESPNOW_PEER_SCAN
+  STATE_ESPNOW_PEER_SCAN,
+  STATE_VPET,
+  STATE_TOOL_SNIFFER,
+  STATE_TOOL_NETSCAN,
+  STATE_TOOL_FILE_MANAGER,
+  STATE_VISUALS_MENU,
+  STATE_VIS_STARFIELD,
+  STATE_VIS_LIFE,
+  STATE_VIS_FIRE,
+  STATE_ABOUT,
+  STATE_TOOL_WIFI_SONAR
 };
 
 AppState currentState = STATE_BOOT;
@@ -100,8 +110,22 @@ AppState transitionTargetState;
 // ============ API ENDPOINT ============
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
-// ============ PREFERENCES ============
+// ============ PREFERENCES & CONFIG ============
 Preferences preferences;
+#define CONFIG_FILE "/system.aip"
+
+struct SystemConfig {
+  String ssid;
+  String password;
+  String espnowNick;
+  bool showFPS;
+  float petHunger;
+  float petHappiness;
+  float petEnergy;
+  bool petSleep;
+};
+
+SystemConfig sysConfig = {"", "", "ESP32", false, 80.0f, 80.0f, 80.0f, false};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -114,6 +138,179 @@ int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 150;
+
+// ============ UI ANIMATION PHYSICS ============
+float menuScrollCurrent = 0.0f;
+float menuScrollTarget = 0.0f;
+// float menuVelocity = 0.0f; // Not used in Lerp
+
+struct Particle {
+  float x, y, speed;
+  uint8_t size;
+};
+#define NUM_PARTICLES 30
+Particle particles[NUM_PARTICLES];
+bool particlesInit = false;
+
+// ============ VISUALS GLOBALS ============
+// Starfield
+#define NUM_STARS 100
+struct Star {
+  int x, y, z;
+};
+Star stars[NUM_STARS];
+bool starsInit = false;
+
+// Game of Life
+#define LIFE_W 32
+#define LIFE_H 17
+#define LIFE_SCALE 10
+uint8_t lifeGrid[LIFE_W][LIFE_H];
+uint8_t nextGrid[LIFE_W][LIFE_H];
+bool lifeInit = false;
+unsigned long lastLifeUpdate = 0;
+
+// Fire
+#define FIRE_W 32
+#define FIRE_H 17
+uint8_t firePixels[FIRE_W * FIRE_H];
+uint16_t firePalette[37];
+bool fireInit = false;
+
+// ============ ICONS (32x32) ============
+const unsigned char icon_chat[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF, 0xC0, 0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8,
+0x3F, 0x00, 0x00, 0xFC, 0x7E, 0x00, 0x00, 0x7E, 0x7C, 0x00, 0x00, 0x3E, 0xF8, 0x0F, 0xF0, 0x1F,
+0xF8, 0x3F, 0xFC, 0x1F, 0xF0, 0x3F, 0xFC, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F,
+0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x3C, 0x3C, 0x0F, 0xF0, 0x3C, 0x3C, 0x0F, 0xF0, 0x00, 0x00, 0x0F,
+0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF8, 0x00, 0x00, 0x1F, 0x7C, 0x00, 0x00, 0x3E,
+0x7E, 0x00, 0x00, 0x7E, 0x3F, 0x00, 0x00, 0xFC, 0x1F, 0xFF, 0xFF, 0xF8, 0x0F, 0xFF, 0xFF, 0xF0,
+0x07, 0xFF, 0xFF, 0xE0, 0x03, 0xFF, 0xFF, 0xC0, 0x00, 0x07, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00,
+0x00, 0x0C, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_wifi[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x01, 0xFF, 0xFF, 0x80, 0x07, 0xF0, 0x0F, 0xE0, 0x0F, 0x00, 0x00, 0xF0, 0x1C, 0x00, 0x00, 0x38,
+0x38, 0x07, 0xE0, 0x1C, 0x30, 0x3F, 0xFC, 0x0C, 0x00, 0xFC, 0x3F, 0x00, 0x00, 0xE0, 0x07, 0x00,
+0x00, 0xC0, 0x03, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x06, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00,
+0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_espnow[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x7E, 0x7E, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xE7, 0xE7, 0xC0,
+0x07, 0xC3, 0xC3, 0xE0, 0x0F, 0x81, 0x81, 0xF0, 0x1F, 0x00, 0x00, 0xF8, 0x1E, 0x00, 0x00, 0x78,
+0x3C, 0x3C, 0x3C, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x78, 0xFF, 0xFF, 0x1E, 0x79, 0xFF, 0xFF, 0x9E,
+0x7B, 0xFF, 0xFF, 0xDE, 0x7B, 0xDB, 0xDB, 0xDE, 0x7B, 0xC3, 0xC3, 0xDE, 0x78, 0x00, 0x00, 0x1E,
+0x3C, 0x00, 0x00, 0x3C, 0x1E, 0x00, 0x00, 0x78, 0x1F, 0x00, 0x00, 0xF8, 0x0F, 0x81, 0x81, 0xF0,
+0x07, 0xC3, 0xC3, 0xE0, 0x03, 0xE7, 0xE7, 0xC0, 0x01, 0xFF, 0xFF, 0x80, 0x00, 0x7E, 0x7E, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_courier[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8,
+0x1F, 0xFF, 0xFF, 0xF8, 0x1F, 0xC0, 0x03, 0xF8, 0x1F, 0x80, 0x01, 0xF8, 0x1F, 0x00, 0x00, 0xF8,
+0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x03, 0xC0, 0xF8, 0x1F, 0x07, 0xE0, 0xF8, 0x1F, 0x0F, 0xF0, 0xF8,
+0x1F, 0x1F, 0xF8, 0xF8, 0x1F, 0x1F, 0xF8, 0xF8, 0x1F, 0x0F, 0xF0, 0xF8, 0x1F, 0x07, 0xE0, 0xF8,
+0x1F, 0x03, 0xC0, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x0F, 0x00, 0x00, 0xF0,
+0x07, 0xFF, 0xFF, 0xE0, 0x03, 0xFF, 0xFF, 0xC0, 0x01, 0xFF, 0xFF, 0x80, 0x00, 0xFF, 0xFF, 0x00,
+0x00, 0x3C, 0x3C, 0x00, 0x00, 0x18, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_system[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x07, 0xFF, 0xFF, 0xE0, 0x0F, 0xFF, 0xFF, 0xF0,
+0x1F, 0xFF, 0xFF, 0xF8, 0x3F, 0xF0, 0x0F, 0xFC, 0x3F, 0x80, 0x01, 0xFC, 0x7F, 0x00, 0x00, 0xFE,
+0x7E, 0x00, 0x00, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0xFF, 0xFF, 0x7E,
+0x7E, 0xFF, 0xFF, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x00, 0x00, 0x7E,
+0x7F, 0x00, 0x00, 0xFE, 0x3F, 0x80, 0x01, 0xFC, 0x3F, 0xF0, 0x0F, 0xFC, 0x1F, 0xFF, 0xFF, 0xF8,
+0x0F, 0xFF, 0xFF, 0xF0, 0x07, 0xFF, 0xFF, 0xE0, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+0x00, 0x07, 0xE0, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_pet[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x01, 0xFF, 0xFF, 0x80,
+0x03, 0xE0, 0x07, 0xC0, 0x07, 0x80, 0x01, 0xE0, 0x0F, 0x00, 0x00, 0xF0, 0x1E, 0x00, 0x00, 0x78,
+0x1C, 0x18, 0x18, 0x38, 0x38, 0x3C, 0x3C, 0x1C, 0x38, 0x3C, 0x3C, 0x1C, 0x38, 0x18, 0x18, 0x1C,
+0x78, 0x00, 0x00, 0x1E, 0x78, 0x00, 0x00, 0x1E, 0x7C, 0x00, 0x00, 0x3E, 0x7E, 0x00, 0x00, 0x7E,
+0x3E, 0x00, 0x00, 0x7C, 0x3F, 0x00, 0x00, 0xFC, 0x1F, 0x83, 0xC1, 0xF8, 0x1F, 0xC7, 0xE3, 0xF8,
+0x0F, 0xEF, 0xF7, 0xF0, 0x07, 0xFF, 0xFF, 0xE0, 0x03, 0xFE, 0x7F, 0xC0, 0x01, 0xF8, 0x1F, 0x80,
+0x00, 0xE0, 0x07, 0x00, 0x00, 0xC0, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_sniffer[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00,
+0x00, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x3F, 0xFC, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00, 0x03, 0xFF, 0xFF, 0xC0,
+0x07, 0xFF, 0xFF, 0xE0, 0x06, 0x00, 0x00, 0x60, 0x0C, 0x00, 0x00, 0x30, 0x0C, 0x18, 0x18, 0x30,
+0x18, 0x3C, 0x3C, 0x18, 0x18, 0x3C, 0x3C, 0x18, 0x30, 0x18, 0x18, 0x0C, 0x30, 0x00, 0x00, 0x0C,
+0x60, 0x00, 0x00, 0x06, 0xE0, 0x00, 0x00, 0x07, 0xC0, 0xFF, 0xFF, 0x03, 0x80, 0xFF, 0xFF, 0x01,
+0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_netscan[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00, 0x00, 0x0C, 0x30, 0x00,
+0x00, 0x18, 0x18, 0x00, 0x00, 0x30, 0x0C, 0x00, 0x00, 0x60, 0x06, 0x00, 0x00, 0xC3, 0xC3, 0x00,
+0x01, 0x87, 0xE1, 0x80, 0x03, 0x0F, 0xF0, 0xC0, 0x06, 0x1F, 0xF8, 0x60, 0x0C, 0x3F, 0xFC, 0x30,
+0x18, 0x7F, 0xFE, 0x18, 0x30, 0xFF, 0xFF, 0x0C, 0x61, 0xFF, 0xFF, 0x86, 0xC3, 0xF8, 0x1F, 0xC3,
+0xC7, 0xE0, 0x07, 0xE3, 0x8F, 0xC0, 0x03, 0xF1, 0x9F, 0x00, 0x00, 0xF9, 0xBE, 0x00, 0x00, 0x7D,
+0x3C, 0x00, 0x00, 0x3C, 0x78, 0x00, 0x00, 0x1E, 0xF0, 0x00, 0x00, 0x0F, 0xE0, 0x00, 0x00, 0x07,
+0xC0, 0x00, 0x00, 0x03, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_files[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xC0, 0x00, 0x00, 0x1F, 0xE0, 0x00,
+0x00, 0x38, 0x70, 0x00, 0x00, 0x70, 0x38, 0x00, 0x00, 0xE0, 0x1C, 0x00, 0x01, 0xC0, 0x0E, 0x00,
+0x03, 0x80, 0x07, 0x00, 0x07, 0xFF, 0xFF, 0x80, 0x0F, 0xFF, 0xFF, 0xC0, 0x1F, 0xFF, 0xFF, 0xE0,
+0x3F, 0x00, 0x00, 0xF0, 0x3E, 0x00, 0x00, 0xF0, 0x7C, 0x00, 0x00, 0xF8, 0x78, 0x00, 0x00, 0x78,
+0x78, 0x00, 0x00, 0x78, 0xF0, 0x00, 0x00, 0x3C, 0xF0, 0x00, 0x00, 0x3C, 0xF0, 0x00, 0x00, 0x3C,
+0xF0, 0x00, 0x00, 0x3C, 0xF0, 0x00, 0x00, 0x3C, 0x78, 0x00, 0x00, 0x78, 0x7C, 0x00, 0x00, 0xF8,
+0x3E, 0x00, 0x00, 0xF0, 0x1F, 0xFF, 0xFF, 0xE0, 0x0F, 0xFF, 0xFF, 0xC0, 0x07, 0xFF, 0xFF, 0x80,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_visuals[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+0x00, 0x3F, 0xFC, 0x00, 0x00, 0xF0, 0x0F, 0x00, 0x03, 0xC0, 0x03, 0xC0, 0x0F, 0x00, 0x00, 0xF0,
+0x1C, 0x07, 0xE0, 0x38, 0x38, 0x1F, 0xF8, 0x1C, 0x70, 0x3E, 0x7C, 0x0E, 0x60, 0x78, 0x1E, 0x06,
+0xE0, 0xF0, 0x0F, 0x07, 0xC0, 0xE0, 0x07, 0x03, 0xC1, 0xC0, 0x03, 0x83, 0xC1, 0xC0, 0x03, 0x83,
+0xC0, 0xE0, 0x07, 0x03, 0xE0, 0xF0, 0x0F, 0x07, 0x60, 0x78, 0x1E, 0x06, 0x70, 0x3E, 0x7C, 0x0E,
+0x38, 0x1F, 0xF8, 0x1C, 0x1C, 0x07, 0xE0, 0x38, 0x0F, 0x00, 0x00, 0xF0, 0x03, 0xC0, 0x03, 0xC0,
+0x00, 0xF0, 0x0F, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_about[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x1F, 0xF8, 0x00,
+0x00, 0x1F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0xFC, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x3C, 0x3C, 0x00,
+0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00,
+0x00, 0x3C, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char icon_sonar[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x70, 0x0E, 0x00,
+0x01, 0xC0, 0x03, 0x80, 0x03, 0x00, 0x00, 0xC0, 0x06, 0x0F, 0xF0, 0x60, 0x0C, 0x38, 0x1C, 0x30,
+0x18, 0x60, 0x06, 0x18, 0x30, 0xC0, 0x03, 0x0C, 0x21, 0x87, 0xE1, 0x84, 0x43, 0x0C, 0x30, 0xC2,
+0x42, 0x18, 0x18, 0x42, 0x86, 0x30, 0x0C, 0x61, 0x84, 0x20, 0x04, 0x21, 0x8C, 0x41, 0x82, 0x31,
+0x88, 0x83, 0xC1, 0x11, 0x88, 0x83, 0xC1, 0x11, 0x8C, 0x41, 0x82, 0x31, 0x84, 0x20, 0x04, 0x21,
+0x86, 0x30, 0x0C, 0x61, 0x42, 0x18, 0x18, 0x42, 0x43, 0x0C, 0x30, 0xC2, 0x21, 0x87, 0xE1, 0x84,
+0x30, 0xC0, 0x03, 0x0C, 0x18, 0x60, 0x06, 0x18, 0x0C, 0x38, 0x1C, 0x30, 0x06, 0x0F, 0xF0, 0x60,
+0x03, 0x00, 0x00, 0xC0, 0x01, 0xC0, 0x03, 0x80, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x1F, 0xF8, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files, icon_visuals, icon_about, icon_sonar};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -142,7 +339,8 @@ struct ESPNowPeer {
 
 ESPNowMessage espnowMessages[MAX_ESPNOW_MESSAGES];
 int espnowMessageCount = 0;
-int espnowScrollOffset = 0;
+int espnowScrollIndex = 0;
+bool espnowAutoScroll = true;
 
 ESPNowPeer espnowPeers[MAX_ESPNOW_PEERS];
 int espnowPeerCount = 0;
@@ -181,11 +379,21 @@ const char* keyboardNumbers[3][10] = {
   {"#", "-", "_", "=", "+", "[", "]", "?", ".", "OK"}
 };
 
+const char* keyboardMac[3][10] = {
+  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+  {"A", "B", "C", "D", "E", "F", ":", "-", " ", "<"},
+  {" ", " ", " ", " ", " ", " ", " ", " ", " ", "OK"}
+};
+
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME };
+enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
+
+// ============ CHAT THEME & ANIMATION ============
+int chatTheme = 0; // 0: Modern, 1: Bubble, 2: Cyberpunk
+float chatAnimProgress = 1.0f;
 
 // ============ WIFI SCANNER ============
 struct WiFiNetwork {
@@ -255,6 +463,49 @@ int chatMessageCount = 0;
 String userProfile = "";
 String chatSummary = "";
 
+// ============ VIRTUAL PET DATA ============
+struct VirtualPet {
+  float hunger;    // 0-100 (100 = Full)
+  float happiness; // 0-100 (100 = Happy)
+  float energy;    // 0-100 (100 = Rested)
+  unsigned long lastUpdate;
+  bool isSleeping;
+};
+
+VirtualPet myPet = {100.0f, 100.0f, 100.0f, 0, false};
+int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
+
+// ============ HACKER TOOLS DATA ============
+#define SNIFFER_HISTORY_LEN 160
+int snifferHistory[SNIFFER_HISTORY_LEN];
+int snifferHistoryIdx = 0;
+long snifferPacketCount = 0;
+unsigned long lastSnifferUpdate = 0;
+bool snifferActive = false;
+
+// WiFi Sonar
+#define SONAR_HISTORY_LEN 160
+int sonarHistory[SONAR_HISTORY_LEN];
+int sonarHistoryIdx = 0;
+int lastSonarRSSI = 0;
+unsigned long lastSonarUpdate = 0;
+bool sonarAlert = false;
+
+struct NetDevice {
+  String ip;
+  String mac;
+  int ms;
+};
+NetDevice scanResults[10];
+int scanResultCount = 0;
+bool isScanningNet = false;
+int netScanIndex = 0;
+
+String fileList[20];
+int fileListCount = 0;
+int fileListScroll = 0;
+int fileListSelection = 0;
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -321,18 +572,44 @@ void handleESPNowKeyPress();
 void refreshCurrentScreen();
 bool initESPNow();
 void sendESPNowMessage(String message);
-void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);
+#else
+void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
+#endif
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
 void addESPNowPeer(const uint8_t *mac, String nickname, int rssi);
 void drawESPNowChat();
 void drawESPNowMenu();
 void drawESPNowPeerList();
+void drawPetGame();
+void loadPetData();
+void savePetData();
+void drawSniffer();
+void drawNetScan();
+void drawFileManager();
+void drawVisualsMenu();
+void drawStarfield();
+void drawGameOfLife();
+void drawFireEffect();
+void drawAboutScreen();
+void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 
+const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// ============ WIFI PROMISCUOUS CALLBACK ============
+void wifiPromiscuous(void* buf, wifi_promiscuous_pkt_type_t type) {
+  snifferPacketCount++;
+}
+
 // ============ ESP-NOW FUNCTIONS ============
-void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, int len) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
   const uint8_t *mac = recv_info->src_addr;
-  
+#else
+void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
+#endif
   memcpy(&incomingMsg, data, sizeof(incomingMsg));
   
   Serial.print("ESP-NOW Received from: ");
@@ -379,16 +656,22 @@ void onESPNowDataRecv(const esp_now_recv_info *recv_info, const uint8_t *data, i
       espnowMessages[espnowMessageCount].isFromMe = false;
       espnowMessageCount++;
       
+      chatAnimProgress = 0.0f; // Trigger animation
       triggerNeoPixelEffect(pixels.Color(100, 200, 255), 800);
       ledQuickFlash();
     }
   } else if (incomingMsg.type == 'H') {
     // Handshake - peer announcing itself
     Serial.println("Handshake received");
+  } else if (incomingMsg.type == 'P') {
+    // Pet Meet
+    showStatus("Pet Found!\nHappiness +", 1500);
+    myPet.happiness = min(myPet.happiness + 20.0f, 100.0f);
+    savePetData();
   }
   
   if (currentState == STATE_ESPNOW_CHAT) {
-    espnowScrollOffset = espnowMessageCount * 15;
+    espnowAutoScroll = true;
   }
 }
 
@@ -424,7 +707,7 @@ bool initESPNow() {
   // Add broadcast peer
   esp_now_peer_info_t peerInfo = {};
   memset(&peerInfo, 0, sizeof(peerInfo));
-  memcpy(peerInfo.peer_addr, (uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, 6);
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
   
@@ -440,7 +723,7 @@ bool initESPNow() {
   outgoingMsg.type = 'H';
   strncpy(outgoingMsg.nickname, myNickname.c_str(), 31);
   outgoingMsg.timestamp = millis();
-  esp_now_send((uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+  esp_now_send(broadcastAddress, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
   
   return true;
 }
@@ -461,7 +744,7 @@ void sendESPNowMessage(String message) {
   esp_err_t result;
   
   if (espnowBroadcastMode) {
-    result = esp_now_send((uint8_t[]){0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+    result = esp_now_send(broadcastAddress, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
   } else {
     if (selectedPeer < espnowPeerCount) {
       result = esp_now_send(espnowPeers[selectedPeer].mac, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
@@ -479,7 +762,8 @@ void sendESPNowMessage(String message) {
       espnowMessages[espnowMessageCount].timestamp = millis();
       espnowMessages[espnowMessageCount].isFromMe = true;
       espnowMessageCount++;
-      espnowScrollOffset = espnowMessageCount * 15;
+      espnowAutoScroll = true;
+      chatAnimProgress = 0.0f; // Trigger animation
     }
   } else {
     showStatus("Send Failed!", 1000);
@@ -506,24 +790,60 @@ void drawESPNowChat() {
   
   // Messages area
   int startY = 45;
-  int msgHeight = 15;
-  int visibleMsgs = (SCREEN_HEIGHT - startY - 10) / msgHeight;
-  int startIdx = max(0, espnowMessageCount - visibleMsgs);
+  int visibleMsgs = (SCREEN_HEIGHT - startY - 20) / 22; // Approx 22px per msg
+
+  if (espnowAutoScroll) {
+      espnowScrollIndex = max(0, espnowMessageCount - visibleMsgs);
+  }
   
-  canvas.setTextSize(1);
   int y = startY;
   
-  for (int i = startIdx; i < espnowMessageCount; i++) {
+  for (int i = espnowScrollIndex; i < espnowMessageCount; i++) {
+    if (y > SCREEN_HEIGHT - 20) break;
+
     ESPNowMessage &msg = espnowMessages[i];
     
+    // Animation Logic
+    int animYOffset = 0;
+    if (i == espnowMessageCount - 1 && chatAnimProgress < 1.0f) {
+      animYOffset = (1.0f - chatAnimProgress) * 20; // Slide up effect
+    }
+
+    int drawY = y + animYOffset;
+    if (drawY > SCREEN_HEIGHT) continue; // Skip if animated out of view
+
+    String text = String(msg.text);
+    int textW = text.length() * 6;
+    int bubbleW = textW + 10;
+    int bubbleH = 18;
+
+    uint16_t bubbleColor;
+    uint16_t textColor;
+
+    if (chatTheme == 0) { // Modern
+        bubbleColor = msg.isFromMe ? 0x4B1F : 0x632F; // Brighter Blue / Purple
+        textColor = 0xFFFF;
+    } else if (chatTheme == 1) { // Bubble (Light)
+        bubbleColor = msg.isFromMe ? 0x07FF : 0xFD20; // Cyan / Orange
+        textColor = 0x0000;
+    } else { // Cyberpunk
+        bubbleColor = msg.isFromMe ? 0xF800 : 0x07E0; // Red / Green
+        textColor = 0xFFFF;
+    }
+
     if (msg.isFromMe) {
-      canvas.setTextColor(COLOR_PRIMARY);
-      canvas.setCursor(SCREEN_WIDTH - 10 - (strlen(msg.text) * 6), y);
-      canvas.print(msg.text);
+      int x = SCREEN_WIDTH - 10 - bubbleW;
+      if (chatTheme == 1) {
+         canvas.fillRoundRect(x, drawY, bubbleW, bubbleH, 8, bubbleColor);
+      } else {
+         canvas.fillRect(x, drawY, bubbleW, bubbleH, bubbleColor);
+         canvas.drawRect(x, drawY, bubbleW, bubbleH, COLOR_BORDER);
+      }
       
-      canvas.drawFastHLine(SCREEN_WIDTH - 10 - (strlen(msg.text) * 6), y + 10, strlen(msg.text) * 6, COLOR_DIM);
+      canvas.setTextColor(textColor);
+      canvas.setCursor(x + 5, drawY + 5);
+      canvas.print(text);
     } else {
-      // Find nickname
       String senderName = "Unknown";
       for (int p = 0; p < espnowPeerCount; p++) {
         if (memcmp(espnowPeers[p].mac, msg.senderMAC, 6) == 0) {
@@ -532,15 +852,30 @@ void drawESPNowChat() {
         }
       }
       
-      canvas.setTextColor(COLOR_SECONDARY);
-      canvas.setCursor(10, y);
-      canvas.print(senderName);
-      canvas.print(": ");
-      canvas.setTextColor(COLOR_TEXT);
-      canvas.print(msg.text);
+      // Draw Sender Name small above bubble
+      canvas.setTextSize(1);
+      canvas.setTextColor(COLOR_DIM);
+      canvas.setCursor(10, drawY - 2);
+      // canvas.print(senderName); // Actually better inside or omit to save space
+
+      int x = 10;
+      if (chatTheme == 1) {
+         canvas.fillRoundRect(x, drawY, bubbleW, bubbleH, 8, bubbleColor);
+      } else {
+         canvas.fillRect(x, drawY, bubbleW, bubbleH, bubbleColor);
+         canvas.drawRect(x, drawY, bubbleW, bubbleH, COLOR_BORDER);
+      }
+
+      canvas.setTextColor(textColor);
+      canvas.setCursor(x + 5, drawY + 5);
+      canvas.print(text);
+
+      // Show name to the right/left or top?
+      // Let's show it above the bubble if space allows, or just rely on color.
+      // For now, simple bubble.
     }
     
-    y += msgHeight;
+    y += bubbleH + 4;
   }
   
   // Input indicator
@@ -550,6 +885,353 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ VISUAL EFFECTS ============
+void drawVisualsMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 2);
+  canvas.print("VISUALS");
+  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+
+  const char* items[] = {"Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  int itemHeight = 30;
+  int startY = 40;
+
+  for (int i = 0; i < 4; i++) {
+    int y = startY + (i * itemHeight);
+
+    if (i == menuSelection) { // Reusing menuSelection var
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 4, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    canvas.setCursor(20, y + 6);
+    canvas.print(items[i]);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawStarfield() {
+  if (!starsInit) {
+    for(int i=0; i<NUM_STARS; i++) {
+      stars[i].x = random(-SCREEN_WIDTH, SCREEN_WIDTH);
+      stars[i].y = random(-SCREEN_HEIGHT, SCREEN_HEIGHT);
+      stars[i].z = random(10, 255);
+    }
+    starsInit = true;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  int cx = SCREEN_WIDTH / 2;
+  int cy = SCREEN_HEIGHT / 2;
+  float speed = 4.0f;
+  if (digitalRead(BTN_UP) == BTN_ACT) speed = 8.0f;
+  if (digitalRead(BTN_DOWN) == BTN_ACT) speed = 2.0f;
+
+  for(int i=0; i<NUM_STARS; i++) {
+    stars[i].z -= speed;
+    if (stars[i].z <= 0) {
+       stars[i].x = random(-SCREEN_WIDTH, SCREEN_WIDTH);
+       stars[i].y = random(-SCREEN_HEIGHT, SCREEN_HEIGHT);
+       stars[i].z = 255;
+    }
+
+    int x = (stars[i].x * 128) / stars[i].z + cx;
+    int y = (stars[i].y * 128) / stars[i].z + cy;
+
+    if (x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT) {
+      int size = (255 - stars[i].z) / 64;
+      uint16_t color = (stars[i].z > 200) ? COLOR_DIM : COLOR_PRIMARY;
+      if (size > 1) canvas.fillRect(x, y, size, size, color);
+      else canvas.drawPixel(x, y, color);
+    }
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 10);
+  canvas.print("UP/DN=Speed | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawGameOfLife() {
+  if (!lifeInit) {
+    for(int x=0; x<LIFE_W; x++) {
+       for(int y=0; y<LIFE_H; y++) {
+          lifeGrid[x][y] = random(0, 2);
+       }
+    }
+    lifeInit = true;
+  }
+
+  if (millis() - lastLifeUpdate > 100) {
+    // Logic
+    for(int x=0; x<LIFE_W; x++) {
+      for(int y=0; y<LIFE_H; y++) {
+        int neighbors = 0;
+        for(int i=-1; i<=1; i++) {
+          for(int j=-1; j<=1; j++) {
+            if(i==0 && j==0) continue;
+            int nx = (x + i + LIFE_W) % LIFE_W;
+            int ny = (y + j + LIFE_H) % LIFE_H;
+            if(lifeGrid[nx][ny]) neighbors++;
+          }
+        }
+        if(lifeGrid[x][y]) {
+           nextGrid[x][y] = (neighbors == 2 || neighbors == 3) ? 1 : 0;
+        } else {
+           nextGrid[x][y] = (neighbors == 3) ? 1 : 0;
+        }
+      }
+    }
+    // Swap
+    memcpy(lifeGrid, nextGrid, sizeof(lifeGrid));
+    lastLifeUpdate = millis();
+
+    // Auto reset check (crude)
+    if(random(0, 500) == 0) lifeInit = false;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  for(int x=0; x<LIFE_W; x++) {
+    for(int y=0; y<LIFE_H; y++) {
+      if(lifeGrid[x][y]) {
+        canvas.fillRect(x*LIFE_SCALE, y*LIFE_SCALE, LIFE_SCALE-1, LIFE_SCALE-1, 0x07E0); // Green
+      }
+    }
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) lifeInit = false; // Manual reset
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 10);
+  canvas.print("SEL=Reset | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawFireEffect() {
+  if (!fireInit) {
+    // Generate palette (Black->Red->Yellow->White)
+    for(int i=0; i<37; i++) {
+       // Simple gradient approx
+       uint8_t r = min(255, i * 20);
+       uint8_t g = (i > 12) ? min(255, (i-12) * 20) : 0;
+       uint8_t b = (i > 24) ? min(255, (i-24) * 40) : 0;
+       firePalette[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+    memset(firePixels, 0, sizeof(firePixels));
+    fireInit = true;
+  }
+
+  // Seed bottom row
+  for(int x=0; x<FIRE_W; x++) {
+     firePixels[(FIRE_H-1)*FIRE_W + x] = random(0, 37); // Max heat
+  }
+
+  // Propagate
+  for(int x=0; x<FIRE_W; x++) {
+     for(int y=1; y<FIRE_H; y++) {
+        int src = y * FIRE_W + x;
+        int pixel = firePixels[src];
+        if (pixel == 0) {
+           firePixels[(y-1)*FIRE_W + x] = 0;
+        } else {
+           int randIdx = random(0, 3);
+           int dst = (y-1)*FIRE_W + (x - randIdx + 1);
+           if(dst >= 0 && dst < FIRE_W*FIRE_H) {
+              firePixels[dst] = max(0, pixel - (randIdx & 1));
+           }
+        }
+     }
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  int scaleX = SCREEN_WIDTH / FIRE_W;
+  int scaleY = SCREEN_HEIGHT / FIRE_H;
+
+  for(int y=0; y<FIRE_H; y++) {
+    for(int x=0; x<FIRE_W; x++) {
+       int colorIdx = firePixels[y*FIRE_W + x];
+       if(colorIdx > 0) {
+          if(colorIdx > 36) colorIdx = 36;
+          canvas.fillRect(x*scaleX, y*scaleY, scaleX, scaleY, firePalette[colorIdx]);
+       }
+    }
+  }
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(10, 10);
+  canvas.print("DOOM FIRE | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ VIRTUAL PET LOGIC & DRAWING ============
+void loadPetData() {
+  preferences.begin("pet-data", true);
+  myPet.hunger = preferences.getFloat("hunger", 80.0f);
+  myPet.happiness = preferences.getFloat("happy", 80.0f);
+  myPet.energy = preferences.getFloat("energy", 80.0f);
+  myPet.isSleeping = preferences.getBool("sleep", false);
+  preferences.end();
+}
+
+void savePetData() {
+  preferences.begin("pet-data", false);
+  preferences.putFloat("hunger", myPet.hunger);
+  preferences.putFloat("happy", myPet.happiness);
+  preferences.putFloat("energy", myPet.energy);
+  preferences.putBool("sleep", myPet.isSleeping);
+  preferences.end();
+}
+
+void updatePetLogic() {
+  unsigned long now = millis();
+  if (now - myPet.lastUpdate >= 5000) { // Update every 5 seconds
+    float decay = 0.5f; // Base decay
+
+    if (myPet.isSleeping) {
+      myPet.energy += 2.0f; // Recover energy
+      myPet.hunger -= 0.8f; // Get hungry slower
+    } else {
+      myPet.energy -= 0.5f;
+      myPet.hunger -= 1.0f;
+      myPet.happiness -= 0.5f;
+    }
+
+    // Clamp values
+    myPet.energy = constrain(myPet.energy, 0.0f, 100.0f);
+    myPet.hunger = constrain(myPet.hunger, 0.0f, 100.0f);
+    myPet.happiness = constrain(myPet.happiness, 0.0f, 100.0f);
+
+    // Auto wake up if full energy
+    if (myPet.isSleeping && myPet.energy >= 100.0f) {
+      myPet.isSleeping = false;
+      showStatus("Pet Woke Up!", 1000);
+    }
+
+    myPet.lastUpdate = now;
+    if (now % 30000 < 5000) savePetData(); // Auto save occasionally
+  }
+}
+
+void drawPetFace(int x, int y) {
+  uint16_t faceColor = COLOR_PRIMARY;
+
+  // Mood check
+  if (myPet.hunger < 30 || myPet.happiness < 30) faceColor = COLOR_WARN;
+  if (myPet.hunger < 10 || myPet.energy < 10) faceColor = COLOR_ERROR;
+
+  // Body (Circle)
+  canvas.drawCircle(x, y, 30, faceColor);
+  canvas.drawCircle(x, y, 29, faceColor);
+
+  if (myPet.isSleeping) {
+    // Sleeping Eyes (Lines)
+    canvas.drawLine(x - 15, y - 5, x - 5, y - 5, faceColor);
+    canvas.drawLine(x + 5, y - 5, x + 15, y - 5, faceColor);
+    // Zzz
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(x + 25, y - 20); canvas.print("Z");
+    canvas.setCursor(x + 32, y - 28); canvas.print("z");
+  } else {
+    // Eyes
+    if (myPet.happiness > 70) {
+      // Happy eyes (Arcs or filled circles)
+      canvas.fillCircle(x - 12, y - 8, 4, faceColor);
+      canvas.fillCircle(x + 12, y - 8, 4, faceColor);
+    } else if (myPet.happiness < 30) {
+      // Sad eyes (X)
+      canvas.drawLine(x - 15, y - 10, x - 9, y - 4, faceColor);
+      canvas.drawLine(x - 15, y - 4, x - 9, y - 10, faceColor);
+      canvas.drawLine(x + 9, y - 10, x + 15, y - 4, faceColor);
+      canvas.drawLine(x + 9, y - 4, x + 15, y - 10, faceColor);
+    } else {
+      // Normal eyes
+      canvas.drawCircle(x - 12, y - 8, 4, faceColor);
+      canvas.drawCircle(x + 12, y - 8, 4, faceColor);
+    }
+
+    // Mouth
+    if (myPet.hunger < 40) {
+      // Hungry/Sad mouth
+      // GFX doesn't strictly have Arc, so use lines
+      canvas.drawLine(x - 8, y + 20, x, y + 15, faceColor);
+      canvas.drawLine(x, y + 15, x + 8, y + 20, faceColor);
+    } else {
+      // Happy mouth (V shape or U shape)
+      canvas.drawLine(x - 8, y + 12, x, y + 18, faceColor);
+      canvas.drawLine(x, y + 18, x + 8, y + 12, faceColor);
+    }
+  }
+}
+
+void drawPetGame() {
+  updatePetLogic();
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header Stats
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+
+  // Hunger Bar
+  canvas.setCursor(10, 20); canvas.print("HGR");
+  canvas.drawRect(35, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(35, 20, (int)(myPet.hunger / 2), 6, myPet.hunger < 30 ? COLOR_ERROR : COLOR_SUCCESS);
+
+  // Happiness Bar
+  canvas.setCursor(100, 20); canvas.print("HAP");
+  canvas.drawRect(125, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(125, 20, (int)(myPet.happiness / 2), 6, myPet.happiness < 30 ? COLOR_WARN : COLOR_ACCENT);
+
+  // Energy Bar
+  canvas.setCursor(190, 20); canvas.print("ENG");
+  canvas.drawRect(215, 20, 50, 6, COLOR_BORDER);
+  canvas.fillRect(215, 20, (int)(myPet.energy / 2), 6, myPet.energy < 30 ? COLOR_ERROR : COLOR_PRIMARY);
+
+  // Draw Pet in Center
+  drawPetFace(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 10);
+
+  // Menu at Bottom
+  const char* items[] = {"Feed", "Play", "Meet", "Sleep", "Back"};
+  int menuY = SCREEN_HEIGHT - 30;
+  int itemW = SCREEN_WIDTH / 5;
+
+  for (int i = 0; i < 5; i++) {
+    int x = i * itemW;
+    if (i == petMenuSelection) {
+      canvas.fillRect(x + 2, menuY, itemW - 4, 25, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(x + 2, menuY, itemW - 4, 25, COLOR_BORDER);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setTextSize(1);
+    // Center text
+    int txtW = strlen(items[i]) * 6;
+    canvas.setCursor(x + (itemW - txtW) / 2, menuY + 8);
+    canvas.print(items[i]);
+  }
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -577,22 +1259,41 @@ void drawESPNowMenu() {
   canvas.print(" | Msgs: ");
   canvas.print(espnowMessageCount);
   
-  const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Back"};
-  int startY = 75;
-  int itemHeight = 22;
+  const char* menuItems[] = {"Open Chat", "View Peers", "Set Nickname", "Add Peer (MAC)", "Chat Theme", "Back"};
+  int startY = 66; // Moved up to fit
+  int itemHeight = 18;
+  int menuScroll = 0;
   
-  for (int i = 0; i < 4; i++) {
-    int y = startY + (i * itemHeight);
+  // Simple scrolling logic for menu items
+  if (menuSelection > 4) {
+      menuScroll = (menuSelection - 4) * itemHeight;
+  }
+
+  int drawY = startY;
+
+  for (int i = 0; i < 6; i++) {
+    int y = drawY + (i * itemHeight) - menuScroll;
+
+    // Skip if off screen
+    if (y < startY || y > SCREEN_HEIGHT - 20) continue;
+
     if (i == menuSelection) {
-      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_PRIMARY);
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 3, COLOR_BORDER);
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     canvas.setTextSize(1);
-    canvas.setCursor(20, y + 7);
-    canvas.print(menuItems[i]);
+    canvas.setCursor(20, y + 5);
+    if (i == 4) {
+       canvas.print("Theme: ");
+       if (chatTheme == 0) canvas.print("Modern");
+       else if (chatTheme == 1) canvas.print("Bubble");
+       else canvas.print("Cyber");
+    } else {
+       canvas.print(menuItems[i]);
+    }
   }
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -648,7 +1349,272 @@ void drawESPNowPeerList() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT=Chat Direct | L+R=Back");
+  canvas.print("SELECT=Chat | LEFT=Rename | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ HACKER TOOLS: SNIFFER, NETSCAN, FILES ============
+void drawSniffer() {
+  if (!snifferActive) {
+    WiFi.disconnect();
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_promiscuous_rx_cb(&wifiPromiscuous);
+    snifferActive = true;
+    snifferPacketCount = 0;
+    memset(snifferHistory, 0, sizeof(snifferHistory));
+  }
+
+  unsigned long now = millis();
+  if (now - lastSnifferUpdate > 100) {
+    snifferHistory[snifferHistoryIdx] = snifferPacketCount; // Store packets per 100ms
+    snifferPacketCount = 0;
+    snifferHistoryIdx = (snifferHistoryIdx + 1) % SNIFFER_HISTORY_LEN;
+    lastSnifferUpdate = now;
+
+    // Channel hopping
+    int ch = (now / 500) % 13 + 1;
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Matrix Style Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x07E0);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("PACKET SNIFFER");
+
+  // Draw Graph
+  int graphBase = SCREEN_HEIGHT - 10;
+  int maxVal = 1;
+  for(int i=0; i<SNIFFER_HISTORY_LEN; i++) if(snifferHistory[i] > maxVal) maxVal = snifferHistory[i];
+
+  for(int i=0; i<SNIFFER_HISTORY_LEN; i++) {
+    int idx = (snifferHistoryIdx + i) % SNIFFER_HISTORY_LEN;
+    int h = map(snifferHistory[idx], 0, maxVal, 0, 100);
+    if(h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF); // Cyan lines
+  }
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("CH: "); canvas.print((millis() / 500) % 13 + 1);
+  canvas.print(" | MAX: "); canvas.print(maxVal);
+
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("Scanning... L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawNetScan() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xFFE0); // Yellow/Amber
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("NET SCANNER");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("WiFi Disconnected!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // For simplicity, we just list the current connection info and scan networks again but styled differently
+  // Since real IP scan blocks for too long.
+  // Unless we trigger it once.
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("Local IP: "); canvas.print(WiFi.localIP());
+  canvas.setCursor(10, 55);
+  canvas.print("Gateway: "); canvas.print(WiFi.gatewayIP());
+  canvas.setCursor(10, 65);
+  canvas.print("Subnet: "); canvas.print(WiFi.subnetMask());
+
+  canvas.drawFastHLine(0, 80, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setCursor(10, 85);
+  canvas.setTextColor(0x07FF);
+  canvas.print("NEARBY APs (Passive):");
+
+  int listY = 100;
+  for(int i=0; i<min(networkCount, 5); i++) {
+    canvas.setCursor(10, listY);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.print(networks[i].ssid.substring(0, 15));
+    canvas.setCursor(120, listY);
+    canvas.print(networks[i].rssi); canvas.print("dB");
+    canvas.setCursor(170, listY);
+    canvas.print(networks[i].encrypted ? "ENC" : "OPEN");
+    listY += 12;
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("Scanning... L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawFileManager() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x7BEF); // Gray/Blue
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("FILE MANAGER");
+
+  if (!sdCardMounted) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("SD Card Not Found!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Populate list once
+  if (fileListCount == 0) {
+    File root = SD.open("/");
+    File file = root.openNextFile();
+    while(file && fileListCount < 20) {
+      String name = String(file.name());
+      if (name.startsWith("/")) name = name.substring(1);
+      fileList[fileListCount] = name;
+      fileListCount++;
+      file = root.openNextFile();
+    }
+    root.close();
+  }
+
+  int startY = 45;
+  for(int i=0; i<5; i++) {
+    int idx = i + fileListScroll;
+    if (idx >= fileListCount) break;
+
+    if (idx == fileListSelection) {
+      canvas.fillRect(5, startY + (i*20), SCREEN_WIDTH-10, 18, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(5, startY + (i*20), SCREEN_WIDTH-10, 18, COLOR_BORDER);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(10, startY + (i*20) + 5);
+    canvas.print(fileList[idx]);
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Scroll | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawAboutScreen() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07FF); // Cyan
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(100, 20);
+  canvas.print("ABOUT ME");
+
+  int y = 50;
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+
+  canvas.setCursor(10, y);
+  canvas.print("Project: AI-Pocket S3");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Version: 2.2 (Hacker Edition)");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Chip: ESP32-S3 (Dual Core)");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("RAM: 8MB PSRAM + 512KB SRAM");
+  y+=15;
+  canvas.setCursor(10, y);
+  canvas.print("Created by: Jules & User");
+  y+=15;
+  canvas.setTextColor(0x07E0);
+  canvas.setCursor(10, y);
+  canvas.print("Quote: Adab di atas Ilmu.");
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R = Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawWiFiSonar() {
+  unsigned long now = millis();
+
+  if (now - lastSonarUpdate > 100) {
+    int rssi = WiFi.RSSI();
+    // Normalize RSSI (-30 to -90) to 0-100
+    int val = constrain(map(rssi, -90, -30, 0, 100), 0, 100);
+
+    // Calculate variance/delta
+    int delta = abs(val - lastSonarRSSI);
+    lastSonarRSSI = val;
+
+    sonarHistory[sonarHistoryIdx] = delta;
+    sonarHistoryIdx = (sonarHistoryIdx + 1) % SONAR_HISTORY_LEN;
+
+    if (delta > 15) sonarAlert = true; // Threshold for motion
+    else sonarAlert = false;
+
+    lastSonarUpdate = now;
+  }
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  uint16_t headerColor = sonarAlert ? 0xF800 : 0x07E0; // Red if Alert, Green normal
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, headerColor);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print(sonarAlert ? "MOTION DETECTED!" : "WIFI SONAR ACTIVE");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(10, 50);
+    canvas.print("Connect WiFi first!");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Draw Graph (Variance)
+  int graphBase = SCREEN_HEIGHT - 10;
+  for(int i=0; i<SONAR_HISTORY_LEN; i++) {
+    int idx = (sonarHistoryIdx + i) % SONAR_HISTORY_LEN;
+    int h = sonarHistory[idx] * 3; // Scale up
+    if (h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF);
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 45);
+  canvas.print("Target: "); canvas.print(WiFi.SSID());
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("RSSI Delta Graph | L+R = Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1016,31 +1982,130 @@ String getRecentChatContext(int maxMessages) {
   return context;
 }
 
-// ============ PREFERENCES ============
-void savePreferenceString(const char* key, String value) {
-  preferences.begin("app-config", false);
-  preferences.putString(key, value);
-  preferences.end();
-}
+// ============ CONFIGURATION SYSTEM (SD .aip) ============
+void loadConfig() {
+  // Try SD first
+  if (sdCardMounted && SD.exists(CONFIG_FILE)) {
+    File file = SD.open(CONFIG_FILE, FILE_READ);
+    if (file) {
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, file);
+      if (!error) {
+        sysConfig.ssid = doc["wifi"]["ssid"] | "";
+        sysConfig.password = doc["wifi"]["pass"] | "";
+        sysConfig.espnowNick = doc["sys"]["nick"] | "ESP32";
+        sysConfig.showFPS = doc["sys"]["fps"] | false;
+        sysConfig.petHunger = doc["pet"]["hgr"] | 80.0f;
+        sysConfig.petHappiness = doc["pet"]["hap"] | 80.0f;
+        sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
+        sysConfig.petSleep = doc["pet"]["slp"] | false;
 
-String loadPreferenceString(const char* key, String defaultValue) {
+        // Sync to legacy globals if needed
+        myNickname = sysConfig.espnowNick;
+        showFPS = sysConfig.showFPS;
+        myPet.hunger = sysConfig.petHunger;
+        myPet.happiness = sysConfig.petHappiness;
+        myPet.energy = sysConfig.petEnergy;
+        myPet.isSleeping = sysConfig.petSleep;
+
+        Serial.println("Config loaded from SD (.aip)");
+        file.close();
+        return;
+      }
+      file.close();
+    }
+  }
+
+  // Fallback to NVS
   preferences.begin("app-config", true);
-  String value = preferences.getString(key, defaultValue);
+  sysConfig.ssid = preferences.getString("ssid", "");
+  sysConfig.password = preferences.getString("password", "");
+  sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
+  sysConfig.showFPS = preferences.getBool("showFPS", false);
   preferences.end();
-  return value;
+
+  preferences.begin("pet-data", true);
+  sysConfig.petHunger = preferences.getFloat("hunger", 80.0f);
+  sysConfig.petHappiness = preferences.getFloat("happy", 80.0f);
+  sysConfig.petEnergy = preferences.getFloat("energy", 80.0f);
+  sysConfig.petSleep = preferences.getBool("sleep", false);
+  preferences.end();
+
+  // Sync
+  myNickname = sysConfig.espnowNick;
+  showFPS = sysConfig.showFPS;
+  myPet.hunger = sysConfig.petHunger;
+  myPet.happiness = sysConfig.petHappiness;
+  myPet.energy = sysConfig.petEnergy;
+  myPet.isSleeping = sysConfig.petSleep;
+
+  Serial.println("Config loaded from NVS");
 }
 
-void savePreferenceBool(const char* key, bool value) {
+void saveConfig() {
+  // Update struct from globals
+  sysConfig.espnowNick = myNickname;
+  sysConfig.showFPS = showFPS;
+  sysConfig.petHunger = myPet.hunger;
+  sysConfig.petHappiness = myPet.happiness;
+  sysConfig.petEnergy = myPet.energy;
+  sysConfig.petSleep = myPet.isSleeping;
+  // ssid/pass are updated directly
+
+  if (sdCardMounted) {
+    JsonDocument doc;
+    doc["wifi"]["ssid"] = sysConfig.ssid;
+    doc["wifi"]["pass"] = sysConfig.password;
+    doc["sys"]["nick"] = sysConfig.espnowNick;
+    doc["sys"]["fps"] = sysConfig.showFPS;
+    doc["pet"]["hgr"] = sysConfig.petHunger;
+    doc["pet"]["hap"] = sysConfig.petHappiness;
+    doc["pet"]["eng"] = sysConfig.petEnergy;
+    doc["pet"]["slp"] = sysConfig.petSleep;
+
+    File file = SD.open(CONFIG_FILE, FILE_WRITE);
+    if (file) {
+      serializeJson(doc, file);
+      file.close();
+      Serial.println("Config saved to SD (.aip)");
+    }
+  }
+
+  // Always backup to NVS for robustness
   preferences.begin("app-config", false);
-  preferences.putBool(key, value);
+  preferences.putString("ssid", sysConfig.ssid);
+  preferences.putString("password", sysConfig.password);
+  preferences.putString("espnow_nick", sysConfig.espnowNick);
+  preferences.putBool("showFPS", sysConfig.showFPS);
   preferences.end();
+
+  preferences.begin("pet-data", false);
+  preferences.putFloat("hunger", sysConfig.petHunger);
+  preferences.putFloat("happy", sysConfig.petHappiness);
+  preferences.putFloat("energy", sysConfig.petEnergy);
+  preferences.putBool("sleep", sysConfig.petSleep);
+  preferences.end();
+}
+
+// Wrapper for legacy calls
+void savePreferenceString(const char* key, String value) {
+  if (String(key) == "ssid") sysConfig.ssid = value;
+  if (String(key) == "password") sysConfig.password = value;
+  if (String(key) == "espnow_nick") sysConfig.espnowNick = value;
+  saveConfig();
+}
+
+// Add these to fix compilation
+String loadPreferenceString(const char* key, String defaultValue) {
+  if (String(key) == "ssid") return sysConfig.ssid.length() > 0 ? sysConfig.ssid : defaultValue;
+  if (String(key) == "password") return sysConfig.password.length() > 0 ? sysConfig.password : defaultValue;
+  if (String(key) == "espnow_nick") return sysConfig.espnowNick.length() > 0 ? sysConfig.espnowNick : defaultValue;
+  return defaultValue;
 }
 
 bool loadPreferenceBool(const char* key, bool defaultValue) {
-  preferences.begin("app-config", true);
-  bool value = preferences.getBool(key, defaultValue);
-  preferences.end();
-  return value;
+  if (String(key) == "showFPS") return sysConfig.showFPS;
+  return defaultValue;
 }
 
 // ============ NEOPIXEL ============
@@ -1222,36 +2287,91 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ MAIN MENU ============
+// ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
+void updateParticles() {
+  if (!particlesInit) {
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      particles[i].x = random(0, SCREEN_WIDTH);
+      particles[i].y = random(0, SCREEN_HEIGHT);
+      particles[i].speed = random(10, 50) / 10.0f;
+      particles[i].size = random(1, 3);
+    }
+    particlesInit = true;
+  }
+
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    particles[i].x -= particles[i].speed;
+    if (particles[i].x < 0) {
+      particles[i].x = SCREEN_WIDTH;
+      particles[i].y = random(0, SCREEN_HEIGHT);
+    }
+  }
+}
+
 void showMainMenu(int x_offset) {
+  updateParticles();
   canvas.fillScreen(COLOR_BG);
+
+  // Draw Particles (Background)
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    // Dim stars
+    uint16_t color = (particles[i].size > 1) ? 0x8410 : 0x4208; // Dark Gray
+    canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, color);
+  }
+
+  // Scanline Effect (Horizontal lines)
+  for (int y = 0; y < SCREEN_HEIGHT; y += 4) {
+    canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x18E3); // Very subtle gray line
+  }
+
   drawStatusBar();
   
-  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(2);
-  canvas.setCursor(10, 2);
-  canvas.print("MAIN MENU");
-  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES", "VISUALS", "ABOUT", "SONAR"};
+  int numItems = 12;
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM"};
-  int itemHeight = 26;
-  int startY = 35;
-  
-  for (int i = 0; i < 5; i++) {
-    int y = startY + (i * itemHeight);
+  int centerX = SCREEN_WIDTH / 2;
+  int centerY = SCREEN_HEIGHT / 2 + 5;
+  int iconSpacing = 70;
+
+  for (int i = 0; i < numItems; i++) {
+    float offset = (i - menuScrollCurrent);
+    int x = centerX + (offset * iconSpacing);
+    int y = centerY;
     
-    if (i == menuSelection) {
-      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 4, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_BG);
+    float dist = abs(offset);
+    float scale = 1.0f - min(dist * 0.5f, 0.7f); // Sharper falloff
+    if (scale < 0.1f) continue;
+
+    int boxSize = 48 * scale;
+
+    // Icon Logic
+    if (abs(offset) < 0.5f) {
+        // Active: "Glow" effect using concentric rects + Inverted Box
+        // Simulate glow with dithering or just multiple lines
+        for(int k=1; k<4; k++) {
+           canvas.drawRoundRect(x - 24 - k, y - 24 - k, 48 + 2*k, 48 + 2*k, 6, 0x4208); // Dark gray glow
+        }
+
+        // Main Box
+        canvas.fillRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_PRIMARY); // White box
+        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_BG); // Black Icon
+
+        // Label with background for readability
+        canvas.setTextSize(1);
+        int labelW = strlen(items[i]) * 6;
+        int labelX = centerX - labelW/2;
+        int labelY = SCREEN_HEIGHT - 25;
+
+        canvas.fillRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_BG);
+        canvas.drawRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_PRIMARY);
+        canvas.setCursor(labelX, labelY);
+        canvas.print(items[i]);
     } else {
-      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 4, COLOR_BORDER);
-      canvas.setTextColor(COLOR_PRIMARY);
+        // Inactive: Just Outline and Dim Icon
+        canvas.drawRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_DIM);
+        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_DIM);
     }
-    
-    canvas.setTextSize(2);
-    canvas.setCursor(15, y + 6);
-    canvas.print(items[i]);
   }
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -1387,7 +2507,7 @@ void displayWiFiNetworks(int x_offset) {
       int y = startY + ((i - startIdx) * itemHeight);
       
       if (i == selectedNetwork) {
-        canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
+        canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY); // White
         canvas.setTextColor(COLOR_BG);
       } else {
         canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_BORDER);
@@ -1405,17 +2525,26 @@ void displayWiFiNetworks(int x_offset) {
       
       if (networks[i].encrypted) {
         canvas.setCursor(SCREEN_WIDTH - 45, y + 7);
+        // Red Lock if encrypted
+        if (i != selectedNetwork) canvas.setTextColor(0xF800); // Red
         canvas.print("L");
       }
       
       int bars = map(networks[i].rssi, -100, -50, 1, 4);
       bars = constrain(bars, 1, 4);
+
+      // Color code signal strength (Green -> Yellow -> Red)
+      uint16_t signalColor = 0xF800; // Red
+      if (bars > 3) signalColor = 0x07E0; // Green
+      else if (bars > 2) signalColor = 0xFFE0; // Yellow
+
+      if (i == selectedNetwork) signalColor = COLOR_BG; // Invert on selection
+
       int barX = SCREEN_WIDTH - 30;
       for (int b = 0; b < 4; b++) {
         int h = (b + 1) * 2;
         if (b < bars) {
-          canvas.fillRect(barX + (b * 4), y + 13 - h, 2, h, 
-                         i == selectedNetwork ? COLOR_BG : COLOR_PRIMARY);
+          canvas.fillRect(barX + (b * 4), y + 13 - h, 2, h, signalColor);
         } else {
           canvas.drawRect(barX + (b * 4), y + 13 - h, 2, h, COLOR_DIM);
         }
@@ -1438,6 +2567,10 @@ void displayWiFiNetworks(int x_offset) {
 
 // ============ KEYBOARD ============
 const char* getCurrentKey() {
+  if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+    return keyboardMac[cursorY][cursorX];
+  }
+
   if (currentKeyboardMode == MODE_LOWER) {
     return keyboardLower[cursorY][cursorX];
   } else if (currentKeyboardMode == MODE_UPPER) {
@@ -1448,6 +2581,8 @@ const char* getCurrentKey() {
 }
 
 void toggleKeyboardMode() {
+  if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) return; // No mode switching for MAC keyboard
+
   if (currentKeyboardMode == MODE_LOWER) {
     currentKeyboardMode = MODE_UPPER;
   } else if (currentKeyboardMode == MODE_UPPER) {
@@ -1472,6 +2607,8 @@ void drawKeyboard(int x_offset) {
     canvas.print("[ESP-NOW]");
   } else if (keyboardContext == CONTEXT_ESPNOW_NICKNAME) {
     canvas.print("[NICKNAME]");
+  } else if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+    canvas.print("[MAC ADDR]");
   }
   
   canvas.drawRect(5, 18, SCREEN_WIDTH - 10, 24, COLOR_BORDER);
@@ -1503,12 +2640,16 @@ void drawKeyboard(int x_offset) {
       int y = startY + r * (keyH + gapY);
       
       const char* keyLabel;
-      if (currentKeyboardMode == MODE_LOWER) {
-         keyLabel = keyboardLower[r][c];
-      } else if (currentKeyboardMode == MODE_UPPER) {
-         keyLabel = keyboardUpper[r][c];
+      if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+         keyLabel = keyboardMac[r][c];
       } else {
-         keyLabel = keyboardNumbers[r][c];
+        if (currentKeyboardMode == MODE_LOWER) {
+           keyLabel = keyboardLower[r][c];
+        } else if (currentKeyboardMode == MODE_UPPER) {
+           keyLabel = keyboardUpper[r][c];
+        } else {
+           keyLabel = keyboardNumbers[r][c];
+        }
       }
       
       if (r == cursorY && c == cursorX) {
@@ -1617,48 +2758,64 @@ void showLoadingAnimation(int x_offset) {
 void showSystemPerf(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PRIMARY);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x07E0); // Green Header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(70, 20);
   canvas.print("PERFORMANCE");
-  canvas.setTextColor(COLOR_TEXT);
+
   canvas.setTextSize(1);
-  canvas.setCursor(10, 50);
-  canvas.print("CPU Temp: ");
-  canvas.print(temperatureRead(), 1);
-  canvas.print(" C");
-  canvas.setCursor(10, 65);
-  canvas.print("FPS: ");
-  canvas.print(perfFPS);
-  canvas.print("  LPS: ");
-  canvas.print(perfLPS);
-  canvas.setCursor(10, 80);
-  canvas.print("RAM Free: ");
-  canvas.print(ESP.getFreeHeap() / 1024);
-  canvas.print(" KB");
-  canvas.setCursor(10, 95);
-  canvas.print("Chat Msgs: ");
-  canvas.print(chatMessageCount);
-  canvas.print(" (");
-  canvas.print(chatHistory.length());
-  canvas.print("B)");
+  int y = 50;
+
+  // CPU Temp - Red
+  canvas.setTextColor(0xF800);
+  canvas.setCursor(10, y); canvas.print("CPU Temp: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(temperatureRead(), 1); canvas.print(" C");
+
+  y += 15;
+  // FPS - Cyan
+  canvas.setTextColor(0x07FF);
+  canvas.setCursor(10, y); canvas.print("FPS: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(perfFPS);
+  canvas.setTextColor(0x07FF); canvas.print("  LPS: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(perfLPS);
+
+  y += 15;
+  // RAM - Magenta
+  canvas.setTextColor(0xF81F);
+  canvas.setCursor(10, y); canvas.print("RAM Free: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(ESP.getFreeHeap() / 1024); canvas.print(" KB");
+
+  y += 15;
+  // Chat - Yellow
+  canvas.setTextColor(0xFFE0);
+  canvas.setCursor(10, y); canvas.print("Chat Msgs: ");
+  canvas.setTextColor(COLOR_TEXT); canvas.print(chatMessageCount);
+
+  y += 15;
+  // PSRAM - Blue
   if (psramFound()) {
-    canvas.setCursor(10, 110);
-    canvas.print("PSRAM: ");
+    canvas.setTextColor(0x001F);
+    canvas.setCursor(10, y); canvas.print("PSRAM: ");
+    canvas.setTextColor(COLOR_TEXT);
     canvas.print(ESP.getFreePsram() / 1024 / 1024);
     canvas.print(" / ");
     canvas.print(ESP.getPsramSize() / 1024 / 1024);
     canvas.print(" MB");
+    y += 15;
   }
-  canvas.setCursor(10, 125);
-  canvas.print("SD: ");
+
+  // SD - Green
+  canvas.setTextColor(0x07E0);
+  canvas.setCursor(10, y); canvas.print("SD Card: ");
+  canvas.setTextColor(COLOR_TEXT);
   canvas.print(sdCardMounted ? "OK" : "NO");
   if (sdCardMounted) {
     canvas.print(" | ");
     canvas.print(SD.cardSize() / (1024 * 1024));
     canvas.print("MB");
   }
+
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
   canvas.print("BACK=Menu | SELECT=Clear Chat");
@@ -1669,24 +2826,36 @@ void showSystemPerf(int x_offset) {
 void drawCourierTool() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PRIMARY);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xF800); // Red Header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(70, 20);
   canvas.print("COURIER TRACK");
   canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(1);
+
   canvas.setCursor(10, 50);
+  canvas.setTextColor(0x07FF); // Cyan
   canvas.print("Resi: ");
+  canvas.setTextColor(COLOR_TEXT);
   canvas.print(bb_resi);
-  canvas.drawRect(10, 70, SCREEN_WIDTH - 20, 30, COLOR_PRIMARY);
+
+  canvas.drawRect(10, 70, SCREEN_WIDTH - 20, 30, 0x07FF);
   int cx = (SCREEN_WIDTH - (courierStatus.length() * 6)) / 2;
   canvas.setCursor(cx, 82);
-  if (isTracking && (millis() / 200) % 2 == 0) {
-    canvas.print("...");
+
+  if (isTracking) {
+      canvas.setTextColor(0xFFE0); // Yellow
+      if ((millis() / 200) % 2 == 0) canvas.print("...");
+      else canvas.print(courierStatus);
   } else {
-    canvas.print(courierStatus);
+      if (courierStatus == "DELIVERED") canvas.setTextColor(0x07E0); // Green
+      else if (courierStatus.indexOf("ERR") != -1) canvas.setTextColor(0xF800); // Red
+      else canvas.setTextColor(COLOR_TEXT);
+      canvas.print(courierStatus);
   }
+
+  canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(10, 110);
   canvas.print("Location: ");
   canvas.println(courierLastLoc.substring(0, 35));
@@ -1973,6 +3142,54 @@ void handleMainMenuSelect() {
     case 4:
       changeState(STATE_SYSTEM_PERF);
       break;
+    case 5:
+      loadPetData();
+      changeState(STATE_VPET);
+      break;
+    case 6:
+      changeState(STATE_TOOL_SNIFFER);
+      break;
+    case 7:
+      scanWiFiNetworks(); // Trigger initial scan
+      changeState(STATE_TOOL_NETSCAN);
+      break;
+    case 8:
+      fileListCount = 0; // Force refresh
+      changeState(STATE_TOOL_FILE_MANAGER);
+      break;
+    case 9: // Visuals
+      menuSelection = 0; // Reuse selection for sub-menu
+      changeState(STATE_VISUALS_MENU);
+      break;
+    case 10:
+      changeState(STATE_ABOUT);
+      break;
+    case 11:
+      if (WiFi.status() != WL_CONNECTED) {
+         showStatus("Connect WiFi\nFirst!", 1000);
+         changeState(STATE_WIFI_MENU);
+      } else {
+         changeState(STATE_TOOL_WIFI_SONAR);
+      }
+      break;
+  }
+}
+
+void handleVisualsMenuSelect() {
+  switch(menuSelection) {
+    case 0:
+      changeState(STATE_VIS_STARFIELD);
+      break;
+    case 1:
+      changeState(STATE_VIS_LIFE);
+      break;
+    case 2:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 3:
+      menuSelection = 0;
+      changeState(STATE_MAIN_MENU);
+      break;
   }
 }
 
@@ -2011,6 +3228,17 @@ void handleESPNowMenuSelect() {
       changeState(STATE_KEYBOARD);
       break;
     case 3:
+      userInput = "";
+      keyboardContext = CONTEXT_ESPNOW_ADD_MAC;
+      cursorX = 0;
+      cursorY = 0;
+      currentKeyboardMode = MODE_NUMBERS;
+      changeState(STATE_KEYBOARD);
+      break;
+    case 4:
+      chatTheme = (chatTheme + 1) % 3;
+      break;
+    case 5:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -2036,6 +3264,69 @@ void handleKeyPress() {
         savePreferenceString("espnow_nick", myNickname);
         showStatus("Nickname\nsaved!", 1000);
         changeState(STATE_ESPNOW_MENU);
+      }
+    } else if (keyboardContext == CONTEXT_ESPNOW_ADD_MAC) {
+      if (userInput.length() == 12 || userInput.length() == 17) {
+        // Parse MAC
+        uint8_t mac[6];
+        int values[6];
+        int parsed = 0;
+        if (userInput.indexOf(':') != -1) {
+           parsed = sscanf(userInput.c_str(), "%x:%x:%x:%x:%x:%x",
+                           &values[0], &values[1], &values[2],
+                           &values[3], &values[4], &values[5]);
+        } else {
+           // Handle no colons if user just typed AABBCCDDEEFF
+           // This is harder with sscanf but we can split
+           if (userInput.length() == 12) {
+               char buffer[3];
+               buffer[2] = 0;
+               parsed = 6;
+               for(int i=0; i<6; i++) {
+                   buffer[0] = userInput[i*2];
+                   buffer[1] = userInput[i*2+1];
+                   values[i] = strtol(buffer, NULL, 16);
+               }
+           }
+        }
+
+        if (parsed == 6) {
+           for(int i=0; i<6; i++) mac[i] = (uint8_t)values[i];
+
+           bool exists = false;
+           for(int i=0; i<espnowPeerCount; i++) {
+               if(memcmp(espnowPeers[i].mac, mac, 6) == 0) exists = true;
+           }
+
+           if (!exists && espnowPeerCount < MAX_ESPNOW_PEERS) {
+              memcpy(espnowPeers[espnowPeerCount].mac, mac, 6);
+              espnowPeers[espnowPeerCount].nickname = "Manual Peer";
+              espnowPeers[espnowPeerCount].lastSeen = millis();
+              espnowPeers[espnowPeerCount].isActive = true;
+              espnowPeerCount++;
+
+              esp_now_peer_info_t peerInfo = {};
+              memcpy(peerInfo.peer_addr, mac, 6);
+              peerInfo.channel = 0;
+              peerInfo.encrypt = false;
+              esp_now_add_peer(&peerInfo);
+
+              showStatus("Peer Added!", 1000);
+              changeState(STATE_ESPNOW_MENU);
+           } else {
+              showStatus("Exists or Full", 1000);
+           }
+        } else {
+           showStatus("Invalid Format", 1000);
+        }
+      } else {
+         showStatus("Invalid Length", 1000);
+      }
+    } else if (keyboardContext == CONTEXT_ESPNOW_RENAME_PEER) {
+      if (userInput.length() > 0 && selectedPeer < espnowPeerCount) {
+         espnowPeers[selectedPeer].nickname = userInput;
+         showStatus("Renamed!", 1000);
+         changeState(STATE_ESPNOW_PEER_SCAN);
       }
     }
   } else if (strcmp(key, "<") == 0) {
@@ -2115,6 +3406,30 @@ void refreshCurrentScreen() {
       break;
     case STATE_ESPNOW_PEER_SCAN:
       drawESPNowPeerList();
+      break;
+    case STATE_VPET:
+      drawPetGame();
+      break;
+    case STATE_TOOL_SNIFFER:
+      drawSniffer();
+      break;
+    case STATE_TOOL_NETSCAN:
+      drawNetScan();
+      break;
+    case STATE_TOOL_FILE_MANAGER:
+      drawFileManager();
+      break;
+    case STATE_VISUALS_MENU:
+      drawVisualsMenu();
+      break;
+    case STATE_VIS_STARFIELD:
+      drawStarfield();
+      break;
+    case STATE_VIS_LIFE:
+      drawGameOfLife();
+      break;
+    case STATE_VIS_FIRE:
+      drawFireEffect();
       break;
     default:
       showMainMenu(x_offset);
@@ -2208,9 +3523,13 @@ void setup() {
   SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
   SPI.setFrequency(40000000);
   
-  showFPS = loadPreferenceBool("showFPS", false);
-  myNickname = loadPreferenceString("espnow_nick", "ESP32");
-  Serial.println("✓ Preferences Loaded");
+  loadConfig(); // Load everything
+
+  // showFPS = loadPreferenceBool("showFPS", false);
+  // myNickname = loadPreferenceString("espnow_nick", "ESP32");
+  // Values are already synced in loadConfig()
+
+  Serial.println("✓ Config Loaded");
   Serial.print("ESP-NOW Nickname: ");
   Serial.println(myNickname);
   
@@ -2289,6 +3608,33 @@ void loop() {
     perfLoopCount = 0;
     perfLastTime = currentMillis;
   }
+
+  // Calculate Delta Time
+  float dt = (currentMillis - lastFrameMillis) / 1000.0f;
+  if (dt > 0.1f) dt = 0.1f; // Cap dt to prevent huge jumps
+  lastFrameMillis = currentMillis;
+
+  // Animation Logic
+  if (currentState == STATE_MAIN_MENU) {
+      menuScrollTarget = (float)menuSelection;
+
+      // Lerp (Exponential Smoothing) - No bounce, stable
+      // "Tekan sekali langsung geser satu fitur dengan smooth"
+      float smoothSpeed = 15.0f;
+      float diff = menuScrollTarget - menuScrollCurrent;
+
+      if (abs(diff) < 0.005f) {
+          menuScrollCurrent = menuScrollTarget;
+      } else {
+          menuScrollCurrent += diff * smoothSpeed * dt;
+      }
+  }
+
+  if (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f) {
+      chatAnimProgress += 2.0f * dt; // Fast animation
+      if (chatAnimProgress > 1.0f) chatAnimProgress = 1.0f;
+  }
+
   updateNeoPixel();
   updateStatusBarData();
   
@@ -2301,9 +3647,7 @@ void loop() {
   }
   
   if (transitionState != TRANSITION_NONE) {
-    deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
-    lastFrameMillis = currentMillis;
-    transitionProgress += transitionSpeed * deltaTime;
+    transitionProgress += transitionSpeed * dt;
     if (transitionProgress >= 1.0f) {
       transitionProgress = 1.0f;
       if (transitionState == TRANSITION_OUT) {
@@ -2387,8 +3731,21 @@ void loop() {
         case STATE_CHAT_RESPONSE:
           if (scrollOffset > 0) scrollOffset -= 10;
           break;
+        case STATE_VPET:
+          // Vertical layout isn't used for V-Pet menu, left/right is used
+          break;
+        case STATE_TOOL_FILE_MANAGER:
+          if (fileListSelection > 0) {
+              fileListSelection--;
+              if (fileListSelection < fileListScroll) fileListScroll = fileListSelection;
+          }
+          break;
+        case STATE_VISUALS_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
         case STATE_ESPNOW_CHAT:
-          if (espnowScrollOffset > 0) espnowScrollOffset -= 15;
+          espnowAutoScroll = false;
+          if (espnowScrollIndex > 0) espnowScrollIndex--;
           break;
         default: break;
       }
@@ -2398,13 +3755,13 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 4) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
           break;
         case STATE_ESPNOW_MENU:
-          if (menuSelection < 3) menuSelection++;
+          if (menuSelection < 5) menuSelection++;
           break;
         case STATE_WIFI_SCAN:
           if (selectedNetwork < networkCount - 1) {
@@ -2423,8 +3780,20 @@ void loop() {
         case STATE_CHAT_RESPONSE:
           scrollOffset += 10;
           break;
+        case STATE_TOOL_FILE_MANAGER:
+          if (fileListSelection < fileListCount - 1) {
+              fileListSelection++;
+              if (fileListSelection >= fileListScroll + 5) fileListScroll++;
+          }
+          break;
+        case STATE_VISUALS_MENU:
+          if (menuSelection < 3) menuSelection++;
+          break;
         case STATE_ESPNOW_CHAT:
-          espnowScrollOffset += 15;
+          if (espnowScrollIndex < espnowMessageCount - 1) {
+              espnowScrollIndex++;
+              if (espnowScrollIndex >= espnowMessageCount - 4) espnowAutoScroll = true;
+          }
           break;
         default: break;
       }
@@ -2433,6 +3802,9 @@ void loop() {
     
     if (digitalRead(BTN_LEFT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_MAIN_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
           cursorX--;
@@ -2442,6 +3814,19 @@ void loop() {
           espnowBroadcastMode = !espnowBroadcastMode;
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
           break;
+        case STATE_VPET:
+          if (petMenuSelection > 0) petMenuSelection--;
+          break;
+        case STATE_ESPNOW_PEER_SCAN:
+          if (espnowPeerCount > 0) {
+             userInput = espnowPeers[selectedPeer].nickname;
+             keyboardContext = CONTEXT_ESPNOW_RENAME_PEER;
+             cursorX = 0;
+             cursorY = 0;
+             currentKeyboardMode = MODE_LOWER;
+             changeState(STATE_KEYBOARD);
+          }
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -2449,6 +3834,9 @@ void loop() {
     
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_MAIN_MENU:
+          if (menuSelection < 11) menuSelection++;
+          break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
           cursorX++;
@@ -2458,6 +3846,12 @@ void loop() {
           espnowBroadcastMode = !espnowBroadcastMode;
           showStatus(espnowBroadcastMode ? "Broadcast\nMode" : "Direct\nMode", 800);
           break;
+        case STATE_VPET:
+          if (petMenuSelection < 4) petMenuSelection++;
+          break;
+        case STATE_TOOL_FILE_MANAGER:
+           // Removed horizontal scroll for file manager, moved to vertical
+           break;
         default: break;
       }
       buttonPressed = true;
@@ -2467,6 +3861,49 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_VISUALS_MENU:
+          handleVisualsMenuSelect();
+          break;
+        case STATE_TOOL_SNIFFER:
+          // Toggle active/passive or just reset stats
+          snifferPacketCount = 0;
+          memset(snifferHistory, 0, sizeof(snifferHistory));
+          showStatus("Reset Sniffer", 500);
+          break;
+        case STATE_TOOL_NETSCAN:
+          scanWiFiNetworks();
+          break;
+        case STATE_TOOL_FILE_MANAGER:
+          // Simple selection feedback
+          if (fileListCount > 0) {
+             String selected = fileList[fileListSelection];
+             if (selected.endsWith(".txt") || selected.endsWith(".log")) {
+                showStatus("Opening...\n" + selected, 500);
+                // In a real app we would read file content here
+             } else {
+                showStatus("Selected:\n" + selected, 1000);
+             }
+          }
+          break;
+        case STATE_VPET:
+          if (petMenuSelection == 0) { // Feed
+             myPet.hunger = min(myPet.hunger + 20.0f, 100.0f);
+             showStatus("Yum!", 500);
+          } else if (petMenuSelection == 1) { // Play
+             if (myPet.energy > 10) {
+               myPet.happiness = min(myPet.happiness + 15.0f, 100.0f);
+               myPet.energy -= 10.0f;
+               showStatus("Fun!", 500);
+             } else {
+               showStatus("Too tired!", 500);
+             }
+          } else if (petMenuSelection == 2) { // Sleep
+             myPet.isSleeping = !myPet.isSleeping;
+          } else if (petMenuSelection == 3) { // Back
+             changeState(STATE_MAIN_MENU);
+          }
+          savePetData();
           break;
         case STATE_WIFI_MENU:
           handleWiFiMenuSelect();
@@ -2531,6 +3968,22 @@ void loop() {
         case STATE_WIFI_MENU:
         case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
+        case STATE_TOOL_SNIFFER:
+        case STATE_TOOL_NETSCAN:
+        case STATE_TOOL_FILE_MANAGER:
+        case STATE_VISUALS_MENU:
+        case STATE_VIS_STARFIELD:
+        case STATE_VIS_LIFE:
+        case STATE_VIS_FIRE:
+        case STATE_ABOUT:
+        case STATE_TOOL_WIFI_SONAR:
+          // Cleanup
+          if (currentState == STATE_TOOL_SNIFFER) {
+             esp_wifi_set_promiscuous(false);
+             snifferActive = false;
+             WiFi.mode(WIFI_STA);
+             WiFi.disconnect();
+          }
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_ESPNOW_MENU:
