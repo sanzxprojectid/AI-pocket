@@ -2,12 +2,17 @@ name: JULES BUILD PIPELINE
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - "main"
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Grant permission to create a release
 
     steps:
     - name: CHECKOUT REPO (GRAB THE GOODS)
@@ -15,8 +20,11 @@ jobs:
 
     - name: PREPARE SKETCH (TRANSFORM AND ROLL OUT)
       run: |
+        # Copy the main sketch file and secrets, then remove the src dir
+        # to prevent duplicate compilation by the Arduino CLI.
         cp src/main.cpp AI-pocket.ino
         cp src/secrets.h secrets.h
+        rm -rf src
 
     - name: SETUP ARDUINO CLI (LOAD THE GUN)
       uses: arduino/setup-arduino-cli@v1
@@ -31,7 +39,8 @@ jobs:
       run: |
         arduino-cli lib install "ArduinoJson"
         arduino-cli lib install "Adafruit GFX Library"
-        arduino-cli lib install "Adafruit SSD1306"
+        # Correct library for the ST7789 display
+        arduino-cli lib install "Adafruit ST7735 and ST7789 Library"
         arduino-cli lib install "Adafruit NeoPixel"
 
     - name: COMPILE SKETCH (STRIKE DOWN WITH VENGEANCE)
@@ -45,3 +54,17 @@ jobs:
       with:
         name: S3-Station-Firmware
         path: ./build/*.bin
+
+    - name: CREATE OR UPDATE RELEASE (SHOW OFF THE LOOT)
+      uses: softprops/action-gh-release@v1
+      with:
+        # Create a release for tags, or update the 'Nightly Build' for main branch pushes
+        tag_name: ${{ github.ref == 'refs/heads/main' && 'Nightly Build' || github.ref_name }}
+        name: ${{ github.ref == 'refs/heads/main' && 'Nightly Build' || github.ref_name }}
+        body: ${{ github.ref == 'refs/heads/main' && 'Automated nightly build. This may be unstable.' || 'Stable release.' }}
+        draft: false
+        prerelease: ${{ github.ref == 'refs/heads/main' }}
+        files: |
+          ./build/*.bin
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
