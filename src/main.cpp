@@ -20,6 +20,8 @@
 #include <Update.h>
 #include <ESPmDNS.h>
 #include "secrets.h"
+#include "USB.h"
+#include "USBHIDKeyboard.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -58,6 +60,8 @@ typedef struct {
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
+
+USBHIDKeyboard Keyboard;
 
 // ============ NEOPIXEL ============
 #define NEOPIXEL_PIN 48
@@ -120,7 +124,8 @@ enum AppState {
   STATE_TOOL_SPAMMER,
   STATE_TOOL_PROBE_SNIFFER,
   STATE_TOOL_BLE_MENU,
-  STATE_DEAUTH_DETECTOR
+  STATE_DEAUTH_DETECTOR,
+  STATE_TOOL_BADUSB
 };
 
 AppState currentState = STATE_BOOT;
@@ -330,7 +335,17 @@ const unsigned char icon_sonar[] PROGMEM = {
 0x03, 0x00, 0x00, 0xC0, 0x01, 0xC0, 0x03, 0x80, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x1F, 0xF8, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_visuals, icon_about, icon_sonar};
+const unsigned char icon_badusb[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x01, 0xFF, 0xFF, 0x80, 0x01, 0xFF, 0xFF, 0x80, 0x01, 0xC0, 0x03, 0x80, 0x01, 0xC0, 0x03, 0x80,
+0x01, 0xC0, 0x03, 0x80, 0x01, 0xC0, 0x03, 0x80, 0x01, 0xFF, 0xFF, 0x80, 0x01, 0xFF, 0xFF, 0x80,
+0x00, 0x00, 0x00, 0x00, 0x0F, 0xFF, 0xFF, 0xF0, 0x0F, 0xFF, 0xFF, 0xF0, 0x0F, 0x00, 0x00, 0xF0,
+0x0F, 0x00, 0x00, 0xF0, 0x0F, 0x00, 0x00, 0xF0, 0x0F, 0x00, 0x00, 0xF0, 0x0F, 0xFF, 0xFF, 0xF0,
+0x0F, 0xFF, 0xFF, 0xF0, 0x0F, 0xFF, 0xFF, 0xF0, 0x0F, 0xFF, 0xFF, 0xF0, 0x0F, 0xFF, 0xFF, 0xF0,
+0x0F, 0xFF, 0xFF, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_visuals, icon_about, icon_sonar, icon_badusb};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -555,6 +570,10 @@ int fileListCount = 0;
 int fileListScroll = 0;
 int fileListSelection = 0;
 
+// BadUSB
+int badUSBMenuSelection = 0;
+bool badUSBRunning = false;
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -654,6 +673,8 @@ void drawAboutScreen();
 void drawWiFiSonar();
 void drawBLESpammerMenu();
 void updateBLESpam();
+void drawBadUSBMenu();
+void executeBadUSBPayload();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -952,6 +973,59 @@ void drawESPNowChat() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void drawBadUSBMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_badusb, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("BadUSB Payloads");
+
+  // Status Panel
+  canvas.fillRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_BORDER);
+  canvas.setTextSize(1);
+  canvas.setCursor(22, 48);
+  canvas.setTextColor(badUSBRunning ? 0xF800 : COLOR_SUCCESS); // Red if running, green if idle
+  canvas.print(badUSBRunning ? "EXECUTING PAYLOAD..." : "IDLE");
+
+  // Menu Items
+  const char* menuItems[] = {"Demo: Hello World", "Win: Open Notepad", "Win: Open CMD", "Back"};
+  int numItems = 4;
+  int itemHeight = 22;
+  int startY = 75;
+
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + 3));
+
+    // Disable interaction while a payload is running
+    if (badUSBRunning) {
+       canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_DIM);
+       canvas.setTextColor(COLOR_DIM);
+    } else {
+      if (i == badUSBMenuSelection) {
+        canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_BG);
+      } else {
+        canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
+        canvas.setTextColor(COLOR_PRIMARY);
+      }
+    }
+
+    canvas.setTextSize(2);
+    int textWidth = strlen(menuItems[i]) * 12;
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
+    canvas.print(menuItems[i]);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 // ============ VISUAL EFFECTS ============
 void drawDeauthAttack() {
   canvas.fillScreen(COLOR_BG);
@@ -1198,6 +1272,46 @@ void drawBLESpammerMenu() {
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void executeBadUSBPayload() {
+  if (!badUSBRunning) return;
+
+  // Give a moment for the USB to be recognized
+  delay(1000);
+
+  switch(badUSBMenuSelection) {
+    case 0: // Demo: Hello World
+      Keyboard.print("Hello from ESP32-S3 BadUSB!");
+      break;
+    case 1: // Win: Open Notepad
+      Keyboard.press(KEY_LEFT_GUI);
+      delay(100);
+      Keyboard.print("r");
+      Keyboard.releaseAll();
+      delay(500);
+      Keyboard.print("notepad");
+      Keyboard.press(KEY_RETURN);
+      Keyboard.release(KEY_RETURN);
+      delay(1000);
+      Keyboard.print("You have been pwned :)");
+      break;
+    case 2: // Win: Open CMD
+      Keyboard.press(KEY_LEFT_GUI);
+      delay(100);
+      Keyboard.print("r");
+      Keyboard.releaseAll();
+      delay(500);
+      Keyboard.print("cmd");
+      Keyboard.press(KEY_RETURN);
+      Keyboard.release(KEY_RETURN);
+      break;
+  }
+
+  // Payload finished
+  badUSBRunning = false;
+  showStatus("Payload\nFinished!", 1000);
+  changeState(STATE_TOOL_BADUSB); // Go back to the menu
 }
 
 
@@ -2693,8 +2807,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "VISUALS", "ABOUT", "SONAR"};
-  int numItems = 11;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "VISUALS", "ABOUT", "SONAR", "BAD USB"};
+  int numItems = 12;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -3573,6 +3687,9 @@ void handleMainMenuSelect() {
          changeState(STATE_TOOL_WIFI_SONAR);
       }
       break;
+    case 11: // BAD USB
+      changeState(STATE_TOOL_BADUSB);
+      break;
   }
 }
 
@@ -3865,6 +3982,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_TOOL_DEAUTH_ATTACK:
       drawDeauthAttack();
+      break;
+    case STATE_TOOL_BADUSB:
+      drawBadUSBMenu();
       break;
     case STATE_TOOL_BLE_MENU:
       drawBLESpammerMenu();
@@ -4173,6 +4293,9 @@ void loop() {
         case STATE_TOOL_BLE_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
+        case STATE_TOOL_BADUSB:
+          if (badUSBMenuSelection > 0) badUSBMenuSelection--;
+          break;
         case STATE_WIFI_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
@@ -4220,13 +4343,16 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 10) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
           break;
         case STATE_TOOL_BLE_MENU:
           if (menuSelection < 3) menuSelection++;
+          break;
+        case STATE_TOOL_BADUSB:
+          if (badUSBMenuSelection < 3) badUSBMenuSelection++;
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (selectedNetwork < networkCount - 1) selectedNetwork++;
@@ -4309,7 +4435,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 10) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -4373,6 +4499,17 @@ void loop() {
               }
               changeState(STATE_HACKER_TOOLS_MENU);
               break;
+          }
+          break;
+        case STATE_TOOL_BADUSB:
+          if (!badUSBRunning) {
+            if (badUSBMenuSelection < 3) { // Not "Back"
+              badUSBRunning = true;
+              showStatus("Executing...", 500);
+              executeBadUSBPayload();
+            } else {
+              changeState(STATE_MAIN_MENU);
+            }
           }
           break;
         case STATE_TOOL_DEAUTH_SELECT:
@@ -4510,6 +4647,7 @@ void loop() {
         case STATE_TOOL_COURIER:
         case STATE_HACKER_TOOLS_MENU:
         case STATE_TOOL_BLE_MENU:
+        case STATE_TOOL_BADUSB:
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
