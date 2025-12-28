@@ -577,7 +577,11 @@ void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data,
 #else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
 #endif
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status);
+#else
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status);
+#endif
 void addESPNowPeer(const uint8_t *mac, String nickname, int rssi);
 void drawESPNowChat();
 void drawESPNowMenu();
@@ -675,7 +679,11 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
   }
 }
 
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onESPNowDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+#else
 void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status) {
+#endif
   Serial.print("ESP-NOW Send Status: ");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
   
