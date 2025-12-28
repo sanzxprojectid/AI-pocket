@@ -3366,6 +3366,8 @@ void handlePasswordKeyPress() {
 }
 
 // ============ REFRESH SCREEN ============
+// Di fungsi refreshCurrentScreen(), tambahkan case yang hilang:
+
 void refreshCurrentScreen() {
   if (isSelectingMode) {
     showAIModeSelection(0);
@@ -3378,6 +3380,7 @@ void refreshCurrentScreen() {
   } else if (transitionState == TRANSITION_IN) {
     x_offset = SCREEN_WIDTH * (1.0 - transitionProgress);
   }
+  
   switch(currentState) {
     case STATE_MAIN_MENU:
       showMainMenu(x_offset);
@@ -3439,12 +3442,17 @@ void refreshCurrentScreen() {
     case STATE_VIS_FIRE:
       drawFireEffect();
       break;
+    case STATE_ABOUT:
+      drawAboutScreen();  // ← TAMBAHKAN INI
+      break;
+    case STATE_TOOL_WIFI_SONAR:
+      drawWiFiSonar();    // ← TAMBAHKAN INI
+      break;
     default:
       showMainMenu(x_offset);
       break;
   }
 }
-
 // ============ SETUP ============
 void setup() {
   Serial.begin(115200);
