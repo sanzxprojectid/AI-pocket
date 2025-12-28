@@ -508,6 +508,10 @@ int deauthPacketsSent = 0;
 // Spammer
 bool spammerActive = false;
 
+// BLE Spammer
+bool bleSpamActive = false;
+int bleSpamMode = 0; // 0: Static, 1: Random
+
 // Probe Sniffer
 struct ProbeRequest {
   uint8_t mac[6];
@@ -648,6 +652,8 @@ void drawGameOfLife();
 void drawFireEffect();
 void drawAboutScreen();
 void drawWiFiSonar();
+void drawBLESpammerMenu();
+void updateBLESpam();
 String getRecentChatContext(int maxMessages);
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -1137,6 +1143,101 @@ void drawHackerToolsMenu() {
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
+
+void drawBLESpammerMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  // Using Hacker icon as a placeholder, a dedicated BLE icon would be better
+  canvas.drawBitmap(10, 4, icon_hacker, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("BLE Spammer");
+
+  // Status Panel
+  canvas.fillRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, 35, SCREEN_WIDTH - 20, 30, 8, COLOR_BORDER);
+  canvas.setTextSize(1);
+  canvas.setCursor(22, 48);
+  canvas.setTextColor(bleSpamActive ? COLOR_SUCCESS : COLOR_WARN);
+  canvas.print(bleSpamActive ? "ACTIVE" : "INACTIVE");
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(140, 48);
+  canvas.print("Mode: ");
+  canvas.print(bleSpamMode == 0 ? "Static" : "Random");
+
+
+  // Menu Items
+  const char* menuItems[] = {"Start Static Spam", "Start Random Spam", "Stop Spam", "Back"};
+  if (bleSpamActive && bleSpamMode == 0) menuItems[0] = "Running Static...";
+  if (bleSpamActive && bleSpamMode == 1) menuItems[1] = "Running Random...";
+
+  int numItems = 4;
+  int itemHeight = 22;
+  int startY = 75;
+
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + 3));
+
+    if (i == menuSelection) {
+      canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+    canvas.setTextSize(2);
+    int textWidth = strlen(menuItems[i]) * 12;
+    canvas.setCursor((SCREEN_WIDTH - textWidth) / 2, y + 4);
+    canvas.print(menuItems[i]);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+
+void updateBLESpam() {
+  if (!bleSpamActive) {
+    return;
+  }
+
+  // Logic is now state-driven from the input handler, so we just set and start.
+  // The BLE library seems to handle repeated calls to start() gracefully.
+
+  if (bleSpamMode == 0) { // Static
+    BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+    oAdvertisementData.setFlags(0x06); // GENERAL_DISC_MODE | BR_EDR_NOT_SUPPORTED
+    oAdvertisementData.setName("ESP32_BLE_SPAM");
+    BLEDevice::getAdvertising()->setAdvertisementData(oAdvertisementData);
+  } else { // Random Swift Pair
+    BLEAdvertisementData oAdvertisementData = BLEAdvertisementData();
+    oAdvertisementData.setFlags(0x06);
+
+    std::string strManufacturerData = "";
+    strManufacturerData += (char)0x06; // Microsoft Vendor ID
+    strManufacturerData += (char)0x00;
+    strManufacturerData += (char)0x03; // Microsoft Beacon ID
+    strManufacturerData += (char)0x00;
+    strManufacturerData += (char)0x80; // Sub scenario
+    strManufacturerData += (char)random(0, 255); // RSSI
+
+    // Random device name
+    String randomName = "Device_";
+    randomName += String(random(0, 1000));
+    oAdvertisementData.setName(randomName.c_str());
+
+    oAdvertisementData.setManufacturerData(strManufacturerData);
+    BLEDevice::getAdvertising()->setAdvertisementData(oAdvertisementData);
+  }
+
+  BLEDevice::getAdvertising()->start();
+}
+
 
 void drawVisualsMenu() {
   canvas.fillScreen(COLOR_BG);
@@ -3493,6 +3594,7 @@ void handleHackerToolsMenuSelect() {
       changeState(STATE_TOOL_SNIFFER);
       break;
     case 4: // BLE Spammer
+      menuSelection = 0; // Reset selection for the submenu
       changeState(STATE_TOOL_BLE_MENU);
       break;
     case 5: // Deauth Detector
@@ -3764,6 +3866,9 @@ void refreshCurrentScreen() {
     case STATE_TOOL_DEAUTH_ATTACK:
       drawDeauthAttack();
       break;
+    case STATE_TOOL_BLE_MENU:
+      drawBLESpammerMenu();
+      break;
     case STATE_VIS_STARFIELD:
       drawStarfield();
       break;
@@ -4018,6 +4123,10 @@ void loop() {
     updateDeauthAttack();
   }
 
+  if (bleSpamActive) {
+    updateBLESpam();
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
     
@@ -4061,6 +4170,7 @@ void loop() {
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_HACKER_TOOLS_MENU:
+        case STATE_TOOL_BLE_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_WIFI_MENU:
@@ -4114,6 +4224,9 @@ void loop() {
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
+          break;
+        case STATE_TOOL_BLE_MENU:
+          if (menuSelection < 3) menuSelection++;
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (selectedNetwork < networkCount - 1) selectedNetwork++;
@@ -4225,6 +4338,42 @@ void loop() {
           break;
         case STATE_HACKER_TOOLS_MENU:
           handleHackerToolsMenuSelect();
+          break;
+        case STATE_TOOL_BLE_MENU:
+          switch(menuSelection) {
+            case 0: // Start Static
+              if (!bleSpamActive) {
+                BLEDevice::init("ESP32-S3");
+              }
+              bleSpamMode = 0;
+              bleSpamActive = true;
+              showStatus("Static BLE\nSpam Started", 1000);
+              break;
+            case 1: // Start Random
+              if (!bleSpamActive) {
+                BLEDevice::init("ESP32-S3");
+              }
+              bleSpamMode = 1;
+              bleSpamActive = true;
+              showStatus("Random BLE\nSpam Started", 1000);
+              break;
+            case 2: // Stop
+              if (bleSpamActive) {
+                bleSpamActive = false;
+                BLEDevice::getAdvertising()->stop();
+                BLEDevice::deinit();
+                showStatus("BLE Spam\nStopped", 1000);
+              }
+              break;
+            case 3: // Back
+              if (bleSpamActive) {
+                bleSpamActive = false;
+                BLEDevice::getAdvertising()->stop();
+                BLEDevice::deinit();
+              }
+              changeState(STATE_HACKER_TOOLS_MENU);
+              break;
+          }
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (networkCount > 0) {
@@ -4360,6 +4509,7 @@ void loop() {
         case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
         case STATE_HACKER_TOOLS_MENU:
+        case STATE_TOOL_BLE_MENU:
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
