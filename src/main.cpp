@@ -1073,7 +1073,7 @@ void updateDeauthAttack() {
 
   // Channel is already set, just send the packet
   for (int i=0; i<20; i++) { // Send a burst of packets
-    esp_wifi_80211_tx(WIFI_IF_AP, &deauth_frame, sizeof(deauth_frame_t), false);
+    esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame_t), false);
     deauthPacketsSent++;
   }
   delay(1);
@@ -1090,11 +1090,21 @@ void drawHackerToolsMenu() {
   canvas.print("HACKER TOOLS");
 
   const char* items[] = {"WiFi Deauther", "SSID Spammer", "Probe Sniffer", "Packet Monitor", "BLE Spammer", "Deauth Detector", "Back"};
+  int numItems = 7;
   int itemHeight = 19;
   int startY = 48;
+  int visibleItems = (SCREEN_HEIGHT - startY) / itemHeight;
+  int menuScroll = 0;
 
-  for (int i = 0; i < 7; i++) {
-    int y = startY + (i * itemHeight);
+  if (menuSelection >= visibleItems) {
+      menuScroll = (menuSelection - visibleItems + 1) * itemHeight;
+  }
+
+
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * itemHeight) - menuScroll;
+
+    if (y < startY || y > SCREEN_HEIGHT - itemHeight) continue;
 
     if (i == menuSelection) { // Reusing menuSelection var
       canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight - 2, COLOR_PRIMARY);
@@ -3982,6 +3992,9 @@ void loop() {
     if (digitalRead(BTN_UP) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
+        case STATE_HACKER_TOOLS_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_WIFI_MENU:
