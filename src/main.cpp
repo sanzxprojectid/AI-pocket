@@ -3871,6 +3871,12 @@ void loop() {
           memset(snifferHistory, 0, sizeof(snifferHistory));
           showStatus("Reset Sniffer", 500);
           break;
+        case STATE_TOOL_WIFI_SONAR:
+          // Reset Sonar
+          sonarAlert = false;
+          memset(sonarHistory, 0, sizeof(sonarHistory));
+          showStatus("Sonar Reset", 500);
+          break;
         case STATE_TOOL_NETSCAN:
           scanWiFiNetworks();
           break;
