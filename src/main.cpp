@@ -69,7 +69,7 @@ unsigned long neoPixelEffectEnd = 0;
 
 // ============ PERFORMANCE ============
 #define CPU_FREQ 240
-#define TARGET_FPS 60
+#define TARGET_FPS 120
 #define FRAME_TIME (1000 / TARGET_FPS)
 
 unsigned long lastFrameMillis = 0;
@@ -107,10 +107,11 @@ enum AppState {
   STATE_TOOL_SNIFFER,
   STATE_TOOL_NETSCAN,
   STATE_TOOL_FILE_MANAGER,
-  STATE_VISUALS_MENU,
+  STATE_GAME_HUB,
   STATE_VIS_STARFIELD,
   STATE_VIS_LIFE,
   STATE_VIS_FIRE,
+  STATE_GAME_PONG,
   STATE_ABOUT,
   STATE_TOOL_WIFI_SONAR,
   // Hacker Tools
@@ -207,6 +208,21 @@ unsigned long lastLifeUpdate = 0;
 uint8_t firePixels[FIRE_W * FIRE_H];
 uint16_t firePalette[37];
 bool fireInit = false;
+
+// ============ GAME: PONG ============
+struct PongBall {
+  float x, y;
+  float vx, vy;
+};
+
+struct PongPaddle {
+  float y;
+  int score;
+};
+
+PongBall pongBall;
+PongPaddle player1, player2;
+bool pongGameActive = false;
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -330,7 +346,17 @@ const unsigned char icon_sonar[] PROGMEM = {
 0x03, 0x00, 0x00, 0xC0, 0x01, 0xC0, 0x03, 0x80, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x1F, 0xF8, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_visuals, icon_about, icon_sonar};
+const unsigned char icon_gamehub[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xE0, 0x00, 0x00, 0x1F, 0xF8, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xFF, 0xFF, 0xC0, 0x07, 0xF8, 0x1F, 0xE0,
+0x0F, 0x80, 0x01, 0xF0, 0x0F, 0x80, 0x01, 0xF0, 0x0F, 0x86, 0x61, 0xF0, 0x0F, 0x80, 0x01, 0xF0,
+0x0F, 0x80, 0x01, 0xF0, 0x0F, 0x80, 0x01, 0xF0, 0x07, 0xF8, 0x1F, 0xE0, 0x03, 0xFF, 0xFF, 0xC0,
+0x01, 0xFF, 0xFF, 0x80, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD };
@@ -642,10 +668,12 @@ void savePetData();
 void drawSniffer();
 void drawNetScan();
 void drawFileManager();
-void drawVisualsMenu();
+void drawGameHubMenu();
 void drawStarfield();
 void drawGameOfLife();
 void drawFireEffect();
+void drawPongGame();
+void updatePongLogic();
 void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
@@ -1139,21 +1167,21 @@ void drawHackerToolsMenu() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-void drawVisualsMenu() {
+void drawGameHubMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
   // Header
   canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
   canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.drawBitmap(10, 4, icon_visuals, 24, 24, COLOR_PRIMARY);
+  canvas.drawBitmap(10, 4, icon_gamehub, 24, 24, COLOR_PRIMARY);
   canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(2);
   canvas.setCursor(45, 7);
-  canvas.print("Visuals");
+  canvas.print("Game Hub");
 
-  const char* items[] = {"Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 4, 45, 28, 5);
+  const char* items[] = {"Pong", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 5, 45, 28, 5);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1315,6 +1343,117 @@ void drawFireEffect() {
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
+
+// ============ PONG GAME LOGIC & DRAWING ============
+void resetPongBall() {
+  pongBall.x = SCREEN_WIDTH / 2;
+  pongBall.y = SCREEN_HEIGHT / 2;
+  // Give it a random horizontal direction
+  pongBall.vx = (random(0, 2) == 0 ? 1 : -1) * 150.0f;
+  // Give it a slight random vertical direction
+  pongBall.vy = random(-50, 50);
+}
+
+void updatePongLogic() {
+  if (!pongGameActive) {
+    player1.score = 0;
+    player2.score = 0;
+    player1.y = SCREEN_HEIGHT / 2 - 20;
+    player2.y = SCREEN_HEIGHT / 2 - 20;
+    resetPongBall();
+    pongGameActive = true;
+    return;
+  }
+
+  float dt = deltaTime; // Use global deltaTime
+
+  // Ball movement
+  pongBall.x += pongBall.vx * dt;
+  pongBall.y += pongBall.vy * dt;
+
+  // Wall collision (top/bottom)
+  if (pongBall.y < 0) {
+    pongBall.y = 0;
+    pongBall.vy *= -1;
+  }
+  if (pongBall.y > SCREEN_HEIGHT - 10) {
+    pongBall.y = SCREEN_HEIGHT - 10;
+    pongBall.vy *= -1;
+  }
+
+  // Paddle collision
+  #define PADDLE_WIDTH 10
+  #define PADDLE_HEIGHT 40
+  // Player 1
+  if (pongBall.vx < 0 && pongBall.x < PADDLE_WIDTH + 5 && pongBall.x > 5) {
+    if (pongBall.y > player1.y && pongBall.y < player1.y + PADDLE_HEIGHT) {
+      pongBall.x = PADDLE_WIDTH + 5;
+      pongBall.vx *= -1.1; // Speed up
+      // Add spin based on where it hit the paddle
+      pongBall.vy += (pongBall.y - (player1.y + PADDLE_HEIGHT / 2)) * 5.0f;
+    }
+  }
+  // Player 2 (AI)
+  if (pongBall.vx > 0 && pongBall.x > SCREEN_WIDTH - PADDLE_WIDTH - 5 && pongBall.x < SCREEN_WIDTH - 5) {
+    if (pongBall.y > player2.y && pongBall.y < player2.y + PADDLE_HEIGHT) {
+      pongBall.x = SCREEN_WIDTH - PADDLE_WIDTH - 5;
+      pongBall.vx *= -1.1; // Speed up
+      pongBall.vy += (pongBall.y - (player2.y + PADDLE_HEIGHT / 2)) * 5.0f;
+    }
+  }
+
+  // Clamp ball speed
+  pongBall.vx = constrain(pongBall.vx, -400, 400);
+  pongBall.vy = constrain(pongBall.vy, -300, 300);
+
+  // Scoring
+  if (pongBall.x < 0) {
+    player2.score++;
+    resetPongBall();
+  }
+  if (pongBall.x > SCREEN_WIDTH) {
+    player1.score++;
+    resetPongBall();
+  }
+
+  // AI Logic
+  float aiSpeed = 3.0f * dt; // AI speed relative to frame time
+  float targetY = pongBall.y - PADDLE_HEIGHT / 2;
+  player2.y += (targetY - player2.y) * aiSpeed;
+  player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
+}
+
+void drawPongGame() {
+  canvas.fillScreen(COLOR_BG);
+
+  // Center line
+  for (int i = 0; i < SCREEN_HEIGHT; i += 10) {
+    canvas.drawFastVLine(SCREEN_WIDTH / 2, i, 5, COLOR_PANEL);
+  }
+
+  // Scores
+  canvas.setTextSize(3);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(SCREEN_WIDTH / 2 - 50, 10);
+  canvas.print(player1.score);
+  canvas.setCursor(SCREEN_WIDTH / 2 + 30, 10);
+  canvas.print(player2.score);
+
+  // Paddles
+  canvas.fillRect(5, player1.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_PRIMARY);
+  canvas.fillRect(SCREEN_WIDTH - PADDLE_WIDTH - 5, player2.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_PRIMARY);
+
+  // Ball
+  canvas.fillRect(pongBall.x, pongBall.y, 10, 10, COLOR_PRIMARY);
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 
 // ============ VIRTUAL PET LOGIC & DRAWING ============
 void loadPetData() {
@@ -2446,6 +2585,26 @@ void drawStatusBar() {
     canvas.print(espnowPeerCount);
   }
   
+  if (showFPS) {
+    uint16_t fpsColor = COLOR_SUCCESS;
+    if (perfFPS < 100) fpsColor = 0xFFE0; // Yellow
+    if (perfFPS < 60) fpsColor = COLOR_ERROR;  // Red
+
+    String fpsStr = String(perfFPS);
+    int textWidth = (fpsStr.length() + 4) * 6; // "XXX FPS"
+    int panelX = SCREEN_WIDTH - 35 - textWidth;
+
+    canvas.fillRoundRect(panelX, 0, textWidth, 12, 3, COLOR_PANEL);
+    canvas.drawRoundRect(panelX, 0, textWidth, 12, 3, COLOR_BORDER);
+
+    canvas.setTextSize(1);
+    canvas.setCursor(panelX + 4, 2);
+    canvas.setTextColor(fpsColor);
+    canvas.print(fpsStr);
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.print(" FPS");
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     int bars = 0;
     if (cachedRSSI > -55) bars = 4;
@@ -2462,11 +2621,6 @@ void drawStatusBar() {
         canvas.drawRect(x + (i * 3), y - h + 2, 2, h, COLOR_DIM);
       }
     }
-  }
-  if (showFPS) {
-    canvas.setCursor(50, 2);
-    canvas.print("FPS:");
-    canvas.print(perfFPS);
   }
 }
 
@@ -2580,7 +2734,7 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "VISUALS", "ABOUT", "SONAR"};
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR"};
   int numItems = 11;
   
   int centerX = SCREEN_WIDTH / 2;
@@ -3428,9 +3582,9 @@ void handleMainMenuSelect() {
       fileListCount = 0; // Force refresh
       changeState(STATE_TOOL_FILE_MANAGER);
       break;
-    case 8: // VISUALS
+    case 8: // GAME HUB
       menuSelection = 0;
-      changeState(STATE_VISUALS_MENU);
+      changeState(STATE_GAME_HUB);
       break;
     case 9: // ABOUT
       changeState(STATE_ABOUT);
@@ -3476,18 +3630,22 @@ void handleHackerToolsMenuSelect() {
   }
 }
 
-void handleVisualsMenuSelect() {
+void handleGameHubMenuSelect() {
   switch(menuSelection) {
     case 0:
-      changeState(STATE_VIS_STARFIELD);
+      pongGameActive = false;
+      changeState(STATE_GAME_PONG);
       break;
     case 1:
-      changeState(STATE_VIS_LIFE);
+      changeState(STATE_VIS_STARFIELD);
       break;
     case 2:
-      changeState(STATE_VIS_FIRE);
+      changeState(STATE_VIS_LIFE);
       break;
     case 3:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 4:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -3723,8 +3881,8 @@ void refreshCurrentScreen() {
     case STATE_TOOL_FILE_MANAGER:
       drawFileManager();
       break;
-    case STATE_VISUALS_MENU:
-      drawVisualsMenu();
+    case STATE_GAME_HUB:
+      drawGameHubMenu();
       break;
     case STATE_HACKER_TOOLS_MENU:
       drawHackerToolsMenu();
@@ -3743,6 +3901,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_VIS_FIRE:
       drawFireEffect();
+      break;
+    case STATE_GAME_PONG:
+      drawPongGame();
       break;
     case STATE_ABOUT:
       drawAboutScreen();  // ← TAMBAHKAN INI
@@ -3989,8 +4150,25 @@ void loop() {
     updateDeauthAttack();
   }
 
+  if (currentState == STATE_GAME_PONG) {
+    updatePongLogic();
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
+
+    if (currentState == STATE_GAME_PONG) {
+      float paddleSpeed = 250.0f * dt;
+      if (digitalRead(BTN_UP) == BTN_ACT) {
+        player1.y = max(0.0f, player1.y - paddleSpeed);
+      }
+      if (digitalRead(BTN_DOWN) == BTN_ACT) {
+        player1.y = min(SCREEN_HEIGHT - 40.0f, player1.y + paddleSpeed);
+      }
+      if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+        changeState(STATE_GAME_HUB);
+      }
+    }
     
     if (isSelectingMode) {
       if (digitalRead(BTN_UP) == BTN_ACT) {
@@ -4066,7 +4244,7 @@ void loop() {
               if (fileListSelection < fileListScroll) fileListScroll = fileListSelection;
           }
           break;
-        case STATE_VISUALS_MENU:
+        case STATE_GAME_HUB:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_ESPNOW_CHAT:
@@ -4118,8 +4296,8 @@ void loop() {
               if (fileListSelection >= fileListScroll + 5) fileListScroll++;
           }
           break;
-        case STATE_VISUALS_MENU:
-          if (menuSelection < 3) menuSelection++;
+        case STATE_GAME_HUB:
+          if (menuSelection < 4) menuSelection++;
           break;
         case STATE_ESPNOW_CHAT:
           if (espnowScrollIndex < espnowMessageCount - 1) {
@@ -4214,8 +4392,8 @@ void loop() {
             changeState(STATE_TOOL_DEAUTH_ATTACK);
           }
           break;
-        case STATE_VISUALS_MENU:
-          handleVisualsMenuSelect();
+        case STATE_GAME_HUB:
+          handleGameHubMenuSelect();
           break;
         case STATE_TOOL_SNIFFER:
           // Toggle active/passive or just reset stats
@@ -4334,7 +4512,7 @@ void loop() {
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
-        case STATE_VISUALS_MENU:
+        case STATE_GAME_HUB:
         case STATE_VIS_STARFIELD:
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
