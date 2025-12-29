@@ -19,6 +19,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ESPmDNS.h>
+#include <vector>
 #include "secrets.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
@@ -112,6 +113,7 @@ enum AppState {
   STATE_VIS_LIFE,
   STATE_VIS_FIRE,
   STATE_GAME_PONG,
+  STATE_GAME_RACING,
   STATE_ABOUT,
   STATE_TOOL_WIFI_SONAR,
   // Hacker Tools
@@ -157,7 +159,7 @@ struct SystemConfig {
   bool petSleep;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", false, 80.0f, 80.0f, 80.0f, false};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -223,6 +225,23 @@ struct PongPaddle {
 PongBall pongBall;
 PongPaddle player1, player2;
 bool pongGameActive = false;
+
+// ============ GAME: RACING ============
+struct TrackSegment {
+  float curvature;
+  float distance;
+};
+std::vector<TrackSegment> track;
+
+float playerX = 0.0f;     // Player's horizontal position (-1 to 1)
+float playerY = 0.0f;     // Player's distance down the track
+float playerSpeed = 0.0f;
+float roadCurvature = 0.0f;
+float trackDistance = 0.0f;
+float trackCurvature = 0.0f;
+bool racingGameActive = false;
+
+#define TRACK_LENGTH 500.0f
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -674,6 +693,8 @@ void drawGameOfLife();
 void drawFireEffect();
 void drawPongGame();
 void updatePongLogic();
+void drawRacingGame();
+void updateRacingLogic();
 void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
@@ -1180,8 +1201,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Pong", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 5, 45, 28, 5);
+  const char* items[] = {"Racing", "Pong", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 6, 45, 24, 3);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1340,6 +1361,112 @@ void drawFireEffect() {
   canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(10, 10);
   canvas.print("DOOM FIRE | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ RACING GAME LOGIC & DRAWING ============
+void updateRacingLogic() {
+  if (!racingGameActive) {
+    playerX = 0.0f;
+    playerY = 0.0f;
+    playerSpeed = 0.0f;
+    trackDistance = 0.0f;
+    racingGameActive = true;
+  }
+
+  // Input
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    playerSpeed += 2.0f * deltaTime;
+  } else {
+    playerSpeed -= 1.0f * deltaTime;
+  }
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    playerSpeed -= 3.0f * deltaTime;
+  }
+  if (digitalRead(BTN_LEFT) == BTN_ACT) {
+    playerX -= 2.0f * deltaTime * (1.0f - playerSpeed / 100.0f);
+  }
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+    playerX += 2.0f * deltaTime * (1.0f - playerSpeed / 100.0f);
+  }
+
+  // Clamp Speed
+  playerSpeed = max(0.0f, min(playerSpeed, 100.0f));
+  playerX = constrain(playerX, -2.0f, 2.0f);
+
+  // Update track
+  trackDistance += playerSpeed * deltaTime;
+
+  // Find current track segment
+  float offset = 0;
+  for (auto &s : track) {
+    if (trackDistance >= offset && trackDistance < offset + s.distance) {
+      trackCurvature = s.curvature;
+      break;
+    }
+    offset += s.distance;
+  }
+
+  // Player steer affects road curvature
+  roadCurvature = trackCurvature - playerX * 0.5f;
+
+  // Simple collision
+  if (abs(playerX) >= 1.0f) {
+    playerSpeed *= 0.95; // Slow down if off-road
+  }
+
+  if (trackDistance >= TRACK_LENGTH) {
+    trackDistance -= TRACK_LENGTH;
+  }
+}
+
+void drawRacingGame() {
+  canvas.fillScreen(0x4A49); // Sky Blue
+
+  for (int y = 0; y < SCREEN_HEIGHT / 2; y++) {
+    float perspective = (float)y / (SCREEN_HEIGHT / 2.0f);
+
+    // Road
+    float roadWidth = 0.1f + perspective * 0.8f;
+    float clipWidth = roadWidth * 0.15f;
+    roadWidth *= 0.5f;
+
+    int leftGrass = (0.5f - roadWidth) * SCREEN_WIDTH;
+    int rightGrass = (0.5f + roadWidth) * SCREEN_WIDTH;
+    int leftClip = (0.5f - roadWidth - clipWidth) * SCREEN_WIDTH;
+    int rightClip = (0.5f + roadWidth + clipWidth) * SCREEN_WIDTH;
+
+    uint16_t grassColor = sin(20.0f * pow(1.0f - perspective, 3) + trackDistance * 0.1f) > 0 ? 0x04E0 : 0x0540; // Light/Dark Green
+    uint16_t clipColor = sin(80.0f * pow(1.0f - perspective, 2) + trackDistance) > 0 ? COLOR_PRIMARY : 0xF800; // White/Red
+
+    // Draw ground
+    canvas.drawFastHLine(0, y + SCREEN_HEIGHT / 2, SCREEN_WIDTH, grassColor);
+    // Apply curvature
+    float curve = (1.0f - perspective) * roadCurvature;
+    int curvedLeftGrass = leftGrass + curve * SCREEN_WIDTH;
+    int curvedRightGrass = rightGrass + curve * SCREEN_WIDTH;
+    int curvedLeftClip = leftClip + curve * SCREEN_WIDTH;
+    int curvedRightClip = rightClip + curve * SCREEN_WIDTH;
+
+    // Draw road
+    canvas.drawFastHLine(curvedLeftGrass, y + SCREEN_HEIGHT / 2, curvedRightGrass - curvedLeftGrass, COLOR_SECONDARY);
+    // Draw rumble strips
+    canvas.drawFastHLine(curvedLeftGrass - (curvedLeftClip - leftClip), y + SCREEN_HEIGHT/2, (curvedLeftClip - leftClip), clipColor);
+    canvas.drawFastHLine(curvedRightGrass, y + SCREEN_HEIGHT/2, (curvedRightClip - rightClip), clipColor);
+  }
+
+  // Draw Car (simple rect)
+  int carX = SCREEN_WIDTH / 2 + playerX * 80 - 20;
+  int carY = SCREEN_HEIGHT - 40;
+  canvas.fillRect(carX, carY, 40, 25, 0xF800); // Red Car
+
+  // HUD
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 10);
+  canvas.print((int)playerSpeed);
+  canvas.print(" KM/H");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3633,19 +3760,23 @@ void handleHackerToolsMenuSelect() {
 void handleGameHubMenuSelect() {
   switch(menuSelection) {
     case 0:
+      racingGameActive = false;
+      changeState(STATE_GAME_RACING);
+      break;
+    case 1:
       pongGameActive = false;
       changeState(STATE_GAME_PONG);
       break;
-    case 1:
+    case 2:
       changeState(STATE_VIS_STARFIELD);
       break;
-    case 2:
+    case 3:
       changeState(STATE_VIS_LIFE);
       break;
-    case 3:
+    case 4:
       changeState(STATE_VIS_FIRE);
       break;
-    case 4:
+    case 5:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -3905,6 +4036,9 @@ void refreshCurrentScreen() {
     case STATE_GAME_PONG:
       drawPongGame();
       break;
+    case STATE_GAME_RACING:
+      drawRacingGame();
+      break;
     case STATE_ABOUT:
       drawAboutScreen();  // ← TAMBAHKAN INI
       break;
@@ -3955,6 +4089,13 @@ void setup() {
   tft.println("ESP-NOW Ready");
   delay(2000);
   
+  // Create Track
+  track.push_back({0.0f, 10.0f});   // Straight
+  track.push_back({1.0f, 20.0f});   // Right curve
+  track.push_back({0.0f, 30.0f});   // Straight
+  track.push_back({-1.0f, 20.0f});  // Left curve
+  track.push_back({0.0f, 20.0f});   // Straight
+
   canvas.setTextWrap(false);
   Serial.println("✓ Canvas initialized");
   
@@ -4152,6 +4293,10 @@ void loop() {
 
   if (currentState == STATE_GAME_PONG) {
     updatePongLogic();
+  }
+
+  if (currentState == STATE_GAME_RACING) {
+    updateRacingLogic();
   }
 
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
@@ -4513,9 +4658,14 @@ void loop() {
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
         case STATE_GAME_HUB:
+          changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_GAME_RACING:
         case STATE_VIS_STARFIELD:
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
+          changeState(STATE_GAME_HUB);
+          break;
         case STATE_ABOUT:
         case STATE_TOOL_WIFI_SONAR:
           // Cleanup
