@@ -747,7 +747,7 @@ void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 
-float lerp(float a, float b, float f) {
+float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
@@ -1552,8 +1552,8 @@ void drawRacingGame() {
         int segmentIndex = ((int)((camZ + n*20) / 100.0f)) % roadPoints;
         float segmentPercent = fmod((camZ + n*20) / 100.0f, 1.0f);
 
-        float currentCurvature = lerp(roadCurvature[segmentIndex], roadCurvature[(segmentIndex + 1) % roadPoints], segmentPercent);
-        float currentHeight = lerp(roadHeight[segmentIndex], roadHeight[(segmentIndex+1)%roadPoints], segmentPercent);
+        float currentCurvature = custom_lerp(roadCurvature[segmentIndex], roadCurvature[(segmentIndex + 1) % roadPoints], segmentPercent);
+        float currentHeight = custom_lerp(roadHeight[segmentIndex], roadHeight[(segmentIndex+1)%roadPoints], segmentPercent);
 
         float roadX = 0;
         for (int i = 0; i < n; i++) {
