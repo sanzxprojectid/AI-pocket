@@ -99,6 +99,7 @@ enum AppState {
   STATE_KEYBOARD,
   STATE_CHAT_RESPONSE,
   STATE_LOADING,
+  STATE_SYSTEM_MENU,
   STATE_SYSTEM_PERF,
   STATE_TOOL_COURIER,
   STATE_ESPNOW_CHAT,
@@ -114,6 +115,8 @@ enum AppState {
   STATE_VIS_FIRE,
   STATE_GAME_PONG,
   STATE_GAME_RACING,
+  STATE_PIN_LOCK,
+  STATE_CHANGE_PIN,
   STATE_RACING_MODE_SELECT,
   STATE_ABOUT,
   STATE_TOOL_WIFI_SONAR,
@@ -590,6 +593,19 @@ struct VirtualPet {
 VirtualPet myPet = {100.0f, 100.0f, 100.0f, 0, false};
 int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
 
+// ============ PIN LOCK SCREEN ============
+bool pinLockEnabled = false;
+String currentPin = "1234";
+String pinInput = "";
+AppState stateAfterUnlock = STATE_MAIN_MENU;
+const char* keyboardPin[4][3] = {
+  {"1", "2", "3"},
+  {"4", "5", "6"},
+  {"7", "8", "9"},
+  {"<", "0", "OK"}
+};
+
+
 // ============ HACKER TOOLS DATA ============
 // Deauther
 uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -697,6 +713,8 @@ void drawDeauthSelect();
 void drawDeauthAttack();
 void drawHackerToolsMenu();
 void handleHackerToolsMenuSelect();
+void drawSystemMenu();
+void handleSystemMenuSelect();
 void updateDeauthAttack();
 void changeState(AppState newState);
 void drawStatusBar();
@@ -746,6 +764,8 @@ void updateRacingLogic();
 void drawAboutScreen();
 void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
+void drawPinLock(bool isChanging);
+void handlePinLockKeyPress();
 
 float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
@@ -3689,7 +3709,74 @@ void forgetNetwork() {
   changeState(STATE_WIFI_MENU);
 }
 
-// ============ AI CHAT WITH DUAL MODE ============
+void drawSystemMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_system, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("System Settings");
+
+  const char* items[] = {"Device Info", "Security", "Back"};
+  drawScrollableMenu(items, 3, 45, 30, 5);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawPinKeyboard() {
+  int keyW = 60;
+  int keyH = 30;
+  int startX = (SCREEN_WIDTH - (3 * keyW + 2 * 5)) / 2;
+  int startY = 65;
+
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 3; c++) {
+      int x = startX + c * (keyW + 5);
+      int y = startY + r * (keyH + 5);
+      if (r == cursorY && c == cursorX) {
+        canvas.fillRoundRect(x, y, keyW, keyH, 5, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_BG);
+      } else {
+        canvas.drawRoundRect(x, y, keyW, keyH, 5, COLOR_BORDER);
+        canvas.setTextColor(COLOR_TEXT);
+      }
+      canvas.setTextSize(2);
+      const char* label = keyboardPin[r][c];
+      int labelW = strlen(label) * 12;
+      canvas.setCursor(x + (keyW - labelW) / 2, y + 8);
+      canvas.print(label);
+    }
+  }
+}
+
+void drawPinLock(bool isChanging) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(isChanging ? 70 : 100, 10);
+  canvas.print(isChanging ? "Enter New PIN" : "Enter PIN");
+
+  // Draw PIN input dots
+  int dotStartX = (SCREEN_WIDTH - (4 * 20 - 5)) / 2;
+  for (int i = 0; i < 4; i++) {
+    if (i < pinInput.length()) {
+      canvas.fillCircle(dotStartX + i * 20, 45, 5, COLOR_PRIMARY);
+    } else {
+      canvas.drawCircle(dotStartX + i * 20, 45, 5, COLOR_DIM);
+    }
+  }
+
+  drawPinKeyboard();
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 void sendToGemini() {
   currentState = STATE_LOADING;
   loadingFrame = 0;
@@ -3860,7 +3947,8 @@ void handleMainMenuSelect() {
       changeState(STATE_TOOL_COURIER);
       break;
     case 4: // SYSTEM
-      changeState(STATE_SYSTEM_PERF);
+      menuSelection = 0;
+      changeState(STATE_SYSTEM_MENU);
       break;
     case 5: // V-PET
       loadPetData();
@@ -3944,6 +4032,66 @@ void handleRacingModeSelect() {
       break;
   }
 }
+
+void handleSystemMenuSelect() {
+  switch (menuSelection) {
+    case 0: // Device Info
+      changeState(STATE_SYSTEM_PERF);
+      break;
+    case 1: // Security
+      preferences.begin("app-config", false);
+      pinLockEnabled = !pinLockEnabled;
+      preferences.putBool("pinLock", pinLockEnabled);
+      preferences.end();
+      if (!pinLockEnabled) {
+        showStatus("PIN Lock Disabled", 1500);
+      } else {
+        pinInput = "";
+        cursorX = 0;
+        cursorY = 0;
+        changeState(STATE_CHANGE_PIN);
+      }
+      break;
+    case 2: // Back
+      changeState(STATE_MAIN_MENU);
+      break;
+  }
+}
+
+void handlePinLockKeyPress() {
+  const char* key = keyboardPin[cursorY][cursorX];
+  if (strcmp(key, "OK") == 0) {
+    if (currentState == STATE_PIN_LOCK) {
+      if (pinInput == currentPin) {
+        showStatus("Unlocked!", 1000);
+        changeState(stateAfterUnlock);
+      } else {
+        showStatus("Incorrect PIN", 1000);
+        pinInput = "";
+      }
+    } else if (currentState == STATE_CHANGE_PIN) {
+      if (pinInput.length() == 4) {
+        currentPin = pinInput;
+        preferences.begin("app-config", false);
+        preferences.putString("pinCode", currentPin);
+        preferences.end();
+        showStatus("PIN Set!", 1000);
+        changeState(STATE_SYSTEM_MENU);
+      } else {
+        showStatus("PIN must be 4 digits", 1000);
+      }
+    }
+  } else if (strcmp(key, "<") == 0) {
+    if (pinInput.length() > 0) {
+      pinInput.remove(pinInput.length() - 1);
+    }
+  } else {
+    if (pinInput.length() < 4) {
+      pinInput += key;
+    }
+  }
+}
+
 
 void handleGameHubMenuSelect() {
   switch(menuSelection) {
@@ -4138,6 +4286,12 @@ void handlePasswordKeyPress() {
 // ============ REFRESH SCREEN ============
 // Di fungsi refreshCurrentScreen(), tambahkan case yang hilang:
 
+// Forward declarations for placeholder functions
+void drawSpammer();
+void drawProbeSniffer();
+void drawBleMenu();
+void drawDeauthDetector();
+
 void refreshCurrentScreen() {
   if (isSelectingMode) {
     showAIModeSelection(0);
@@ -4172,6 +4326,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_LOADING:
       showLoadingAnimation(x_offset);
+      break;
+    case STATE_SYSTEM_MENU:
+      drawSystemMenu();
       break;
     case STATE_SYSTEM_PERF:
       showSystemPerf(x_offset);
@@ -4236,11 +4393,64 @@ void refreshCurrentScreen() {
     case STATE_TOOL_WIFI_SONAR:
       drawWiFiSonar();
       break;
+    case STATE_TOOL_SPAMMER:
+      drawSpammer();
+      break;
+    case STATE_TOOL_PROBE_SNIFFER:
+      drawProbeSniffer();
+      break;
+    case STATE_TOOL_BLE_MENU:
+      drawBleMenu();
+      break;
+    case STATE_DEAUTH_DETECTOR:
+      drawDeauthDetector();
+      break;
+    case STATE_PIN_LOCK:
+      drawPinLock(false);
+      break;
+    case STATE_CHANGE_PIN:
+      drawPinLock(true);
+      break;
     default:
       showMainMenu(x_offset);
       break;
   }
 }
+
+// Placeholder functions to fix UI freeze
+void drawGenericToolScreen(const char* title) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print(title);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(50, 80);
+  canvas.print("UI Not Implemented");
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R to Go Back");
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawSpammer() {
+  drawGenericToolScreen("SSID SPAMMER");
+}
+
+void drawProbeSniffer() {
+  drawGenericToolScreen("PROBE SNIFFER");
+}
+
+void drawBleMenu() {
+  drawGenericToolScreen("BLE SPAMMER");
+}
+
+void drawDeauthDetector() {
+  drawGenericToolScreen("DEAUTH DETECTOR");
+}
+
 // ============ SETUP ============
 void setup() {
   Serial.begin(115200);
@@ -4392,10 +4602,24 @@ void setup() {
   
   ledSuccess();
   delay(3000);
+
+  preferences.begin("app-config", true);
+  pinLockEnabled = preferences.getBool("pinLock", false);
+  currentPin = preferences.getString("pinCode", "1234");
+  preferences.end();
+
+  if (pinLockEnabled) {
+    currentState = STATE_PIN_LOCK;
+    stateAfterUnlock = STATE_MAIN_MENU;
+    pinInput = "";
+    cursorX = 0;
+    cursorY = 0;
+  } else {
+    currentState = STATE_MAIN_MENU;
+  }
   
-  currentState = STATE_MAIN_MENU;
   menuSelection = 0;
-  showMainMenu(0);
+  //showMainMenu(0); // This will be called by refreshCurrentScreen
   lastInputTime = millis();
   
   Serial.println("\n========================================");
@@ -4537,10 +4761,17 @@ void loop() {
     
     if (digitalRead(BTN_UP) == BTN_ACT) {
       switch(currentState) {
+        case STATE_PIN_LOCK:
+        case STATE_CHANGE_PIN:
+          cursorY = (cursorY > 0) ? cursorY - 1 : 3;
+          break;
         case STATE_MAIN_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_HACKER_TOOLS_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
+        case STATE_SYSTEM_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_WIFI_MENU:
@@ -4589,11 +4820,18 @@ void loop() {
     
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
+        case STATE_PIN_LOCK:
+        case STATE_CHANGE_PIN:
+          cursorY = (cursorY < 3) ? cursorY + 1 : 0;
+          break;
         case STATE_MAIN_MENU:
           if (menuSelection < 10) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
+          break;
+        case STATE_SYSTEM_MENU:
+          if (menuSelection < 2) menuSelection++;
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (selectedNetwork < networkCount - 1) selectedNetwork++;
@@ -4628,7 +4866,7 @@ void loop() {
           }
           break;
         case STATE_GAME_HUB:
-          if (menuSelection < 4) menuSelection++;
+          if (menuSelection < 5) menuSelection++;
           break;
         case STATE_ESPNOW_CHAT:
           if (espnowScrollIndex < espnowMessageCount - 1) {
@@ -4643,6 +4881,10 @@ void loop() {
     
     if (digitalRead(BTN_LEFT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_PIN_LOCK:
+        case STATE_CHANGE_PIN:
+          cursorX = (cursorX > 0) ? cursorX - 1 : 2;
+          break;
         case STATE_MAIN_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
@@ -4675,6 +4917,10 @@ void loop() {
     
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_PIN_LOCK:
+        case STATE_CHANGE_PIN:
+          cursorX = (cursorX < 2) ? cursorX + 1 : 0;
+          break;
         case STATE_MAIN_MENU:
           if (menuSelection < 10) menuSelection++;
           break;
@@ -4702,6 +4948,13 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_PIN_LOCK:
+        case STATE_CHANGE_PIN:
+          handlePinLockKeyPress();
+          break;
+        case STATE_SYSTEM_MENU:
+          handleSystemMenuSelect();
           break;
         case STATE_HACKER_TOOLS_MENU:
           handleHackerToolsMenuSelect();
@@ -4822,9 +5075,12 @@ void loop() {
     }
     
     if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-      switch(currentState) {
-        case STATE_TOOL_DEAUTH_ATTACK:
-          deauthAttackActive = false;
+      if (currentState == STATE_PIN_LOCK) {
+        // Do nothing to prevent bypassing PIN
+      } else {
+        switch(currentState) {
+          case STATE_TOOL_DEAUTH_ATTACK:
+            deauthAttackActive = false;
           // Restore normal wifi state
           WiFi.disconnect();
           WiFi.mode(WIFI_STA);
@@ -4894,6 +5150,7 @@ void loop() {
       buttonPressed = true;
       Serial.println("BACK pressed (L+R)");
     }
+   }
     
     if (buttonPressed) {
       lastDebounce = currentMillis;
