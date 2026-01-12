@@ -3899,14 +3899,16 @@ void drawSystemMenu() {
 
 void drawPinKeyboard() {
   int keyW = 60;
-  int keyH = 30;
-  int startX = (SCREEN_WIDTH - (3 * keyW + 2 * 5)) / 2;
-  int startY = 65;
+  int keyH = 25;
+  int gapX = 5;
+  int gapY = 4;
+  int startX = (SCREEN_WIDTH - (3 * keyW + 2 * gapX)) / 2;
+  int startY = 55;
 
   for (int r = 0; r < 4; r++) {
     for (int c = 0; c < 3; c++) {
-      int x = startX + c * (keyW + 5);
-      int y = startY + r * (keyH + 5);
+      int x = startX + c * (keyW + gapX);
+      int y = startY + r * (keyH + gapY);
       if (r == cursorY && c == cursorX) {
         canvas.fillRoundRect(x, y, keyW, keyH, 5, COLOR_PRIMARY);
         canvas.setTextColor(COLOR_BG);
