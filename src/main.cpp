@@ -54,6 +54,8 @@ typedef struct {
 #define TFT_BL    14
 #define TFT_MISO  -1
 
+#define BEEP_PIN 25
+
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 170
 
@@ -749,6 +751,7 @@ void scanWiFiNetworks(bool switchToScanState = true);
 void sendToGemini();
 void triggerNeoPixelEffect(uint32_t color, int duration);
 void updateNeoPixel();
+void playBeep(int note_freq, int duration_ms);
 void ledQuickFlash();
 void ledSuccess();
 void ledError();
@@ -2997,6 +3000,19 @@ void updateNeoPixel() {
     neoPixelEffectEnd = 0;
   }
 }
+
+// ============ BEEP SOUND (PWM) ============
+void playBeep(int note_freq, int duration_ms) {
+    if (note_freq > 0) {
+        ledcSetup(0, note_freq, 8); // Channel 0, freq, 8-bit resolution
+        ledcAttachPin(BEEP_PIN, 0); // Attach pin to channel
+        ledcWrite(0, 128); // 50% duty cycle
+    }
+    delay(duration_ms);
+    ledcDetachPin(BEEP_PIN); // Stop sound
+    ledcWrite(0, 0);
+}
+
 
 // ============ LED PATTERNS ============
 void ledQuickFlash() {
@@ -5348,6 +5364,7 @@ void loop() {
       lastDebounce = currentMillis;
       lastInputTime = currentMillis;
       ledQuickFlash();
+      playBeep(440, 100);
     }
   }
 }
