@@ -116,6 +116,7 @@ enum AppState {
   STATE_GAME_PONG,
   STATE_GAME_SNAKE,
   STATE_GAME_RACING,
+  STATE_GAME_INVADERS,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_RACING_MODE_SELECT,
@@ -316,6 +317,42 @@ const unsigned char sprite_tree[] PROGMEM = {
     0x01, 0x80, 0x03, 0xc0, 0x07, 0xe0, 0x0f, 0xf0, 0x1f, 0xf8, 0x3f, 0xfc, 0x7f, 0xfe, 0xff, 0xff,
     0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0
 };
+
+// ============ GAME: SPACE INVADERS ============
+#define INVADERS_ROWS 5
+#define INVADERS_COLS 10
+#define MAX_INVADERS (INVADERS_ROWS * INVADERS_COLS)
+#define MAX_PLAYER_BULLETS 3
+#define MAX_ALIEN_BULLETS 5
+
+struct Invader {
+  float x, y;
+  bool active;
+  int type;
+};
+
+struct PlayerBullet {
+  float x, y;
+  bool active;
+};
+
+struct AlienBullet {
+  float x, y;
+  bool active;
+};
+
+Invader invaders[MAX_INVADERS];
+PlayerBullet playerBullets[MAX_PLAYER_BULLETS];
+AlienBullet alienBullets[MAX_ALIEN_BULLETS];
+
+float playerX;
+int playerScore;
+int playerLives;
+bool invadersGameOver;
+float alienDirection = 1.0;
+unsigned long lastInvadersUpdate = 0;
+unsigned long lastPlayerFire = 0;
+
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -796,6 +833,9 @@ void updateAndDrawPongParticles();
 void triggerPongParticles(float x, float y);
 void drawSnakeGame();
 void updateSnakeLogic();
+void initInvadersGame();
+void updateInvadersLogic();
+void drawInvadersGame();
 
 
 float custom_lerp(float a, float b, float f) {
@@ -1385,8 +1425,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Racing", "Pong", "Snake", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 7, 45, 24, 3);
+  const char* items[] = {"Racing", "Pong", "Snake", "Invaders", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 8, 45, 24, 3);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -1933,6 +1973,207 @@ void updateSnakeLogic() {
     food.x = random(0, SNAKE_GRID_WIDTH);
     food.y = random(0, SNAKE_GRID_HEIGHT);
   }
+}
+
+
+// ============ GAME: SPACE INVADERS LOGIC ============
+void initInvadersGame() {
+  playerX = SCREEN_WIDTH / 2;
+  playerScore = 0;
+  playerLives = 3;
+  invadersGameOver = false;
+  alienDirection = 1.0;
+
+  for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+    playerBullets[i].active = false;
+  }
+  for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
+    alienBullets[i].active = false;
+  }
+
+  for (int r = 0; r < INVADERS_ROWS; r++) {
+    for (int c = 0; c < INVADERS_COLS; c++) {
+      int i = r * INVADERS_COLS + c;
+      invaders[i].active = true;
+      invaders[i].x = 30 + c * 25;
+      invaders[i].y = 20 + r * 15;
+      invaders[i].type = r; // Different row, different type/look
+    }
+  }
+
+  lastInvadersUpdate = 0;
+  lastPlayerFire = 0;
+}
+
+void updateInvadersLogic() {
+  if (invadersGameOver) {
+    if (digitalRead(BTN_SELECT) == BTN_ACT) {
+      initInvadersGame();
+    }
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastInvadersUpdate < 200) { // Control game speed
+    return;
+  }
+  lastInvadersUpdate = now;
+
+  // --- Alien Movement ---
+  bool wallHit = false;
+  for (int i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].active) {
+      invaders[i].x += 5 * alienDirection;
+      if (invaders[i].x < 10 || invaders[i].x > SCREEN_WIDTH - 20) {
+        wallHit = true;
+      }
+      if (invaders[i].y > SCREEN_HEIGHT - 30) {
+        invadersGameOver = true; // Aliens reached the bottom
+      }
+    }
+  }
+
+  if (wallHit) {
+    alienDirection *= -1;
+    for (int i = 0; i < MAX_INVADERS; i++) {
+      invaders[i].y += 5; // Move down
+    }
+  }
+
+  // --- Bullet Movement ---
+  for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+    if (playerBullets[i].active) {
+      playerBullets[i].y -= 10;
+      if (playerBullets[i].y < 0) {
+        playerBullets[i].active = false;
+      }
+    }
+  }
+  for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
+    if (alienBullets[i].active) {
+      alienBullets[i].y += 5;
+      if (alienBullets[i].y > SCREEN_HEIGHT) {
+        alienBullets[i].active = false;
+      }
+    }
+  }
+
+  // --- Alien Firing ---
+  if (random(0, 10) < 2) { // Chance for an alien to fire
+    int firingAlien = random(0, MAX_INVADERS);
+    if (invaders[firingAlien].active) {
+      for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
+        if (!alienBullets[i].active) {
+          alienBullets[i].x = invaders[firingAlien].x + 5;
+          alienBullets[i].y = invaders[firingAlien].y + 10;
+          alienBullets[i].active = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // --- Collision Detection ---
+  // Player bullets vs Aliens
+  for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+    if (playerBullets[i].active) {
+      for (int j = 0; j < MAX_INVADERS; j++) {
+        if (invaders[j].active) {
+          if (playerBullets[i].x > invaders[j].x && playerBullets[i].x < invaders[j].x + 10 &&
+              playerBullets[i].y > invaders[j].y && playerBullets[i].y < invaders[j].y + 10) {
+            invaders[j].active = false;
+            playerBullets[i].active = false;
+            playerScore += 10;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Alien bullets vs Player
+  for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
+    if (alienBullets[i].active) {
+      if (alienBullets[i].x > playerX - 5 && alienBullets[i].x < playerX + 5 &&
+          alienBullets[i].y > SCREEN_HEIGHT - 20 && alienBullets[i].y < SCREEN_HEIGHT - 10) {
+        alienBullets[i].active = false;
+        playerLives--;
+        if (playerLives <= 0) {
+          invadersGameOver = true;
+        }
+        break;
+      }
+    }
+  }
+
+  // Check for win condition
+  bool allDead = true;
+  for(int i=0; i<MAX_INVADERS; i++) {
+    if(invaders[i].active) {
+      allDead = false;
+      break;
+    }
+  }
+  if (allDead) {
+    // For now, just end the game. Could also go to next level.
+    invadersGameOver = true;
+  }
+}
+
+void drawInvadersGame() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Draw Player
+  canvas.fillTriangle(playerX, SCREEN_HEIGHT - 20, playerX - 7, SCREEN_HEIGHT - 10, playerX + 7, SCREEN_HEIGHT - 10, 0x07E0); // Green player
+
+  // Draw Invaders
+  for (int i = 0; i < MAX_INVADERS; i++) {
+    if (invaders[i].active) {
+      canvas.fillRect(invaders[i].x, invaders[i].y, 10, 10, COLOR_PRIMARY); // Simple white squares for now
+    }
+  }
+
+  // Draw Bullets
+  for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
+    if (alienBullets[i].active) {
+      canvas.fillRect(alienBullets[i].x, alienBullets[i].y, 2, 5, 0xF800); // Red
+    }
+  }
+  for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+    if (playerBullets[i].active) {
+      canvas.fillRect(playerBullets[i].x, playerBullets[i].y, 2, 5, 0x07FF); // Cyan
+    }
+  }
+
+  // Draw HUD (Score and Lives)
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(5, SCREEN_HEIGHT - 10);
+  canvas.print("Score: ");
+  canvas.print(playerScore);
+
+  canvas.setCursor(SCREEN_WIDTH - 60, SCREEN_HEIGHT - 10);
+  canvas.print("Lives: ");
+  canvas.print(playerLives);
+
+
+  if (invadersGameOver) {
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_ERROR);
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    canvas.print("GAME OVER");
+
+    canvas.setTextSize(1);
+    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT + h) / 2 + 10);
+    canvas.print("SELECT to Restart");
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 
@@ -4279,15 +4520,19 @@ void handleGameHubMenuSelect() {
       changeState(STATE_GAME_SNAKE);
       break;
     case 3:
-      changeState(STATE_VIS_STARFIELD);
+      initInvadersGame();
+      changeState(STATE_GAME_INVADERS);
       break;
     case 4:
-      changeState(STATE_VIS_LIFE);
+      changeState(STATE_VIS_STARFIELD);
       break;
     case 5:
-      changeState(STATE_VIS_FIRE);
+      changeState(STATE_VIS_LIFE);
       break;
     case 6:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 7:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -4561,6 +4806,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_GAME_RACING:
       drawRacingGame();
+      break;
+    case STATE_GAME_INVADERS:
+      drawInvadersGame();
       break;
     case STATE_RACING_MODE_SELECT:
       drawRacingModeSelect();
@@ -4891,6 +5139,10 @@ void loop() {
     updateSnakeLogic();
   }
 
+  if (currentState == STATE_GAME_INVADERS) {
+    updateInvadersLogic();
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
 
@@ -4901,6 +5153,30 @@ void loop() {
       }
       if (digitalRead(BTN_DOWN) == BTN_ACT) {
         player1.y = min(SCREEN_HEIGHT - 40.0f, player1.y + paddleSpeed);
+      }
+      if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+        changeState(STATE_GAME_HUB);
+      }
+    }
+
+    if (currentState == STATE_GAME_INVADERS) {
+      float playerSpeed = 150.0f * dt;
+      if (digitalRead(BTN_LEFT) == BTN_ACT) {
+        playerX = max(10.0f, playerX - playerSpeed);
+      }
+      if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+        playerX = min(SCREEN_WIDTH - 10.0f, playerX + playerSpeed);
+      }
+      if (digitalRead(BTN_UP) == BTN_ACT && currentMillis - lastPlayerFire > 500) { // Fire button with delay
+        lastPlayerFire = currentMillis;
+        for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+          if (!playerBullets[i].active) {
+            playerBullets[i].x = playerX;
+            playerBullets[i].y = SCREEN_HEIGHT - 25;
+            playerBullets[i].active = true;
+            break;
+          }
+        }
       }
       if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
         changeState(STATE_GAME_HUB);
@@ -5058,7 +5334,7 @@ void loop() {
           }
           break;
         case STATE_GAME_HUB:
-          if (menuSelection < 5) menuSelection++;
+          if (menuSelection < 7) menuSelection++;
           break;
         case STATE_ESPNOW_CHAT:
           if (espnowScrollIndex < espnowMessageCount - 1) {
