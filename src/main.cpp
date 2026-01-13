@@ -146,6 +146,9 @@ AppState transitionTargetState;
 #define TOUCH_LEFT  1
 #define TOUCH_RIGHT 2
 
+// ============ SPEAKER PIN ============
+#define SPEAKER_PIN 4
+
 // ============ API ENDPOINT ============
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
 
@@ -734,6 +737,39 @@ const char* AI_SYSTEM_PROMPT_STANDARD =
   "- Membantu dengan tugas-tugas praktis\n\n"
   "TONE: Profesional, informatif, dan membantu.";
 
+// ============ SOUND FUNCTIONS ============
+void playTone(int frequency, int duration) {
+  ledcSetup(0, frequency, 8);
+  ledcAttachPin(SPEAKER_PIN, 0);
+  ledcWrite(0, 128); // 50% duty cycle
+  delay(duration);
+  ledcWrite(0, 0); // Stop sound
+  ledcDetachPin(SPEAKER_PIN);
+}
+
+void playStartupSound() {
+  playTone(300, 100);
+  playTone(500, 100);
+  playTone(700, 100);
+}
+
+void playSuccessSound() {
+  playTone(600, 80);
+  playTone(800, 80);
+}
+
+void playErrorSound() {
+  playTone(400, 200);
+  playTone(200, 200);
+}
+
+void playNotificationSound() {
+  playTone(880, 100);
+  delay(50);
+  playTone(880, 100);
+}
+
+
 // ============ FORWARD DECLARATIONS ============
 void drawDeauthSelect();
 void drawDeauthAttack();
@@ -894,6 +930,7 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
       chatAnimProgress = 0.0f; // Trigger animation
       triggerNeoPixelEffect(pixels.Color(100, 200, 255), 800);
       ledQuickFlash();
+      playNotificationSound();
     }
   } else if (incomingMsg.type == 'H') {
     // Handshake - peer announcing itself
@@ -929,9 +966,11 @@ void onESPNowDataSent(const uint8_t *mac, esp_now_send_status_t status) {
   if (status == ESP_NOW_SEND_SUCCESS) {
     ledSuccess();
     triggerNeoPixelEffect(pixels.Color(0, 255, 100), 500);
+    playSuccessSound();
   } else {
     ledError();
     triggerNeoPixelEffect(pixels.Color(255, 50, 0), 500);
+    playErrorSound();
   }
 }
 
@@ -4803,6 +4842,7 @@ void setup() {
   Serial.println("\n========================================");
   Serial.println("===        SETUP COMPLETE!           ===");
   Serial.println("========================================\n");
+  playStartupSound();
 }
 
 // ============ LOOP ============
