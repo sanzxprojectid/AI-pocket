@@ -109,6 +109,7 @@ enum AppState {
   STATE_TOOL_SNIFFER,
   STATE_TOOL_NETSCAN,
   STATE_TOOL_FILE_MANAGER,
+  STATE_FILE_VIEWER,
   STATE_GAME_HUB,
   STATE_VIS_STARFIELD,
   STATE_VIS_LIFE,
@@ -683,10 +684,13 @@ int scanResultCount = 0;
 bool isScanningNet = false;
 int netScanIndex = 0;
 
-String fileList[20];
+struct FileInfo { String name; uint32_t size; };
+FileInfo fileList[20];
 int fileListCount = 0;
 int fileListScroll = 0;
 int fileListSelection = 0;
+String fileContentToView;
+int fileViewerScrollOffset = 0;
 
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
@@ -781,6 +785,7 @@ void savePetData();
 void drawSniffer();
 void drawNetScan();
 void drawFileManager();
+void drawFileViewer();
 void drawGameHubMenu();
 void drawStarfield();
 void drawGameOfLife();
@@ -2432,7 +2437,8 @@ void drawFileManager() {
       while(file && fileListCount < 20) {
         String name = String(file.name());
         if (name.startsWith("/")) name = name.substring(1);
-        fileList[fileListCount] = name;
+        fileList[fileListCount].name = name;
+        fileList[fileListCount].size = file.size();
         fileListCount++;
         file = root.openNextFile();
       }
@@ -2459,7 +2465,19 @@ void drawFileManager() {
     }
 
     canvas.setCursor(10, startY + (i*20) + 5);
-    canvas.print(fileList[idx]);
+    canvas.print(fileList[idx].name);
+
+    String fileSizeStr;
+    if (fileList[idx].size < 1024) {
+      fileSizeStr = String(fileList[idx].size) + " B";
+    } else if (fileList[idx].size < 1024 * 1024) {
+      fileSizeStr = String(fileList[idx].size / 1024.0f, 1) + " KB";
+    } else {
+      fileSizeStr = String(fileList[idx].size / 1024.0f / 1024.0f, 1) + " MB";
+    }
+    int fileSizeW = fileSizeStr.length() * 6;
+    canvas.setCursor(SCREEN_WIDTH - 15 - fileSizeW, startY + (i*20) + 5);
+    canvas.print(fileSizeStr);
   }
 
   canvas.setTextColor(COLOR_DIM);
@@ -4584,6 +4602,9 @@ void refreshCurrentScreen() {
     case STATE_TOOL_FILE_MANAGER:
       drawFileManager();
       break;
+    case STATE_FILE_VIEWER:
+      drawFileViewer();
+      break;
     case STATE_GAME_HUB:
       drawGameHubMenu();
       break;
@@ -4685,7 +4706,56 @@ void drawDeauthDetector() {
 }
 
 void drawLocalAiChat() {
-  drawGenericToolScreen("LOCAL AI (WIP)");
+  drawGenericToolScreen("LOCAL AI (Coming Soon)");
+}
+
+void drawFileViewer() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x7BEF); // Gray/Blue
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("File Viewer");
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  int y = 45 - fileViewerScrollOffset;
+  int lineHeight = 10;
+  String word = "";
+  int x = 5;
+  for (unsigned int i = 0; i < fileContentToView.length(); i++) {
+    char c = fileContentToView.charAt(i);
+    if (c == ' ' || c == '\n' || i == fileContentToView.length() - 1) {
+      if (i == fileContentToView.length() - 1 && c != ' ' && c != '\n') {
+        word += c;
+      }
+      int wordWidth = word.length() * 6;
+      if (x + wordWidth > SCREEN_WIDTH - 10) {
+        y += lineHeight;
+        x = 5;
+      }
+      if (y >= 40 && y < SCREEN_HEIGHT - 5) {
+        canvas.setCursor(x, y);
+        canvas.print(word);
+      }
+      x += wordWidth + 6;
+      word = "";
+      if (c == '\n') {
+        y += lineHeight;
+        x = 5;
+      }
+    } else {
+      word += c;
+    }
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Scroll | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 
@@ -5073,6 +5143,9 @@ void loop() {
           espnowAutoScroll = false;
           if (espnowScrollIndex > 0) espnowScrollIndex--;
           break;
+        case STATE_FILE_VIEWER:
+          if (fileViewerScrollOffset > 0) fileViewerScrollOffset -= 20;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -5133,6 +5206,9 @@ void loop() {
               espnowScrollIndex++;
               if (espnowScrollIndex >= espnowMessageCount - 4) espnowAutoScroll = true;
           }
+          break;
+        case STATE_FILE_VIEWER:
+          fileViewerScrollOffset += 20;
           break;
         default: break;
       }
@@ -5252,15 +5328,24 @@ void loop() {
           scanWiFiNetworks();
           break;
         case STATE_TOOL_FILE_MANAGER:
-          // Simple selection feedback
           if (fileListCount > 0) {
-             String selected = fileList[fileListSelection];
-             if (selected.endsWith(".txt") || selected.endsWith(".log")) {
-                showStatus("Opening...\n" + selected, 500);
-                // In a real app we would read file content here
-             } else {
-                showStatus("Selected:\n" + selected, 1000);
-             }
+            String selectedFile = fileList[fileListSelection].name;
+            showStatus("Opening " + selectedFile, 500);
+            if (beginSD()) {
+              File file = SD.open("/" + selectedFile, FILE_READ);
+              if (file) {
+                fileContentToView = "";
+                while (file.available()) {
+                  fileContentToView += (char)file.read();
+                }
+                file.close();
+                fileViewerScrollOffset = 0;
+                changeState(STATE_FILE_VIEWER);
+              } else {
+                showStatus("Failed to open file", 1500);
+              }
+              endSD();
+            }
           }
           break;
         case STATE_VPET:
@@ -5362,6 +5447,7 @@ void loop() {
         case STATE_TOOL_SNIFFER:
         case STATE_TOOL_NETSCAN:
         case STATE_TOOL_FILE_MANAGER:
+        case STATE_FILE_VIEWER:
         case STATE_GAME_HUB:
           changeState(STATE_MAIN_MENU);
           break;
