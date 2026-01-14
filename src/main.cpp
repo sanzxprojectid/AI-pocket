@@ -128,7 +128,8 @@ enum AppState {
   STATE_TOOL_SPAMMER,
   STATE_TOOL_PROBE_SNIFFER,
   STATE_TOOL_BLE_MENU,
-  STATE_DEAUTH_DETECTOR
+  STATE_DEAUTH_DETECTOR,
+  STATE_LOCAL_AI_CHAT
 };
 
 AppState currentState = STATE_BOOT;
@@ -171,6 +172,8 @@ int screenBrightness = 255;
 int cursorX = 0, cursorY = 0;
 String userInput = "";
 String passwordInput = "";
+String geminiApiKey = "";
+String binderbyteApiKey = "";
 String selectedSSID = "";
 String aiResponse = "";
 int scrollOffset = 0;
@@ -452,7 +455,7 @@ const unsigned char icon_gamehub[] PROGMEM = {
 const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar};
 
 // ============ AI MODE SELECTION ============
-enum AIMode { MODE_SUBARU, MODE_STANDARD };
+enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
 AIMode currentAIMode = MODE_SUBARU;
 bool isSelectingMode = false;
 
@@ -588,7 +591,6 @@ const int uiFrameDelay = 1000 / TARGET_FPS;
 #include <FS.h>
 
 bool sdCardMounted = false;
-String bb_apiKey = "";
 String bb_kurir  = "jne";
 String bb_resi   = "123456789";
 String courierStatus = "SYSTEM READY";
@@ -792,6 +794,7 @@ void drawWiFiSonar();
 String getRecentChatContext(int maxMessages);
 void drawPinLock(bool isChanging);
 void handlePinLockKeyPress();
+void loadApiKeys();
 void updateAndDrawPongParticles();
 void triggerPongParticles(float x, float y);
 void drawSnakeGame();
@@ -832,6 +835,49 @@ void drawScrollableMenu(const char* items[], int numItems, int startY, int itemH
 
 
 const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// ============ API KEY MANAGEMENT ============
+void loadApiKeys() {
+  if (!sdCardMounted) {
+    Serial.println("Cannot load API keys, SD card not mounted.");
+    return;
+  }
+
+  const char* apiKeyFile = "/api_keys.json";
+
+  if (SD.exists(apiKeyFile)) {
+    File file = SD.open(apiKeyFile, FILE_READ);
+    if (file) {
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, file);
+      if (!error) {
+        geminiApiKey = doc["gemini_api_key"] | "";
+        binderbyteApiKey = doc["binderbyte_api_key"] | "";
+        Serial.println("✓ API keys loaded from SD card.");
+      } else {
+        Serial.print("Failed to parse api_keys.json: ");
+        Serial.println(error.c_str());
+      }
+      file.close();
+    }
+  } else {
+    Serial.println("api_keys.json not found. Creating a template...");
+    File file = SD.open(apiKeyFile, FILE_WRITE);
+    if (file) {
+      JsonDocument doc;
+      doc["gemini_api_key"] = "PASTE_YOUR_GEMINI_API_KEY_HERE";
+      doc["binderbyte_api_key"] = "PASTE_YOUR_BINDERBYTE_API_KEY_HERE";
+      if (serializeJson(doc, file) == 0) {
+        Serial.println("Failed to write to api_keys.json");
+      } else {
+        Serial.println("✓ Created api_keys.json template on SD card.");
+      }
+      file.close();
+    }
+    // Show a message on screen for the user
+    showStatus("api_keys.json\ncreated.\nPlease edit on PC.", 3000);
+  }
+}
 
 // ============ WIFI PROMISCUOUS CALLBACK ============
 void wifiPromiscuous(void* buf, wifi_promiscuous_pkt_type_t type) {
@@ -3278,34 +3324,35 @@ void showAIModeSelection(int x_offset) {
   canvas.print("SELECT AI MODE");
   canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
   
-  const char* modes[] = {"SUBARU AWA", "STANDARD AI"};
+  const char* modes[] = {"SUBARU AWA (Online)", "STANDARD AI (Online)", "LOCAL AI (Offline)"};
   const char* descriptions[] = {
     "Personal, Memory, Friendly",
-    "Helpful, Informative, Pro"
+    "Helpful, Informative, Pro",
+    "Fast, Private, No-Internet"
   };
   
-  int itemHeight = 50;
-  int startY = 40;
+  int itemHeight = 42;
+  int startY = 30;
   
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 3; i++) {
     int y = startY + (i * itemHeight);
     
-    if (i == (currentAIMode == MODE_SUBARU ? 0 : 1)) {
-      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 5, COLOR_PRIMARY);
+    if (i == (int)currentAIMode) {
+      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 5, COLOR_BORDER);
+      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
     
     canvas.setTextSize(2);
     int titleW = strlen(modes[i]) * 12;
-    canvas.setCursor((SCREEN_WIDTH - titleW) / 2, y + 8);
+    canvas.setCursor((SCREEN_WIDTH - titleW) / 2, y + 5);
     canvas.print(modes[i]);
     
     canvas.setTextSize(1);
     int descW = strlen(descriptions[i]) * 6;
-    canvas.setCursor((SCREEN_WIDTH - descW) / 2, y + 28);
+    canvas.setCursor((SCREEN_WIDTH - descW) / 2, y + 25);
     canvas.print(descriptions[i]);
   }
   
@@ -3781,9 +3828,16 @@ void checkResiReal() {
   isTracking = true;
   courierStatus = "FETCHING...";
   drawCourierTool();
+
+  if (binderbyteApiKey.length() == 0 || binderbyteApiKey.startsWith("PASTE_")) {
+    courierStatus = "NO API KEY";
+    isTracking = false;
+    return;
+  }
+
   WiFiClient client;
   HTTPClient http;
-  String url = "http://api.binderbyte.com/v1/track?api_key=" + bb_apiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
+  String url = "http://api.binderbyte.com/v1/track?api_key=" + binderbyteApiKey + "&courier=" + bb_kurir + "&awb=" + bb_resi;
   http.begin(client, url);
   int httpCode = http.GET();
   if (httpCode == 200) {
@@ -3958,6 +4012,14 @@ void sendToGemini() {
     loadingFrame++;
   }
   
+  if (geminiApiKey.length() == 0 || geminiApiKey.startsWith("PASTE_")) {
+    ledError();
+    aiResponse = "Gemini API Key not found. Please add it to /api_keys.json on your SD card.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    return;
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     ledError();
     if (currentAIMode == MODE_SUBARU) {
@@ -3970,9 +4032,8 @@ void sendToGemini() {
     return;
   }
   
-  const char* currentApiKey = geminiApiKey1;
   HTTPClient http;
-  String url = String(geminiEndpoint) + "?key=" + currentApiKey;
+  String url = String(geminiEndpoint) + "?key=" + geminiApiKey;
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(30000);
@@ -4466,6 +4527,7 @@ void drawSpammer();
 void drawProbeSniffer();
 void drawBleMenu();
 void drawDeauthDetector();
+void drawLocalAiChat();
 
 void refreshCurrentScreen() {
   if (isSelectingMode) {
@@ -4583,6 +4645,9 @@ void refreshCurrentScreen() {
     case STATE_DEAUTH_DETECTOR:
       drawDeauthDetector();
       break;
+    case STATE_LOCAL_AI_CHAT:
+      drawLocalAiChat();
+      break;
     case STATE_PIN_LOCK:
       drawPinLock(false);
       break;
@@ -4628,6 +4693,11 @@ void drawBleMenu() {
 void drawDeauthDetector() {
   drawGenericToolScreen("DEAUTH DETECTOR");
 }
+
+void drawLocalAiChat() {
+  drawGenericToolScreen("LOCAL AI (WIP)");
+}
+
 
 // ============ SETUP ============
 void setup() {
@@ -4709,6 +4779,8 @@ void setup() {
       loadChatHistoryFromSD();
       Serial.println("=================================\n");
     }
+    // Load API keys from SD card
+    loadApiKeys();
   } else {
     Serial.println("⚠ SD Card Mount Failed");
   }
@@ -4919,23 +4991,32 @@ void loop() {
     
     if (isSelectingMode) {
       if (digitalRead(BTN_UP) == BTN_ACT) {
-        currentAIMode = MODE_SUBARU;
+        if ((int)currentAIMode > 0) {
+          currentAIMode = (AIMode)((int)currentAIMode - 1);
+        }
         showAIModeSelection(0);
         buttonPressed = true;
       }
       if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        currentAIMode = MODE_STANDARD;
+        if ((int)currentAIMode < 2) {
+          currentAIMode = (AIMode)((int)currentAIMode + 1);
+        }
         showAIModeSelection(0);
         buttonPressed = true;
       }
       if (digitalRead(BTN_SELECT) == BTN_ACT) {
         isSelectingMode = false;
-        userInput = "";
-        keyboardContext = CONTEXT_CHAT;
-        cursorX = 0;
-        cursorY = 0;
-        currentKeyboardMode = MODE_LOWER;
-        changeState(STATE_KEYBOARD);
+        if (currentAIMode == MODE_LOCAL) {
+          showStatus("Local AI WIP", 1500);
+          changeState(STATE_MAIN_MENU);
+        } else {
+          userInput = "";
+          keyboardContext = CONTEXT_CHAT;
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          changeState(STATE_KEYBOARD);
+        }
         buttonPressed = true;
       }
       if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {

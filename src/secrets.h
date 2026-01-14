@@ -1,10 +1,9 @@
 #ifndef SECRETS_H
 #define SECRETS_H
 
-const char* geminiApiKey1 = "isi api key";
-const char* geminiApiKey2 = "isi api key";
+// API Keys are now loaded from /api_keys.json on the SD card.
+// This file is for non-sensitive configuration.
 
-const char* BINDERBYTE_API_KEY = "PASTE_API_KEY_BINDERBYTE_DISINI";
 const char* BINDERBYTE_COURIER = "jnt";
 const char* DEFAULT_COURIER_RESI = "JP1234567890";
 
