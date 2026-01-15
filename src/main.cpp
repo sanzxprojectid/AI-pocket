@@ -966,14 +966,14 @@ bool beginSD() {
   }
   // If begin fails, revert SPI for TFT
   SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
   SPI.setFrequency(40000000);
   return false;
 }
 
 void endSD() {
   SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
   SPI.setFrequency(40000000);
 }
 
@@ -4899,7 +4899,7 @@ void setup() {
   Serial.println("✓ Backlight ON");
   delay(100);
   
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, TFT_CS);
+  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
   SPI.setFrequency(40000000);
   Serial.println("✓ SPI Initialized (40MHz)");
   
