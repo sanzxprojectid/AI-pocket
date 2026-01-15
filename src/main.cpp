@@ -21,6 +21,7 @@
 #include <ESPmDNS.h>
 #include <vector>
 #include "secrets.h"
+#include "DFRobotDFPlayerMini.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -130,7 +131,8 @@ enum AppState {
   STATE_TOOL_PROBE_SNIFFER,
   STATE_TOOL_BLE_MENU,
   STATE_DEAUTH_DETECTOR,
-  STATE_LOCAL_AI_CHAT
+  STATE_LOCAL_AI_CHAT,
+  STATE_MUSIC_PLAYER
 };
 
 AppState currentState = STATE_BOOT;
@@ -453,7 +455,17 @@ const unsigned char icon_gamehub[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar};
+const unsigned char icon_music[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x70, 0x0E, 0x00,
+0x00, 0x70, 0x0E, 0x00, 0x00, 0x70, 0x0E, 0x00, 0x00, 0x70, 0x0F, 0x80, 0x00, 0x70, 0x1F, 0x00,
+0x00, 0x70, 0x3E, 0x00, 0x00, 0x70, 0x7C, 0x00, 0x00, 0x61, 0xF8, 0x00, 0x00, 0x03, 0xF0, 0x00,
+0x00, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xC0, 0x00, 0x00, 0x1F, 0x80, 0x00, 0x00, 0x3F, 0x00, 0x00,
+0x00, 0x7E, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x00, 0x01, 0xF8, 0x00, 0x00, 0x03, 0xF0, 0x00, 0x00,
+0x07, 0xE0, 0x00, 0x00, 0x0F, 0xC0, 0x00, 0x00, 0x0F, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
@@ -590,6 +602,16 @@ const int uiFrameDelay = 1000 / TARGET_FPS;
 
 #include <SD.h>
 #include <FS.h>
+
+// ============ DFPLAYER MUSIC ============
+#define DFPLAYER_RX_PIN 16
+#define DFPLAYER_TX_PIN 15
+DFRobotDFPlayerMini myDFPlayer;
+
+std::vector<String> musicTracks;
+int currentTrack = 0;
+bool isPlaying = false;
+int musicVolume = 20; // Default volume (0-30)
 
 bool sdCardMounted = false;
 String bb_kurir  = "jne";
@@ -804,7 +826,100 @@ void updateAndDrawPongParticles();
 void triggerPongParticles(float x, float y);
 void drawSnakeGame();
 void updateSnakeLogic();
+bool beginSD();
+void endSD();
 
+void drawMusicPlayer() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 35, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 18);
+  canvas.print("Music Player");
+
+  if (musicTracks.empty()) {
+    canvas.setCursor(80, 80);
+    canvas.print("No Tracks");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Playlist
+  int itemHeight = 20;
+  int startY = 40;
+  int visibleItems = 5;
+  int scroll = 0;
+  if (currentTrack >= visibleItems) {
+    scroll = (currentTrack - visibleItems + 1) * itemHeight;
+  }
+
+  for (size_t i = 0; i < musicTracks.size(); ++i) {
+    int y = startY + (i * itemHeight) - scroll;
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT - 30) continue;
+
+    if (i == currentTrack) {
+      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+    canvas.setTextSize(1);
+    canvas.setCursor(10, y + 6);
+    String trackName = musicTracks[i];
+    trackName.replace(".mp3", "");
+    if (trackName.length() > 40) {
+      trackName = trackName.substring(0, 40) + "...";
+    }
+    canvas.print(trackName);
+  }
+
+  // Controls Footer
+  canvas.fillRect(0, SCREEN_HEIGHT - 25, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 25, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 18);
+  canvas.print(isPlaying ? "||" : ">");
+  canvas.setCursor(40, SCREEN_HEIGHT - 18);
+  canvas.print("Vol: " + String(musicVolume));
+  canvas.setCursor(120, SCREEN_HEIGHT-18);
+  canvas.print("UP/DN: Select | L/R: Vol");
+  canvas.setCursor(SCREEN_WIDTH - 60, SCREEN_HEIGHT - 18);
+  canvas.print("SEL: Play");
+
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ MUSIC PLAYER FUNCTIONS ============
+void scanMusicFiles() {
+  musicTracks.clear();
+  if (sdCardMounted && beginSD()) {
+    File root = SD.open("/");
+    File file = root.openNextFile();
+    while(file) {
+      String fileName = file.name();
+      if (fileName.endsWith(".mp3")) {
+        musicTracks.push_back(fileName);
+      }
+      file = root.openNextFile();
+    }
+    root.close();
+    endSD();
+    Serial.printf("Found %d music tracks.\n", musicTracks.size());
+    if (musicTracks.size() == 0) {
+      showStatus("No MP3 files\nfound on SD.", 1500);
+    }
+  } else {
+    showStatus("SD Card Error\nCan't scan music.", 1500);
+  }
+}
 
 float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
@@ -3269,8 +3384,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
   
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR"};
-  int numItems = 11;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC"};
+  int numItems = 12;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -4217,6 +4332,10 @@ void handleMainMenuSelect() {
          changeState(STATE_TOOL_WIFI_SONAR);
       }
       break;
+    case 11: // MUSIC
+      scanMusicFiles();
+      changeState(STATE_MUSIC_PLAYER);
+      break;
   }
 }
 
@@ -4665,6 +4784,9 @@ void refreshCurrentScreen() {
     case STATE_CHANGE_PIN:
       drawPinLock(true);
       break;
+    case STATE_MUSIC_PLAYER:
+      drawMusicPlayer();
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -4824,6 +4946,16 @@ void setup() {
   pixels.setPixelColor(0, pixels.Color(255, 255, 255));
   pixels.show();
   Serial.println("✓ NeoPixel: WHITE");
+
+  Serial.println("\n--- DFPlayer Mini Init ---");
+  Serial2.begin(9600, SERIAL_8N1, DFPLAYER_RX_PIN, DFPLAYER_TX_PIN);
+  if (!myDFPlayer.begin(Serial2)) {
+    Serial.println("⚠ DFPlayer Mini not found!");
+    // Optionally show an error on screen
+  } else {
+    Serial.println("✓ DFPlayer Mini OK");
+    myDFPlayer.volume(musicVolume);
+  }
   
   Serial.println("\n--- SD Card Init ---");
   // Simplified SD card check
@@ -5045,6 +5177,42 @@ void loop() {
         changeState(STATE_GAME_HUB);
       }
     }
+     else if (currentState == STATE_MUSIC_PLAYER) {
+      if (digitalRead(BTN_UP) == BTN_ACT) {
+        if (!musicTracks.empty()) {
+          currentTrack = (currentTrack > 0) ? currentTrack - 1 : musicTracks.size() - 1;
+        }
+      }
+      if (digitalRead(BTN_DOWN) == BTN_ACT) {
+        if (!musicTracks.empty()) {
+          currentTrack = (currentTrack < musicTracks.size() - 1) ? currentTrack + 1 : 0;
+        }
+      }
+      if (digitalRead(BTN_LEFT) == BTN_ACT) {
+        musicVolume = (musicVolume > 0) ? musicVolume - 1 : 0;
+        myDFPlayer.volume(musicVolume);
+      }
+      if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+        musicVolume = (musicVolume < 30) ? musicVolume + 1 : 30;
+        myDFPlayer.volume(musicVolume);
+      }
+      if (digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (!musicTracks.empty()) {
+          if (isPlaying) {
+            myDFPlayer.pause();
+            isPlaying = false;
+          } else {
+            myDFPlayer.play(currentTrack + 1);
+            isPlaying = true;
+          }
+        }
+      }
+       if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+        myDFPlayer.stop();
+        isPlaying = false;
+        changeState(STATE_MAIN_MENU);
+      }
+    }
     
     if (isSelectingMode) {
       if (digitalRead(BTN_UP) == BTN_ACT) {
@@ -5158,7 +5326,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 10) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -5258,7 +5426,7 @@ void loop() {
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 10) menuSelection++;
+          if (menuSelection < 11) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
