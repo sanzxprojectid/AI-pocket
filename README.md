@@ -175,16 +175,11 @@ System:
 
 ## 📦 Dependencies
 
-Install these libraries via Arduino Library Manager:
-
-```
-- Adafruit GFX Library
-- Adafruit SSD1306
-- ArduinoJson
-- ESP32 Board Support (v2.0.0+)
-```
+This project uses **PlatformIO**, which automatically manages all required libraries. Dependencies are defined in the `platformio.ini` file and will be installed on the first build.
 
 ## 🚀 Installation
+
+This project is configured for **PlatformIO**. It is recommended to use the [PlatformIO IDE for VSCode](https://platformio.org/install/ide?install=vscode).
 
 1. **Clone the repository**
    ```bash
@@ -192,21 +187,27 @@ Install these libraries via Arduino Library Manager:
    cd AI-pocket
    ```
 
-2. **Open in Arduino IDE**
-   - Install ESP32 board support
-   - Select board: "ESP32C3 Dev Module"
-   - Select correct COM port
-
-3. **Configure API Keys** (Optional)
+2. **Configure API Keys** (Optional)
    - Edit the code to add your Gemini API keys:
    ```cpp
    const char* geminiApiKey1 = "YOUR_API_KEY_1";
    const char* geminiApiKey2 = "YOUR_API_KEY_2";
    ```
 
-4. **Upload**
-   - Compile and upload to your ESP32-C3
-   - Open Serial Monitor (115200 baud) to see device MAC address
+3. **Build, Upload, and Monitor**
+   Use the PlatformIO interface in VSCode or run these commands in your terminal:
+   - **Compile**:
+     ```bash
+     platformio run
+     ```
+   - **Upload**:
+     ```bash
+     platformio run --target upload
+     ```
+   - **Monitor**:
+     ```bash
+     platformio device monitor
+     ```
 
 ## 📖 Usage Guide
 
