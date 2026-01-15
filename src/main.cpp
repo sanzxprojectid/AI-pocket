@@ -4883,6 +4883,9 @@ void drawFileViewer() {
 
 // ============ SETUP ============
 void setup() {
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n\n");
@@ -4894,8 +4897,6 @@ void setup() {
   setCpuFrequencyMhz(CPU_FREQ);
   Serial.printf("CPU Freq: %d MHz\n", getCpuFrequencyMhz());
   
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
   Serial.println("✓ Backlight ON");
   delay(100);
   
