@@ -4930,13 +4930,13 @@ void setup() {
 
   // Test layar dengan warna solid
   tft.fillScreen(ST77XX_BLACK);
-  delay(200);
+  delay(500);
   tft.fillScreen(ST77XX_RED);
-  delay(200);
+  delay(500);
   tft.fillScreen(ST77XX_GREEN);
-  delay(200);
+  delay(500);
   tft.fillScreen(ST77XX_BLUE);
-  delay(200);
+  delay(500);
 
   // Boot screen
   tft.fillScreen(ST77XX_BLACK);
