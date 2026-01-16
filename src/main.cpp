@@ -152,8 +152,6 @@ AppState transitionTargetState;
 #define BTN_LEFT    39
 #define BTN_BACK    42
 #define BTN_ACT     LOW
-#define TOUCH_LEFT  1
-#define TOUCH_RIGHT 2
 
 // ============ API ENDPOINT ============
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
@@ -187,7 +185,7 @@ String aiResponse = "";
 int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 150;
+const unsigned long debounceDelay = 75;
 
 // ============ UI ANIMATION PHYSICS ============
 float menuScrollCurrent = 0.0f;
@@ -855,7 +853,41 @@ void endSD();
 void initMusicPlayer();
 void updateBatteryLevel();
 void drawBatteryIcon();
-// Boot screen removed for faster boot time
+void drawBootScreen(const char* lines[], int lineCount, int progress);
+
+// ============ BOOT SCREEN FUNCTION ============
+void drawBootScreen(const char* lines[], int lineCount, int progress) {
+  canvas.fillScreen(ST77XX_BLACK);
+  canvas.setTextColor(ST77XX_GREEN);
+  canvas.setTextSize(1);
+
+  // Header
+  canvas.setCursor(10, 10);
+  canvas.print("AI-POCKET S3 // v2.2");
+  canvas.drawFastHLine(10, 22, SCREEN_WIDTH - 20, ST77XX_GREEN);
+
+  // Status Lines
+  int y = 35;
+  for (int i = 0; i < lineCount; i++) {
+    canvas.setCursor(10, y);
+    canvas.print(lines[i]);
+    y += 12;
+  }
+
+  // Progress Bar
+  int barY = SCREEN_HEIGHT - 30;
+  int barWidth = SCREEN_WIDTH - 40;
+  int barProgress = map(progress, 0, 100, 0, barWidth);
+
+  canvas.drawRect(20, barY, barWidth, 15, ST77XX_GREEN);
+  canvas.fillRect(22, barY + 2, barProgress - 4, 11, ST77XX_GREEN);
+
+  String progressText = String(progress) + "%";
+  canvas.setCursor(SCREEN_WIDTH / 2 - 10, barY + 4);
+  canvas.setTextColor(ST77XX_BLACK);
+  canvas.print(progressText);
+  canvas.setTextColor(ST77XX_GREEN);
+}
 
 // ============ MUSIC PLAYER FUNCTIONS ============
 void initMusicPlayer() {
@@ -964,19 +996,22 @@ float custom_lerp(float a, float b, float f) {
 }
 
 void drawScrollableMenu(const char* items[], int numItems, int startY, int itemHeight, int itemGap) {
-  // The y position is now calculated based on the smoothly interpolated menuScrollCurrent
-  for (int i = 0; i < numItems; i++) {
-    int y = startY + (i * (itemHeight + itemGap)) - menuScrollCurrent;
+  int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
+  int menuScroll = 0;
 
-    // Culling: Don't draw items far off-screen
-    if (y < startY - itemHeight * 2 || y > SCREEN_HEIGHT + itemHeight) continue;
+  if (menuSelection >= visibleItems) {
+      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
+  }
+
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + itemGap)) - menuScroll;
+
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
 
     if (i == menuSelection) {
-      // The selected item is always fully opaque and highlighted
       canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
-      // Non-selected items can be drawn normally or with effects
       canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
       canvas.setTextColor(COLOR_PRIMARY);
     }
@@ -3421,25 +3456,92 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ MAIN MENU (OPTIMIZED VERTICAL LIST) ============
-void drawMainMenu() {
-  canvas.fillScreen(COLOR_BG);
-  drawStatusBar();
+// ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
+void updateParticles() {
+  if (!particlesInit) {
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+      particles[i].x = random(0, SCREEN_WIDTH);
+      particles[i].y = random(0, SCREEN_HEIGHT);
+      particles[i].speed = random(10, 50) / 10.0f;
+      particles[i].size = random(1, 3);
+    }
+    particlesInit = true;
+  }
 
-  // Header
-  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
-  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_TEXT);
-  canvas.setTextSize(2);
-  canvas.setCursor(10, 7);
-  canvas.print("AI-POCKET S3");
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    particles[i].x -= particles[i].speed;
+    if (particles[i].x < 0) {
+      particles[i].x = SCREEN_WIDTH;
+      particles[i].y = random(0, SCREEN_HEIGHT);
+    }
+  }
+}
+
+void showMainMenu(int x_offset) {
+  updateParticles();
+  canvas.fillScreen(COLOR_BG);
+
+  // Draw Particles (Background)
+  for (int i = 0; i < NUM_PARTICLES; i++) {
+    // Dim stars
+    uint16_t color = (particles[i].size > 1) ? 0x8410 : 0x4208; // Dark Gray
+    canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, color);
+  }
+
+  // Scanline Effect (Horizontal lines)
+  for (int y = 0; y < SCREEN_HEIGHT; y += 4) {
+    canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x18E3); // Very subtle gray line
+  }
+
+  drawStatusBar();
 
   const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC"};
   int numItems = 12;
   
-  // For now, we will use the generic scrollable menu.
-  // The next step will make it smooth.
-  drawScrollableMenu(items, numItems, 40, 22, 3);
+  int centerX = SCREEN_WIDTH / 2;
+  int centerY = SCREEN_HEIGHT / 2 + 5;
+  int iconSpacing = 70;
+
+  for (int i = 0; i < numItems; i++) {
+    float offset = (i - menuScrollCurrent);
+    int x = centerX + (offset * iconSpacing);
+    int y = centerY;
+
+    float dist = abs(offset);
+    float scale = 1.0f - min(dist * 0.5f, 0.7f); // Sharper falloff
+    if (scale < 0.1f) continue;
+
+    int boxSize = 48 * scale;
+
+    // Icon Logic
+    if (abs(offset) < 0.5f) {
+        // Active: "Glow" effect using concentric rects + Inverted Box
+        // Simulate glow with dithering or just multiple lines
+        for(int k=1; k<4; k++) {
+           canvas.drawRoundRect(x - 24 - k, y - 24 - k, 48 + 2*k, 48 + 2*k, 6, 0x4208); // Dark gray glow
+        }
+
+        // Main Box
+        canvas.fillRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_PRIMARY); // White box
+        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_BG); // Black Icon
+
+        // Label with background for readability
+        canvas.setTextSize(1);
+        int labelW = strlen(items[i]) * 6;
+        int labelX = centerX - labelW/2;
+        int labelY = SCREEN_HEIGHT - 25;
+
+        canvas.fillRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_BG);
+        canvas.drawRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_PRIMARY);
+        canvas.setCursor(labelX, labelY);
+        canvas.print(items[i]);
+    } else {
+        // Inactive: Just Outline and Dim Icon
+        canvas.drawRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_DIM);
+        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_DIM);
+    }
+  }
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4679,7 +4781,7 @@ void refreshCurrentScreen() {
   
   switch(currentState) {
     case STATE_MAIN_MENU:
-      drawMainMenu();
+      showMainMenu(x_offset);
       break;
     case STATE_WIFI_MENU:
       showWiFiMenu(x_offset);
@@ -4796,7 +4898,7 @@ void refreshCurrentScreen() {
       drawMusicPlayer();
       break;
     default:
-      drawMainMenu();
+      showMainMenu(x_offset);
       break;
   }
 }
@@ -4890,13 +4992,26 @@ void drawFileViewer() {
 
 
 void setup() {
-    // --- Optimized Boot Sequence ---
-    Serial.begin(115200);
-    setCpuFrequencyMhz(CPU_FREQ);
+    const int maxBootLines = 8;
+    const char* bootStatusLines[maxBootLines] = {
+        "> CORE SYSTEMS.....",
+        "> RENDERER.........",
+        "> POWER MGMT.......",
+        "> STORAGE..........",
+        "> AUDIO SUBSYSTEM..",
+        "> CONFIGS..........",
+        "> NETWORK..........",
+        "> BOOT COMPLETE...."
+    };
+    int currentLine = 0;
 
-    // Init Core Pins
+    // --- Init Core Systems ---
+    Serial.begin(115200);
+    setCpuFrequencyMhz(CPU_FREQ); // Start at full speed
+
+    // Init Pins
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, LOW);
+    digitalWrite(TFT_BL, LOW); // Backlight off
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(BTN_SELECT, INPUT);
     pinMode(BTN_UP, INPUT);
@@ -4904,29 +5019,28 @@ void setup() {
     pinMode(BTN_LEFT, INPUT);
     pinMode(BTN_RIGHT, INPUT);
     pinMode(BTN_BACK, INPUT);
-    pinMode(TOUCH_LEFT, INPUT);
-    pinMode(TOUCH_RIGHT, INPUT);
     pinMode(BATTERY_PIN, INPUT);
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
+    bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
+    currentLine++;
 
-    // Init TFT and show boot message immediately
+    // --- Init TFT first to show boot screen ---
     tft.init(170, 320);
     tft.setRotation(3);
     canvas.setTextWrap(false);
-    digitalWrite(TFT_BL, HIGH); // Backlight on
-
-    canvas.fillScreen(COLOR_BG);
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setTextSize(3);
-    canvas.setCursor(60, 70);
-    canvas.print("AI-POCKET S3");
+    bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
+    drawBootScreen(bootStatusLines, ++currentLine, 15);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    digitalWrite(TFT_BL, HIGH); // Backlight on right away
 
-    // --- Init other peripherals in the background ---
+    // --- Init other peripherals ---
     pixels.begin();
     pixels.setBrightness(50);
-    pixels.setPixelColor(0, pixels.Color(0, 0, 20));
+    pixels.setPixelColor(0, pixels.Color(0, 0, 20)); // Blue light for booting
     pixels.show();
+    bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 30);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Init Storage
     if (!LittleFS.begin(true)) {
@@ -4934,19 +5048,27 @@ void setup() {
     }
     if (beginSD()) {
         sdCardMounted = true;
+        bootStatusLines[currentLine] = "> STORAGE.......... [SD OK]";
     } else {
         sdCardMounted = false;
+        bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
     }
+    drawBootScreen(bootStatusLines, ++currentLine, 45);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Init Audio
     initMusicPlayer();
+    bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 60);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Load Configs
+    // --- Load Configs ---
     loadConfig();
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
     } else {
+      // NVS fallback for main config
       preferences.begin("app-config", true);
       sysConfig.ssid = preferences.getString("ssid", "");
       sysConfig.password = preferences.getString("password", "");
@@ -4956,19 +5078,40 @@ void setup() {
       myNickname = sysConfig.espnowNick;
       showFPS = sysConfig.showFPS;
     }
+    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
+    drawBootScreen(bootStatusLines, ++currentLine, 75);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Connect to WiFi (non-blocking style)
+    // --- Connect to WiFi (Shorter Timeout) ---
     String savedSSID = sysConfig.ssid;
     if (savedSSID.length() > 0) {
         WiFi.mode(WIFI_STA);
         WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
-        // Don't wait here. Let it connect in the background.
-        // We can check WiFi.status() in the loop.
-        configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
+        int attempts = 0;
+        // Wait max 2 seconds
+        while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+            delay(200);
+            attempts++;
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
+            bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
+        } else {
+            bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
+        }
+    } else {
+        bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
     }
+    drawBootScreen(bootStatusLines, ++currentLine, 90);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    pixels.setPixelColor(0, pixels.Color(0, 20, 0));
+    // --- Finalize ---
+    pixels.setPixelColor(0, pixels.Color(0, 20, 0)); // Green light for success
     pixels.show();
+    bootStatusLines[currentLine] = "> BOOT COMPLETE....";
+    drawBootScreen(bootStatusLines, ++currentLine, 100);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    delay(500); // Short delay to see the complete message
 
     // --- Go to Main State ---
     preferences.begin("app-config", true);
@@ -5008,36 +5151,20 @@ void loop() {
   if (dt > 0.1f) dt = 0.1f; // Cap dt to prevent huge jumps
   lastFrameMillis = currentMillis;
 
-  // --- Smooth Scrolling & Animation Logic ---
-  // This block handles smooth scrolling for any menu that uses drawScrollableMenu
-  bool isMenuState = (currentState == STATE_MAIN_MENU || currentState == STATE_WIFI_MENU ||
-                      currentState == STATE_SYSTEM_MENU || currentState == STATE_GAME_HUB ||
-                      currentState == STATE_HACKER_TOOLS_MENU || currentState == STATE_ESPNOW_MENU ||
-                      currentState == STATE_RACING_MODE_SELECT);
+  // Animation Logic
+  if (currentState == STATE_MAIN_MENU) {
+      menuScrollTarget = (float)menuSelection;
 
-  if (isMenuState) {
-    // Determine the target scroll position based on the selected item
-    int itemHeight = (currentState == STATE_MAIN_MENU || currentState == STATE_GAME_HUB) ? 25 : 25; // itemHeight + itemGap
-    int startY = (currentState == STATE_MAIN_MENU) ? 40 : 45;
-    int visibleItems = (SCREEN_HEIGHT - startY) / itemHeight;
+      // Lerp (Exponential Smoothing) - No bounce, stable
+      // "Tekan sekali langsung geser satu fitur dengan smooth"
+      float smoothSpeed = 15.0f;
+      float diff = menuScrollTarget - menuScrollCurrent;
 
-    float targetY = 0;
-    if (menuSelection >= visibleItems) {
-      targetY = (menuSelection - visibleItems + 1) * itemHeight;
-    }
-    menuScrollTarget = targetY;
-
-    // Lerp (smooth) the current scroll position towards the target
-    float diff = menuScrollTarget - menuScrollCurrent;
-    if (abs(diff) < 0.5f) {
-      menuScrollCurrent = menuScrollTarget;
-    } else {
-      menuScrollCurrent += diff * 15.0f * dt; // 15.0f is the smoothing factor
-    }
-  } else {
-    // Reset scroll when not in a menu to prevent glitches
-    menuScrollCurrent = 0;
-    menuScrollTarget = 0;
+      if (abs(diff) < 0.005f) {
+          menuScrollCurrent = menuScrollTarget;
+      } else {
+          menuScrollCurrent += diff * smoothSpeed * dt;
+      }
   }
 
   if (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f) {
