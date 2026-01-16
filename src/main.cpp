@@ -55,6 +55,10 @@ typedef struct {
 #define TFT_BL    14
 #define TFT_MISO  -1
 
+// ============ BATTERY & DFPLAYER PINS ============
+#define BATTERY_PIN 7
+#define DFPLAYER_BUSY_PIN 6
+
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 170
 
@@ -582,6 +586,7 @@ bool showFPS = false;
 int cachedRSSI = 0;
 String cachedTimeStr = "";
 unsigned long lastStatusBarUpdate = 0;
+int batteryPercentage = -1; // -1 indicates not yet read
 
 unsigned long lastInputTime = 0;
 String chatHistory = "";
@@ -847,6 +852,8 @@ void updateSnakeLogic();
 bool beginSD();
 void endSD();
 void initMusicPlayer();
+void updateBatteryLevel();
+void drawBatteryIcon();
 
 // ============ MUSIC PLAYER FUNCTIONS ============
 void initMusicPlayer() {
@@ -3222,6 +3229,20 @@ void ledError() {
 }
 
 // ============ STATUS BAR ============
+void updateBatteryLevel() {
+    uint32_t rawValue = analogRead(BATTERY_PIN);
+    // Dengan pembagi tegangan R1=10k, R2=10k, Vout = Vin * (R2 / (R1+R2)) = Vin / 2
+    // Jadi, Vin = Vout * 2
+    // Vout maks dari ADC adalah ~3.3V (tergantung kalibrasi), jadi Vin maks adalah ~6.6V (aman)
+    // Nilai ADC mentah (0-4095) -> Tegangan (0-3.3V). Kita asumsikan referensi ADC adalah 3.3V
+    float voltage = (rawValue / 4095.0) * 3.3 * 2.0;
+
+    // Mapping tegangan ke persentase (Contoh: 3.2V = 0%, 4.2V = 100%)
+    batteryPercentage = map(voltage * 100, 320, 420, 0, 100);
+    batteryPercentage = constrain(batteryPercentage, 0, 100);
+}
+
+
 void updateStatusBarData() {
   if (millis() - lastStatusBarUpdate > 1000) {
     lastStatusBarUpdate = millis();
@@ -3236,8 +3257,35 @@ void updateStatusBarData() {
        sprintf(timeStringBuff, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
        cachedTimeStr = String(timeStringBuff);
     }
+    updateBatteryLevel();
   }
 }
+
+void drawBatteryIcon() {
+    int x = SCREEN_WIDTH - 30;
+    int y = 2;
+    int w = 22;
+    int h = 10;
+
+    canvas.drawRect(x, y, w, h, COLOR_DIM);
+    canvas.fillRect(x + w, y + 2, 2, h - 4, COLOR_DIM);
+
+    if (batteryPercentage == -1) return;
+
+    int fillW = map(batteryPercentage, 0, 100, 0, w - 2);
+
+    uint16_t battColor = COLOR_SUCCESS;
+    if (batteryPercentage < 20) {
+        battColor = COLOR_ERROR;
+    } else if (batteryPercentage < 50) {
+        battColor = COLOR_WARN;
+    }
+
+    if (fillW > 0) {
+      canvas.fillRect(x + 1, y + 1, fillW, h - 2, battColor);
+    }
+}
+
 
 void drawStatusBar() {
   canvas.setTextColor(COLOR_PRIMARY);
@@ -3271,7 +3319,7 @@ void drawStatusBar() {
 
     String fpsStr = String(perfFPS);
     int textWidth = (fpsStr.length() + 4) * 6; // "XXX FPS"
-    int panelX = SCREEN_WIDTH - 35 - textWidth;
+    int panelX = SCREEN_WIDTH - 65 - textWidth;
 
     canvas.fillRoundRect(panelX, 0, textWidth, 12, 3, COLOR_PANEL);
     canvas.drawRoundRect(panelX, 0, textWidth, 12, 3, COLOR_BORDER);
@@ -3284,13 +3332,15 @@ void drawStatusBar() {
     canvas.print(" FPS");
   }
 
+  drawBatteryIcon();
+
   if (WiFi.status() == WL_CONNECTED) {
     int bars = 0;
     if (cachedRSSI > -55) bars = 4;
     else if (cachedRSSI > -65) bars = 3;
     else if (cachedRSSI > -75) bars = 2;
     else if (cachedRSSI > -85) bars = 1;
-    int x = SCREEN_WIDTH - 25;
+    int x = SCREEN_WIDTH - 60;
     int y = 8;
     for (int i = 0; i < 4; i++) {
       int h = (i + 1) * 2;
@@ -4933,6 +4983,8 @@ void setup() {
   pinMode(TOUCH_LEFT, INPUT);
   pinMode(TOUCH_RIGHT, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(BATTERY_PIN, INPUT);
+  pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
   Serial.println("✓ Buttons Initialized");
 
   // ============ 3. NEOPIXEL INIT ============
@@ -5223,6 +5275,10 @@ void loop() {
 
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
+
+    if (currentState == STATE_MUSIC_PLAYER) {
+      musicIsPlaying = (digitalRead(DFPLAYER_BUSY_PIN) == LOW);
+    }
 
     if (currentState == STATE_GAME_PONG) {
       float paddleSpeed = 250.0f * dt;
