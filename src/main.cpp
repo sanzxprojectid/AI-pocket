@@ -4998,24 +4998,24 @@ void setup() {
     const int maxBootLines = 8;
     const char* bootStatusLines[maxBootLines] = {
         "> CORE SYSTEMS.....",
-        "> POWER MGMT.......",
         "> RENDERER.........",
+        "> POWER MGMT.......",
         "> STORAGE..........",
         "> AUDIO SUBSYSTEM..",
-        "> NETWORK..........",
         "> CONFIGS..........",
+        "> NETWORK..........",
         "> BOOT COMPLETE...."
     };
     int currentLine = 0;
 
-    // ============ PHASE 1: MINIMAL POWER ============
-    setCpuFrequencyMhz(80);
+    // --- Init Core Systems ---
     Serial.begin(115200);
-    delay(100);
+    setCpuFrequencyMhz(CPU_FREQ); // Start at full speed
+
+    // Init Pins
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, LOW);
+    digitalWrite(TFT_BL, LOW); // Backlight off
     pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, LOW);
     pinMode(BTN_SELECT, INPUT);
     pinMode(BTN_UP, INPUT);
     pinMode(BTN_DOWN, INPUT);
@@ -5026,85 +5026,48 @@ void setup() {
     pinMode(TOUCH_RIGHT, INPUT);
     pinMode(BATTERY_PIN, INPUT);
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
-    Serial.println("\n=== PHASE 1: Core Init (Low Power) ===");
     bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 5);
+    currentLine++;
 
-    // ============ PHASE 2: POWER & NEOPIXEL ============
-    pixels.begin();
-    pixels.setBrightness(10);
-    pixels.setPixelColor(0, pixels.Color(10, 0, 10));
-    pixels.show();
-    delay(100);
-    Serial.println("✓ NeoPixel: LOW POWER MODE");
-    bootStatusLines[currentLine] = "> POWER MGMT....... [STABLE]";
-    drawBootScreen(bootStatusLines, ++currentLine, 10);
-
-    // ============ PHASE 3: TFT & RENDERER ============
-    // SPI.begin() tidak lagi diperlukan di sini karena TFT menggunakan Software SPI
+    // --- Init TFT first to show boot screen ---
     tft.init(170, 320);
     tft.setRotation(3);
-
     canvas.setTextWrap(false);
-    if (!LittleFS.begin(true)) Serial.println("⚠ LittleFS Mount Failed");
-    else Serial.println("✓ LittleFS Mounted");
     bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
     drawBootScreen(bootStatusLines, ++currentLine, 15);
+    digitalWrite(TFT_BL, HIGH); // Backlight on right away
 
-    // Gradual backlight ramp
-    for(int i=0; i<=255; i+=5) {
-        analogWrite(TFT_BL, i);
-        delay(2);
+    // --- Init other peripherals ---
+    pixels.begin();
+    pixels.setBrightness(50);
+    pixels.setPixelColor(0, pixels.Color(0, 0, 20)); // Blue light for booting
+    pixels.show();
+    bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 30);
+
+    // Init Storage
+    if (!LittleFS.begin(true)) {
+      Serial.println("⚠ LittleFS Mount Failed");
     }
-    digitalWrite(TFT_BL, HIGH);
-    Serial.println("✓ TFT: Backlight ramped up");
-    delay(100);
-    drawBootScreen(bootStatusLines, currentLine, 20);
-
-    // ============ PHASE 4: STORAGE ============
-    Serial.println("\n=== PHASE 4: SD Card Init ===");
     if (beginSD()) {
         sdCardMounted = true;
-        Serial.println("✓ SD Card OK");
-        bootStatusLines[currentLine] = "> STORAGE.......... [OK]";
-        drawBootScreen(bootStatusLines, ++currentLine, 35);
-        endSD();
-        delay(100);
+        bootStatusLines[currentLine] = "> STORAGE.......... [SD OK]";
     } else {
         sdCardMounted = false;
-        Serial.println("⚠ SD Card: Not found - Using NVS fallback");
-        bootStatusLines[currentLine] = "> STORAGE.......... [NO SD, NVS OK]";
-        drawBootScreen(bootStatusLines, ++currentLine, 35);
+        bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
     }
+    drawBootScreen(bootStatusLines, ++currentLine, 45);
 
-    // ============ PHASE 5: AUDIO ============
-    Serial.println("\n=== PHASE 5: DFPlayer Init ===");
-    setCpuFrequencyMhz(80);
-    Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
-    delay(200);
-    if (myDFPlayer.begin(Serial2, false)) { // No feedback
-        musicVol = preferences.getInt("musicVol", 10);
-        myDFPlayer.volume(musicVol);
-        totalTracks = myDFPlayer.readFileCounts();
-        Serial.printf("✓ DFPlayer: %d tracks\n", totalTracks);
-        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
-        drawBootScreen(bootStatusLines, ++currentLine, 50);
-    } else {
-        Serial.println("⚠ DFPlayer: Failed");
-        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [FAIL]";
-        drawBootScreen(bootStatusLines, ++currentLine, 50);
-    }
-    delay(100);
+    // Init Audio
+    initMusicPlayer();
+    bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 60);
 
-    // ============ PHASE 6: CPU & CONFIGS ============
-    setCpuFrequencyMhz(CPU_FREQ);
-    Serial.printf("✓ CPU: %d MHz\n", getCpuFrequencyMhz());
-
-    // Load configurations now that storage is confirmed
+    // --- Load Configs ---
+    loadConfig();
     if (sdCardMounted) {
-      loadApiKeys();
-      loadConfig();
-      if(initSDChatFolder()) loadChatHistoryFromSD();
+        loadApiKeys();
+        loadChatHistoryFromSD();
     } else {
       // NVS fallback for main config
       preferences.begin("app-config", true);
@@ -5117,53 +5080,38 @@ void setup() {
       showFPS = sysConfig.showFPS;
     }
     bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
-    drawBootScreen(bootStatusLines, ++currentLine, 65);
+    drawBootScreen(bootStatusLines, ++currentLine, 75);
 
-    // ============ PHASE 7: NETWORK ============
+    // --- Connect to WiFi (Shorter Timeout) ---
     String savedSSID = sysConfig.ssid;
     if (savedSSID.length() > 0) {
-        Serial.println("\n=== PHASE 7: WiFi Connect ===");
         WiFi.mode(WIFI_STA);
         WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
         int attempts = 0;
-        while(WiFi.status() != WL_CONNECTED && attempts < 20) { // Back to 20 attempts * 500ms = 10s timeout
-            delay(500);
-            // Update progress bar smoothly during wait
-            drawBootScreen(bootStatusLines, currentLine, 65 + attempts); // 65% to 85% progress
+        // Wait max 2 seconds
+        while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+            delay(200);
             attempts++;
         }
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("✓ WiFi: Connected");
             configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
             bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
-            drawBootScreen(bootStatusLines, ++currentLine, 85);
         } else {
-            Serial.println("⚠ WiFi: Failed");
-            bootStatusLines[currentLine] = "> NETWORK.......... [FAIL]";
-            drawBootScreen(bootStatusLines, ++currentLine, 85);
+            bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
         }
     } else {
-        Serial.println("=== PHASE 7: WiFi Skipped ===");
         bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
-        drawBootScreen(bootStatusLines, ++currentLine, 85);
     }
-    delay(500);
+    drawBootScreen(bootStatusLines, ++currentLine, 90);
 
-    // ============ PHASE 8: FINALIZING ============
-    pixels.setBrightness(50);
-    pixels.setPixelColor(0, pixels.Color(0, 50, 0));
+    // --- Finalize ---
+    pixels.setPixelColor(0, pixels.Color(0, 20, 0)); // Green light for success
     pixels.show();
-
     bootStatusLines[currentLine] = "> BOOT COMPLETE....";
     drawBootScreen(bootStatusLines, ++currentLine, 100);
+    delay(500); // Short delay to see the complete message
 
-    ledSuccess();
-    delay(1200);
-
-    Serial.println("\n========================================");
-    Serial.println("===   BOOT COMPLETE - LOW POWER    ===");
-    Serial.println("========================================\n");
-
+    // --- Go to Main State ---
     preferences.begin("app-config", true);
     pinLockEnabled = preferences.getBool("pinLock", false);
     currentPin = preferences.getString("pinCode", "1234");
