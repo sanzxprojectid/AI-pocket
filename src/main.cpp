@@ -62,7 +62,8 @@ typedef struct {
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 170
 
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+// Gunakan Software SPI untuk TFT agar tidak konflik dengan SD Card
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 
 // ============ NEOPIXEL ============
@@ -1044,8 +1045,7 @@ bool beginSD() {
 
 void endSD() {
   SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
-  SPI.setFrequency(40000000);
+  // Tidak perlu menginisialisasi ulang SPI untuk TFT karena sekarang menggunakan Software SPI
 }
 
 void loadApiKeys() {
@@ -5041,10 +5041,10 @@ void setup() {
     drawBootScreen(bootStatusLines, ++currentLine, 10);
 
     // ============ PHASE 3: TFT & RENDERER ============
-    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
-    SPI.setFrequency(20000000);
+    // SPI.begin() tidak lagi diperlukan di sini karena TFT menggunakan Software SPI
     tft.init(170, 320);
     tft.setRotation(3);
+
     canvas.setTextWrap(false);
     if (!LittleFS.begin(true)) Serial.println("⚠ LittleFS Mount Failed");
     else Serial.println("✓ LittleFS Mounted");
