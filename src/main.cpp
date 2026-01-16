@@ -5008,12 +5008,12 @@ void setup() {
     };
     int currentLine = 0;
 
-    // ============ PHASE 1: MINIMAL POWER ============
+    // ============ PHASE 1: CORE & POWER INIT (NO DISPLAY YET) ============
     setCpuFrequencyMhz(80);
     Serial.begin(115200);
     delay(100);
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, LOW);
+    digitalWrite(TFT_BL, LOW); // Backlight OFF
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
     pinMode(BTN_SELECT, INPUT);
@@ -5026,21 +5026,14 @@ void setup() {
     pinMode(TOUCH_RIGHT, INPUT);
     pinMode(BATTERY_PIN, INPUT);
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
-    Serial.println("\n=== PHASE 1: Core Init (Low Power) ===");
-    bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 5);
 
-    // ============ PHASE 2: POWER & NEOPIXEL ============
     pixels.begin();
     pixels.setBrightness(10);
     pixels.setPixelColor(0, pixels.Color(10, 0, 10));
     pixels.show();
-    delay(100);
-    Serial.println("✓ NeoPixel: LOW POWER MODE");
-    bootStatusLines[currentLine] = "> POWER MGMT....... [STABLE]";
-    drawBootScreen(bootStatusLines, ++currentLine, 10);
+    Serial.println("\n=== PHASE 1: Core Init & Power (Low Power) ===");
 
-    // ============ PHASE 3: TFT & RENDERER ============
+    // ============ PHASE 2: DISPLAY DRIVER INIT (BACKLIGHT STILL OFF) ============
     SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
     SPI.setFrequency(20000000);
     tft.init(170, 320);
@@ -5048,10 +5041,18 @@ void setup() {
     canvas.setTextWrap(false);
     if (!LittleFS.begin(true)) Serial.println("⚠ LittleFS Mount Failed");
     else Serial.println("✓ LittleFS Mounted");
-    bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
-    drawBootScreen(bootStatusLines, ++currentLine, 15);
+    Serial.println("✓ TFT driver initialized");
 
-    // Gradual backlight ramp
+    // ============ PHASE 3: FIRST RENDER & BACKLIGHT RAMP ============
+    // Now it is safe to draw for the first time
+    bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 5);
+    bootStatusLines[currentLine] = "> POWER MGMT....... [STABLE]";
+    drawBootScreen(bootStatusLines, ++currentLine, 10);
+    bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
+    drawBootScreen(bootStatusLines, ++currentLine, 20);
+
+    // Now turn on backlight to reveal the rendered screen
     for(int i=0; i<=255; i+=5) {
         analogWrite(TFT_BL, i);
         delay(2);
@@ -5059,7 +5060,6 @@ void setup() {
     digitalWrite(TFT_BL, HIGH);
     Serial.println("✓ TFT: Backlight ramped up");
     delay(100);
-    drawBootScreen(bootStatusLines, currentLine, 20);
 
     // ============ PHASE 4: STORAGE ============
     Serial.println("\n=== PHASE 4: SD Card Init ===");
