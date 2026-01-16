@@ -1036,10 +1036,9 @@ bool beginSD() {
   if (SD.begin(SDCARD_CS)) {
     return true;
   }
-  // If begin fails, revert SPI for TFT
+  // If begin fails, just end this SPI session and return false.
+  // DO NOT reconfigure for TFT, as it uses Software SPI.
   SPI.end();
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
-  SPI.setFrequency(40000000);
   return false;
 }
 
