@@ -613,6 +613,23 @@ int totalTracks = 0;
 int currentTrackIdx = 1;
 bool musicIsPlaying = false;
 unsigned long visualizerMillis = 0;
+unsigned long lastVolumeChangeMillis = 0;
+
+// New state variables for enhanced music player
+enum MusicLoopMode { LOOP_NONE, LOOP_ALL, LOOP_ONE };
+MusicLoopMode musicLoopMode = LOOP_NONE;
+const char* eqModeNames[] = {"Normal", "Pop", "Rock", "Jazz", "Classic", "Bass"};
+uint8_t musicEQMode = DFPLAYER_EQ_NORMAL; // Corresponds to library defines
+bool musicIsShuffled = false;
+
+// Long press state variables for music player
+unsigned long btnLeftPressTime = 0;
+unsigned long btnRightPressTime = 0;
+unsigned long btnSelectPressTime = 0;
+bool btnLeftLongPressTriggered = false;
+bool btnRightLongPressTriggered = false;
+bool btnSelectLongPressTriggered = false;
+const unsigned long longPressDuration = 700; // 700ms
 
 bool sdCardMounted = false;
 String bb_kurir  = "jne";
@@ -830,7 +847,6 @@ void updateSnakeLogic();
 bool beginSD();
 void endSD();
 void initMusicPlayer();
-void handleMusicInput();
 
 // ============ MUSIC PLAYER FUNCTIONS ============
 void initMusicPlayer() {
@@ -865,7 +881,7 @@ void drawMusicPlayer() {
     canvas.setTextColor(COLOR_PRIMARY);
     canvas.setTextSize(2);
     canvas.setCursor(30, 45);
-    canvas.printf("SONG: %03d", currentTrackIdx);
+    canvas.printf("Track: %03d/%03d", currentTrackIdx, totalTracks);
 
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_DIM);
@@ -874,10 +890,34 @@ void drawMusicPlayer() {
     canvas.setTextColor(musicIsPlaying ? COLOR_ACCENT : COLOR_DIM);
     canvas.print(musicIsPlaying ? "PLAYING" : "PAUSED");
 
+    // Display EQ and Loop Mode
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(30, 85);
+    canvas.print("EQ: ");
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.print(eqModeNames[musicEQMode]);
+
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(150, 85);
+    canvas.print("MODE: ");
+    canvas.setTextColor(COLOR_PRIMARY);
+    if (musicIsShuffled) {
+        canvas.print("Shuffle");
+    } else {
+        switch (musicLoopMode) {
+            case LOOP_ALL: canvas.print("Loop All"); break;
+            case LOOP_ONE: canvas.print("Loop One"); break;
+            default: canvas.print("Normal"); break;
+        }
+    }
+
     // --- Visualizer UX (Bar Animasi) ---
     if (musicIsPlaying) {
+        // More structured "breathing" sine wave animation
+        unsigned long currentTime = millis();
         for (int i = 0; i < 16; i++) {
-            int h = random(5, 40); // Efek visualizer acak
+            float sineValue = sin(currentTime * 0.005f + i * 0.5f); // Adjust frequency and phase
+            int h = map(sineValue, -1, 1, 5, 35); // Map sine output to height
             canvas.fillRect(25 + (i * 14), 118 - h, 8, h, COLOR_ACCENT);
         }
     } else {
@@ -904,58 +944,10 @@ void drawMusicPlayer() {
     canvas.fillRect(0, SCREEN_HEIGHT - 22, SCREEN_WIDTH, 22, COLOR_PANEL);
     canvas.setTextColor(COLOR_DIM);
     canvas.setCursor(8, SCREEN_HEIGHT - 16);
-    canvas.print("U/D: Vol | L/R: Track | SEL: P/S | BACK: Exit");
+    canvas.print("U/D:Vol | L/R(hold):EQ/Mode | SEL(hold):Shuffle");
 
     // Kirim Buffer ke Layar
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-}
-
-// --- 4. FUNGSI LOGIC INPUT (Pasang di Loop) ---
-void handleMusicInput() {
-    // Navigasi Lagu (Left/Right)
-    if (digitalRead(BTN_RIGHT) == BTN_ACT) {
-        myDFPlayer.next();
-        if (currentTrackIdx < totalTracks) currentTrackIdx++;
-        else currentTrackIdx = 1;
-        musicIsPlaying = true;
-        delay(200);
-    }
-    if (digitalRead(BTN_LEFT) == BTN_ACT) {
-        myDFPlayer.previous();
-        if (currentTrackIdx > 1) currentTrackIdx--;
-        else currentTrackIdx = totalTracks;
-        musicIsPlaying = true;
-        delay(200);
-    }
-
-    // Kontrol Volume (Up/Down)
-    if (digitalRead(BTN_UP) == BTN_ACT) {
-        if (musicVol < 30) {
-            musicVol++;
-            myDFPlayer.volume(musicVol);
-            preferences.putInt("musicVol", musicVol); // Simpan permanen
-        }
-        delay(80);
-    }
-    if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        if (musicVol > 0) {
-            musicVol--;
-            myDFPlayer.volume(musicVol);
-            preferences.putInt("musicVol", musicVol); // Simpan permanen
-        }
-        delay(80);
-    }
-
-    // Play/Pause (Select)
-    if (digitalRead(BTN_SELECT) == BTN_ACT) {
-        if (musicIsPlaying) {
-            myDFPlayer.pause();
-        } else {
-            myDFPlayer.start();
-        }
-        musicIsPlaying = !musicIsPlaying;
-        delay(300);
-    }
 }
 
 float custom_lerp(float a, float b, float f) {
@@ -5254,9 +5246,120 @@ void loop() {
         changeState(STATE_GAME_HUB);
       }
     }
-     else if (currentState == STATE_MUSIC_PLAYER) {
-      handleMusicInput();
-       if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    else if (currentState == STATE_MUSIC_PLAYER) {
+      // Music player input handling with long press
+      unsigned long now = millis();
+
+      // BTN_LEFT
+      if (digitalRead(BTN_LEFT) == BTN_ACT) {
+        if (btnLeftPressTime == 0) {
+          btnLeftPressTime = now;
+        } else if (!btnLeftLongPressTriggered && (now - btnLeftPressTime > longPressDuration)) {
+          btnLeftLongPressTriggered = true;
+          // LONG PRESS ACTION: Cycle EQ
+          musicEQMode = (musicEQMode + 1) % 6; // 6 EQ modes
+          myDFPlayer.EQ(musicEQMode);
+          showStatus(String("EQ: ") + eqModeNames[musicEQMode], 800);
+        }
+      } else {
+        if (btnLeftPressTime > 0 && !btnLeftLongPressTriggered) {
+          // SHORT PRESS ACTION: Previous Track
+          myDFPlayer.previous();
+          if (currentTrackIdx > 1) currentTrackIdx--;
+          else currentTrackIdx = totalTracks;
+          musicIsPlaying = true;
+        }
+        btnLeftPressTime = 0;
+        btnLeftLongPressTriggered = false;
+      }
+
+      // BTN_RIGHT
+      if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+        if (btnRightPressTime == 0) {
+          btnRightPressTime = now;
+        } else if (!btnRightLongPressTriggered && (now - btnRightPressTime > longPressDuration)) {
+          btnRightLongPressTriggered = true;
+          // LONG PRESS ACTION: Cycle Loop Mode
+          musicLoopMode = (MusicLoopMode)(((int)musicLoopMode + 1) % 3);
+          switch (musicLoopMode) {
+            case LOOP_ALL:
+              myDFPlayer.enableLoopAll();
+              showStatus("Loop All", 800);
+              break;
+            case LOOP_ONE:
+              myDFPlayer.enableLoop();
+              showStatus("Loop One", 800);
+              break;
+            case LOOP_NONE:
+              myDFPlayer.disableLoop();
+              showStatus("Loop Off", 800);
+              break;
+          }
+        }
+      } else {
+        if (btnRightPressTime > 0 && !btnRightLongPressTriggered) {
+          // SHORT PRESS ACTION: Next Track
+          myDFPlayer.next();
+          if (currentTrackIdx < totalTracks) currentTrackIdx++;
+          else currentTrackIdx = 1;
+          musicIsPlaying = true;
+        }
+        btnRightPressTime = 0;
+        btnRightLongPressTriggered = false;
+      }
+
+      // BTN_SELECT
+      if (digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (btnSelectPressTime == 0) {
+          btnSelectPressTime = now;
+        } else if (!btnSelectLongPressTriggered && (now - btnSelectPressTime > longPressDuration)) {
+          btnSelectLongPressTriggered = true;
+          // LONG PRESS ACTION: Toggle Shuffle
+          musicIsShuffled = !musicIsShuffled;
+          if (musicIsShuffled) {
+            myDFPlayer.randomAll();
+            showStatus("Shuffle On", 800);
+          } else {
+            // To exit shuffle, we can just go back to normal playback.
+            // Let's assume normal is looping all tracks.
+            myDFPlayer.enableLoopAll();
+            musicLoopMode = LOOP_ALL;
+            showStatus("Shuffle Off", 800);
+          }
+        }
+      } else {
+        if (btnSelectPressTime > 0 && !btnSelectLongPressTriggered) {
+          // SHORT PRESS ACTION: Play/Pause
+          if (musicIsPlaying) myDFPlayer.pause();
+          else myDFPlayer.start();
+          musicIsPlaying = !musicIsPlaying;
+        }
+        btnSelectPressTime = 0;
+        btnSelectLongPressTriggered = false;
+      }
+
+      // Volume controls (non-blocking)
+      if (now - lastVolumeChangeMillis > 80) { // Rate limit volume changes
+        if (digitalRead(BTN_UP) == BTN_ACT) {
+          if (musicVol < 30) {
+              musicVol++;
+              myDFPlayer.volume(musicVol);
+              preferences.putInt("musicVol", musicVol);
+              lastVolumeChangeMillis = now;
+          }
+        }
+        if (digitalRead(BTN_DOWN) == BTN_ACT) {
+          if (musicVol > 0) {
+              musicVol--;
+              myDFPlayer.volume(musicVol);
+              preferences.putInt("musicVol", musicVol);
+              lastVolumeChangeMillis = now;
+          }
+        }
+      }
+
+      // Exit
+      if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
         myDFPlayer.stop();
         musicIsPlaying = false;
         changeState(STATE_MAIN_MENU);
