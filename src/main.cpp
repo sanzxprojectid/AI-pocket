@@ -854,6 +854,41 @@ void endSD();
 void initMusicPlayer();
 void updateBatteryLevel();
 void drawBatteryIcon();
+void drawBootScreen(const char* lines[], int lineCount, int progress);
+
+// ============ BOOT SCREEN FUNCTION ============
+void drawBootScreen(const char* lines[], int lineCount, int progress) {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_GREEN);
+  tft.setTextSize(1);
+
+  // Header
+  tft.setCursor(10, 10);
+  tft.print("AI-POCKET S3 // v2.2");
+  tft.drawFastHLine(10, 22, SCREEN_WIDTH - 20, ST77XX_GREEN);
+
+  // Status Lines
+  int y = 35;
+  for (int i = 0; i < lineCount; i++) {
+    tft.setCursor(10, y);
+    tft.print(lines[i]);
+    y += 12;
+  }
+
+  // Progress Bar
+  int barY = SCREEN_HEIGHT - 30;
+  int barWidth = SCREEN_WIDTH - 40;
+  int barProgress = map(progress, 0, 100, 0, barWidth);
+
+  tft.drawRect(20, barY, barWidth, 15, ST77XX_GREEN);
+  tft.fillRect(22, barY + 2, barProgress - 4, 11, ST77XX_GREEN);
+
+  String progressText = String(progress) + "%";
+  tft.setCursor(SCREEN_WIDTH / 2 - 10, barY + 4);
+  tft.setTextColor(ST77XX_BLACK);
+  tft.print(progressText);
+  tft.setTextColor(ST77XX_GREEN);
+}
 
 // ============ MUSIC PLAYER FUNCTIONS ============
 void initMusicPlayer() {
@@ -4960,287 +4995,193 @@ void drawFileViewer() {
 
 
 void setup() {
-  // ============ PHASE 1: MINIMAL POWER ============
-  setCpuFrequencyMhz(80); // Turunin dulu CPU
+    const int maxBootLines = 8;
+    const char* bootStatusLines[maxBootLines] = {
+        "> CORE SYSTEMS.....",
+        "> POWER MGMT.......",
+        "> RENDERER.........",
+        "> STORAGE..........",
+        "> AUDIO SUBSYSTEM..",
+        "> NETWORK..........",
+        "> CONFIGS..........",
+        "> BOOT COMPLETE...."
+    };
+    int currentLine = 0;
 
-  Serial.begin(115200);
-  delay(500); // Stabilize
-
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, LOW); // BACKLIGHT OFF DULU!
-
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
-
-  // Init buttons (low power)
-  pinMode(BTN_SELECT, INPUT);
-  pinMode(BTN_UP, INPUT);
-  pinMode(BTN_DOWN, INPUT);
-  pinMode(BTN_LEFT, INPUT);
-  pinMode(BTN_RIGHT, INPUT);
-  pinMode(BTN_BACK, INPUT);
-  pinMode(TOUCH_LEFT, INPUT);
-  pinMode(TOUCH_RIGHT, INPUT);
-  pinMode(BATTERY_PIN, INPUT);
-  pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
-
-  Serial.println("\n=== PHASE 1: Core Init (Low Power) ===");
-
-  // ============ PHASE 2: NeoPixel LOW BRIGHTNESS ============
-  pixels.begin();
-  pixels.setBrightness(10); // RENDAH DULU! (was 255)
-  pixels.setPixelColor(0, pixels.Color(10, 0, 10)); // Dim purple
-  pixels.show();
-  delay(300);
-
-  Serial.println("✓ NeoPixel: LOW POWER MODE");
-
-  // ============ PHASE 3: TFT INIT (NO BACKLIGHT YET) ============
-  SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
-  SPI.setFrequency(20000000); // TURUNIN dari 40MHz
-
-  tft.init(170, 320);
-  tft.setRotation(3);
-  tft.fillScreen(ST77XX_BLACK); // Black = low power
-
-  Serial.println("✓ TFT: Init without backlight");
-  delay(200);
-
-  // ============ PHASE 4: GRADUAL BACKLIGHT ============
-  for(int i=0; i<=255; i+=5) {
-    analogWrite(TFT_BL, i);
-    delay(10); // Smooth ramp
-  }
-  digitalWrite(TFT_BL, HIGH);
-
-  Serial.println("✓ TFT: Backlight ramped up");
-
-  // ============ CANVAS & FS INIT ============
-  canvas.setTextWrap(false);
-  if (!LittleFS.begin(true)) {
-    Serial.println("⚠ LittleFS Mount Failed");
-  } else {
-    Serial.println("✓ LittleFS Mounted");
-  }
-
-  // ============ PHASE 5: SHOW BOOT SCREEN ============
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(50, 60);
-  tft.println("BOOTING...");
-  tft.setTextSize(1);
-  tft.setCursor(70, 90);
-  tft.println("Please wait");
-  delay(800);
-
-  // ============ PHASE 6: SD CARD (BURST POWER) ============
-  Serial.println("\n=== PHASE 6: SD Card Init ===");
-
-  // Warn user jika ada visual
-  tft.setCursor(50, 110);
-  tft.println("Init SD Card...");
-
-  if(beginSD()) {
-    sdCardMounted = true;
-    Serial.println("✓ SD Card OK");
-    tft.setCursor(50, 125);
-    tft.setTextColor(ST77XX_GREEN);
-    tft.println("SD: OK");
-
-    // Load configs (quick reads)
-    loadApiKeys();
-    delay(100); // Settle time
-
-    loadConfig();
+    // ============ PHASE 1: MINIMAL POWER ============
+    setCpuFrequencyMhz(80);
+    Serial.begin(115200);
     delay(100);
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, LOW);
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+    pinMode(BTN_SELECT, INPUT);
+    pinMode(BTN_UP, INPUT);
+    pinMode(BTN_DOWN, INPUT);
+    pinMode(BTN_LEFT, INPUT);
+    pinMode(BTN_RIGHT, INPUT);
+    pinMode(BTN_BACK, INPUT);
+    pinMode(TOUCH_LEFT, INPUT);
+    pinMode(TOUCH_RIGHT, INPUT);
+    pinMode(BATTERY_PIN, INPUT);
+    pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
+    Serial.println("\n=== PHASE 1: Core Init (Low Power) ===");
+    bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 5);
 
-    if(initSDChatFolder()) {
-      loadChatHistoryFromSD();
+    // ============ PHASE 2: POWER & NEOPIXEL ============
+    pixels.begin();
+    pixels.setBrightness(10);
+    pixels.setPixelColor(0, pixels.Color(10, 0, 10));
+    pixels.show();
+    delay(100);
+    Serial.println("✓ NeoPixel: LOW POWER MODE");
+    bootStatusLines[currentLine] = "> POWER MGMT....... [STABLE]";
+    drawBootScreen(bootStatusLines, ++currentLine, 10);
+
+    // ============ PHASE 3: TFT & RENDERER ============
+    SPI.begin(TFT_SCLK, TFT_MISO, TFT_MOSI, -1);
+    SPI.setFrequency(20000000);
+    tft.init(170, 320);
+    tft.setRotation(3);
+    canvas.setTextWrap(false);
+    if (!LittleFS.begin(true)) Serial.println("⚠ LittleFS Mount Failed");
+    else Serial.println("✓ LittleFS Mounted");
+    bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
+    drawBootScreen(bootStatusLines, ++currentLine, 15);
+
+    // Gradual backlight ramp
+    for(int i=0; i<=255; i+=5) {
+        analogWrite(TFT_BL, i);
+        delay(2);
+    }
+    digitalWrite(TFT_BL, HIGH);
+    Serial.println("✓ TFT: Backlight ramped up");
+    delay(100);
+    drawBootScreen(bootStatusLines, currentLine, 20);
+
+    // ============ PHASE 4: STORAGE ============
+    Serial.println("\n=== PHASE 4: SD Card Init ===");
+    if (beginSD()) {
+        sdCardMounted = true;
+        Serial.println("✓ SD Card OK");
+        bootStatusLines[currentLine] = "> STORAGE.......... [OK]";
+        drawBootScreen(bootStatusLines, ++currentLine, 35);
+        endSD();
+        delay(100);
+    } else {
+        sdCardMounted = false;
+        Serial.println("⚠ SD Card: Not found - Using NVS fallback");
+        bootStatusLines[currentLine] = "> STORAGE.......... [NO SD, NVS OK]";
+        drawBootScreen(bootStatusLines, ++currentLine, 35);
     }
 
-    endSD();
-    delay(200); // Important! Let SD settle
+    // ============ PHASE 5: AUDIO ============
+    Serial.println("\n=== PHASE 5: DFPlayer Init ===");
+    setCpuFrequencyMhz(80);
+    Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
+    delay(200);
+    if (myDFPlayer.begin(Serial2, false)) { // No feedback
+        musicVol = preferences.getInt("musicVol", 10);
+        myDFPlayer.volume(musicVol);
+        totalTracks = myDFPlayer.readFileCounts();
+        Serial.printf("✓ DFPlayer: %d tracks\n", totalTracks);
+        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
+        drawBootScreen(bootStatusLines, ++currentLine, 50);
+    } else {
+        Serial.println("⚠ DFPlayer: Failed");
+        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [FAIL]";
+        drawBootScreen(bootStatusLines, ++currentLine, 50);
+    }
+    delay(100);
 
-  } else {
-    sdCardMounted = false;
-    Serial.println("⚠ SD Card: Not found - Using NVS fallback");
-    tft.setCursor(50, 125);
-    tft.setTextColor(ST77XX_YELLOW);
-    tft.println("SD: SKIP");
+    // ============ PHASE 6: CPU & CONFIGS ============
+    setCpuFrequencyMhz(CPU_FREQ);
+    Serial.printf("✓ CPU: %d MHz\n", getCpuFrequencyMhz());
+
+    // Load configurations now that storage is confirmed
+    if (sdCardMounted) {
+      loadApiKeys();
+      loadConfig();
+      if(initSDChatFolder()) loadChatHistoryFromSD();
+    } else {
+      // NVS fallback for main config
+      preferences.begin("app-config", true);
+      sysConfig.ssid = preferences.getString("ssid", "");
+      sysConfig.password = preferences.getString("password", "");
+      sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
+      sysConfig.showFPS = preferences.getBool("showFPS", false);
+      preferences.end();
+      myNickname = sysConfig.espnowNick;
+      showFPS = sysConfig.showFPS;
+    }
+    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
+    drawBootScreen(bootStatusLines, ++currentLine, 65);
+
+    // ============ PHASE 7: NETWORK ============
+    String savedSSID = sysConfig.ssid;
+    if (savedSSID.length() > 0) {
+        Serial.println("\n=== PHASE 7: WiFi Connect ===");
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
+        int attempts = 0;
+        while(WiFi.status() != WL_CONNECTED && attempts < 20) { // Back to 20 attempts * 500ms = 10s timeout
+            delay(500);
+            // Update progress bar smoothly during wait
+            drawBootScreen(bootStatusLines, currentLine, 65 + attempts); // 65% to 85% progress
+            attempts++;
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("✓ WiFi: Connected");
+            configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
+            bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
+            drawBootScreen(bootStatusLines, ++currentLine, 85);
+        } else {
+            Serial.println("⚠ WiFi: Failed");
+            bootStatusLines[currentLine] = "> NETWORK.......... [FAIL]";
+            drawBootScreen(bootStatusLines, ++currentLine, 85);
+        }
+    } else {
+        Serial.println("=== PHASE 7: WiFi Skipped ===");
+        bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
+        drawBootScreen(bootStatusLines, ++currentLine, 85);
+    }
     delay(500);
 
-    // Load config from NVS as fallback
+    // ============ PHASE 8: FINALIZING ============
+    pixels.setBrightness(50);
+    pixels.setPixelColor(0, pixels.Color(0, 50, 0));
+    pixels.show();
+
+    bootStatusLines[currentLine] = "> BOOT COMPLETE....";
+    drawBootScreen(bootStatusLines, ++currentLine, 100);
+
+    ledSuccess();
+    delay(1200);
+
+    Serial.println("\n========================================");
+    Serial.println("===   BOOT COMPLETE - LOW POWER    ===");
+    Serial.println("========================================\n");
+
     preferences.begin("app-config", true);
-    sysConfig.ssid = preferences.getString("ssid", "");
-    sysConfig.password = preferences.getString("password", "");
-    sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
-    sysConfig.showFPS = preferences.getBool("showFPS", false);
+    pinLockEnabled = preferences.getBool("pinLock", false);
+    currentPin = preferences.getString("pinCode", "1234");
     preferences.end();
 
-    myNickname = sysConfig.espnowNick;
-    showFPS = sysConfig.showFPS;
-  }
-
-  // ============ PHASE 7: DFPLAYER (BIG CONSUMER!) ============
-  Serial.println("\n=== PHASE 7: DFPlayer Init ===");
-  tft.setCursor(50, 140);
-  tft.setTextColor(ST77XX_CYAN);
-  tft.println("Init Audio...");
-
-  // Lower CPU load during DFPlayer init
-  setCpuFrequencyMhz(80);
-  delay(100);
-
-  Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
-  delay(500); // DFPlayer needs time!
-
-  if(myDFPlayer.begin(Serial2)) {
-    musicVol = preferences.getInt("musicVol", 10); // START LOW!
-    myDFPlayer.volume(musicVol);
-    delay(100);
-
-    totalTracks = myDFPlayer.readFileCounts();
-    delay(100);
-
-    Serial.printf("✓ DFPlayer: %d tracks\n", totalTracks);
-    tft.setCursor(50, 155);
-    tft.setTextColor(ST77XX_GREEN);
-    tft.printf("Audio: %d tracks", totalTracks);
-  } else {
-    Serial.println("⚠ DFPlayer: Failed");
-    tft.setCursor(50, 155);
-    tft.setTextColor(ST77XX_RED);
-    tft.println("Audio: FAIL");
-  }
-
-  delay(300);
-
-  // ============ PHASE 8: RESTORE CPU SPEED ============
-  setCpuFrequencyMhz(CPU_FREQ); // Back to 240MHz
-  Serial.printf("✓ CPU: %d MHz\n", getCpuFrequencyMhz());
-  delay(100);
-
-  // ============ PHASE 9: WIFI (OPTIONAL - BIGGEST CONSUMER) ============
-  String savedSSID = sysConfig.ssid;
-
-  if(savedSSID.length() > 0) {
-    Serial.println("\n=== PHASE 9: WiFi Connect ===");
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setCursor(30, 70);
-    tft.setTextColor(ST77XX_CYAN);
-    tft.println("Connecting WiFi...");
-
-    // Show warning
-    tft.setCursor(30, 90);
-    tft.setTextSize(1);
-    tft.setTextColor(ST77XX_YELLOW);
-    tft.println("High power consumption!");
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
-
-    int attempts = 0;
-    while(WiFi.status() != WL_CONNECTED && attempts < 20) {
-      delay(500);
-      tft.print(".");
-      attempts++;
-
-      // Blink LED to show activity
-      digitalWrite(LED_BUILTIN, attempts % 2);
-    }
-
-    digitalWrite(LED_BUILTIN, LOW);
-
-    if(WiFi.status() == WL_CONNECTED) {
-      Serial.println("✓ WiFi: Connected");
-      tft.fillScreen(ST77XX_BLACK);
-      tft.setCursor(50, 70);
-      tft.setTextColor(ST77XX_GREEN);
-      tft.setTextSize(2);
-      tft.println("WiFi OK!");
-      tft.setTextSize(1);
-      tft.setCursor(30, 100);
-      tft.print("IP: ");
-      tft.println(WiFi.localIP());
-
-      // Set time
-      configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
-      delay(1000);
+    if (pinLockEnabled) {
+        currentState = STATE_PIN_LOCK;
+        stateAfterUnlock = STATE_MAIN_MENU;
+        pinInput = "";
+        cursorX = 0;
+        cursorY = 0;
     } else {
-      Serial.println("⚠ WiFi: Failed");
-      tft.setCursor(50, 100);
-      tft.setTextColor(ST77XX_RED);
-      tft.println("WiFi Failed!");
-      delay(1000);
+        currentState = STATE_MAIN_MENU;
     }
-  } else {
-    Serial.println("=== PHASE 9: WiFi Skipped ===");
-  }
 
-  // ============ PHASE 10: FINAL SPLASH ============
-  delay(500);
-
-  // Dim NeoPixel for normal use
-  pixels.setBrightness(50);
-  pixels.setPixelColor(0, pixels.Color(0, 50, 0)); // Green = ready
-  pixels.show();
-
-  // Show ready screen
-  canvas.fillScreen(COLOR_BG);
-  canvas.fillRect(0, 0, SCREEN_WIDTH, 35, COLOR_PRIMARY);
-  canvas.setTextColor(COLOR_BG);
-  canvas.setTextSize(3);
-  canvas.setCursor(50, 8);
-  canvas.print("READY!");
-
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(1);
-  canvas.setCursor(80, 60);
-  canvas.print("System Online");
-
-  if(sdCardMounted && chatMessageCount > 0) {
-    canvas.setCursor(60, 90);
-    canvas.print("Memory: ");
-    canvas.print(chatMessageCount);
-    canvas.print(" msgs");
-  }
-
-  canvas.setCursor(70, 120);
-  canvas.print("Battery: ");
-  updateBatteryLevel();
-  canvas.print(batteryPercentage);
-  canvas.print("%");
-
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-
-  ledSuccess();
-  delay(2000);
-
-  // ============ READY! ============
-  Serial.println("\n========================================");
-  Serial.println("===   BOOT COMPLETE - LOW POWER    ===");
-  Serial.println("========================================\n");
-
-  // PIN Lock or Main Menu
-  preferences.begin("app-config", true);
-  pinLockEnabled = preferences.getBool("pinLock", false);
-  currentPin = preferences.getString("pinCode", "1234");
-  preferences.end();
-
-  if(pinLockEnabled) {
-    currentState = STATE_PIN_LOCK;
-    stateAfterUnlock = STATE_MAIN_MENU;
-    pinInput = "";
-    cursorX = 0;
-    cursorY = 0;
-  } else {
-    currentState = STATE_MAIN_MENU;
-  }
-
-  menuSelection = 0;
-  lastInputTime = millis();
-  refreshCurrentScreen();
+    menuSelection = 0;
+    lastInputTime = millis();
+    refreshCurrentScreen();
 }
 
 // ============ LOOP ============
