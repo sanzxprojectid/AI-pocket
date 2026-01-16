@@ -604,14 +604,15 @@ const int uiFrameDelay = 1000 / TARGET_FPS;
 #include <FS.h>
 
 // ============ DFPLAYER MUSIC ============
-#define DFPLAYER_RX_PIN 16
-#define DFPLAYER_TX_PIN 15
+#define DF_RX 4
+#define DF_TX 5
 DFRobotDFPlayerMini myDFPlayer;
 
-std::vector<String> musicTracks;
-int currentTrack = 0;
-bool isPlaying = false;
-int musicVolume = 20; // Default volume (0-30)
+int musicVol = 15;
+int totalTracks = 0;
+int currentTrackIdx = 1;
+bool musicIsPlaying = false;
+unsigned long visualizerMillis = 0;
 
 bool sdCardMounted = false;
 String bb_kurir  = "jne";
@@ -828,97 +829,133 @@ void drawSnakeGame();
 void updateSnakeLogic();
 bool beginSD();
 void endSD();
-
-void drawMusicPlayer() {
-  canvas.fillScreen(COLOR_BG);
-  drawStatusBar();
-
-  // Header
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_PANEL);
-  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.drawFastHLine(0, 35, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(2);
-  canvas.setCursor(10, 18);
-  canvas.print("Music Player");
-
-  if (musicTracks.empty()) {
-    canvas.setCursor(80, 80);
-    canvas.print("No Tracks");
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    return;
-  }
-
-  // Playlist
-  int itemHeight = 20;
-  int startY = 40;
-  int visibleItems = 5;
-  int scroll = 0;
-  if (currentTrack >= visibleItems) {
-    scroll = (currentTrack - visibleItems + 1) * itemHeight;
-  }
-
-  for (size_t i = 0; i < musicTracks.size(); ++i) {
-    int y = startY + (i * itemHeight) - scroll;
-    if (y < startY - itemHeight || y > SCREEN_HEIGHT - 30) continue;
-
-    if (i == currentTrack) {
-      canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_BG);
-    } else {
-      canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_BORDER);
-      canvas.setTextColor(COLOR_PRIMARY);
-    }
-    canvas.setTextSize(1);
-    canvas.setCursor(10, y + 6);
-    String trackName = musicTracks[i];
-    trackName.replace(".mp3", "");
-    if (trackName.length() > 40) {
-      trackName = trackName.substring(0, 40) + "...";
-    }
-    canvas.print(trackName);
-  }
-
-  // Controls Footer
-  canvas.fillRect(0, SCREEN_HEIGHT - 25, SCREEN_WIDTH, 25, COLOR_PANEL);
-  canvas.drawFastHLine(0, SCREEN_HEIGHT - 25, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(1);
-  canvas.setCursor(10, SCREEN_HEIGHT - 18);
-  canvas.print(isPlaying ? "||" : ">");
-  canvas.setCursor(40, SCREEN_HEIGHT - 18);
-  canvas.print("Vol: " + String(musicVolume));
-  canvas.setCursor(120, SCREEN_HEIGHT-18);
-  canvas.print("UP/DN: Select | L/R: Vol");
-  canvas.setCursor(SCREEN_WIDTH - 60, SCREEN_HEIGHT - 18);
-  canvas.print("SEL: Play");
-
-
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-}
+void initMusicPlayer();
+void handleMusicInput();
 
 // ============ MUSIC PLAYER FUNCTIONS ============
-void scanMusicFiles() {
-  musicTracks.clear();
-  if (sdCardMounted && beginSD()) {
-    File root = SD.open("/");
-    File file = root.openNextFile();
-    while(file) {
-      String fileName = file.name();
-      if (fileName.endsWith(".mp3")) {
-        musicTracks.push_back(fileName);
-      }
-      file = root.openNextFile();
+void initMusicPlayer() {
+    // Memulai Serial2 di Pin 4 dan 5
+    Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
+
+    Serial.println(F("Initializing DFPlayer..."));
+
+    if (myDFPlayer.begin(Serial2)) {
+        // Ambil volume terakhir dari Preferences agar tidak mengejutkan
+        musicVol = preferences.getInt("musicVol", 15);
+        myDFPlayer.volume(musicVol);
+
+        // Hitung total lagu di SD Card
+        totalTracks = myDFPlayer.readFileCounts();
+
+        Serial.printf("Music Engine Ready. Total: %d tracks\n", totalTracks);
+    } else {
+        Serial.println(F("DFPlayer Error: SD Card missing or wiring wrong."));
     }
-    root.close();
-    endSD();
-    Serial.printf("Found %d music tracks.\n", musicTracks.size());
-    if (musicTracks.size() == 0) {
-      showStatus("No MP3 files\nfound on SD.", 1500);
+}
+
+void drawMusicPlayer() {
+    canvas.fillScreen(COLOR_BG);
+    drawStatusBar(); // Menampilkan jam/baterai di atas
+
+    // Header Frame
+    canvas.fillRoundRect(10, 25, SCREEN_WIDTH-20, 105, 10, COLOR_PANEL);
+    canvas.drawRoundRect(10, 25, SCREEN_WIDTH-20, 105, 10, COLOR_BORDER);
+
+    // Judul & Indikator Track
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(2);
+    canvas.setCursor(30, 45);
+    canvas.printf("SONG: %03d", currentTrackIdx);
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(30, 70);
+    canvas.print("STATUS: ");
+    canvas.setTextColor(musicIsPlaying ? COLOR_ACCENT : COLOR_DIM);
+    canvas.print(musicIsPlaying ? "PLAYING" : "PAUSED");
+
+    // --- Visualizer UX (Bar Animasi) ---
+    if (musicIsPlaying) {
+        for (int i = 0; i < 16; i++) {
+            int h = random(5, 40); // Efek visualizer acak
+            canvas.fillRect(25 + (i * 14), 118 - h, 8, h, COLOR_ACCENT);
+        }
+    } else {
+        // Garis datar saat stop
+        canvas.fillRect(25, 116, SCREEN_WIDTH - 50, 2, COLOR_BORDER);
     }
-  } else {
-    showStatus("SD Card Error\nCan't scan music.", 1500);
-  }
+
+    // --- Volume Control UX ---
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(1);
+    canvas.setCursor(15, 142);
+    canvas.print("VOL");
+
+    // Background bar volume
+    canvas.drawRect(50, 142, 160, 10, COLOR_BORDER);
+    // Fill bar volume
+    int vBar = map(musicVol, 0, 30, 0, 160);
+    canvas.fillRect(50, 142, vBar, 10, COLOR_PRIMARY);
+
+    canvas.setCursor(220, 142);
+    canvas.print(musicVol);
+
+    // --- Navigation Footer (UX Tip) ---
+    canvas.fillRect(0, SCREEN_HEIGHT - 22, SCREEN_WIDTH, 22, COLOR_PANEL);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(8, SCREEN_HEIGHT - 16);
+    canvas.print("U/D: Vol | L/R: Track | SEL: P/S | BACK: Exit");
+
+    // Kirim Buffer ke Layar
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// --- 4. FUNGSI LOGIC INPUT (Pasang di Loop) ---
+void handleMusicInput() {
+    // Navigasi Lagu (Left/Right)
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+        myDFPlayer.next();
+        if (currentTrackIdx < totalTracks) currentTrackIdx++;
+        else currentTrackIdx = 1;
+        musicIsPlaying = true;
+        delay(200);
+    }
+    if (digitalRead(BTN_LEFT) == BTN_ACT) {
+        myDFPlayer.previous();
+        if (currentTrackIdx > 1) currentTrackIdx--;
+        else currentTrackIdx = totalTracks;
+        musicIsPlaying = true;
+        delay(200);
+    }
+
+    // Kontrol Volume (Up/Down)
+    if (digitalRead(BTN_UP) == BTN_ACT) {
+        if (musicVol < 30) {
+            musicVol++;
+            myDFPlayer.volume(musicVol);
+            preferences.putInt("musicVol", musicVol); // Simpan permanen
+        }
+        delay(80);
+    }
+    if (digitalRead(BTN_DOWN) == BTN_ACT) {
+        if (musicVol > 0) {
+            musicVol--;
+            myDFPlayer.volume(musicVol);
+            preferences.putInt("musicVol", musicVol); // Simpan permanen
+        }
+        delay(80);
+    }
+
+    // Play/Pause (Select)
+    if (digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (musicIsPlaying) {
+            myDFPlayer.pause();
+        } else {
+            myDFPlayer.start();
+        }
+        musicIsPlaying = !musicIsPlaying;
+        delay(300);
+    }
 }
 
 float custom_lerp(float a, float b, float f) {
@@ -4333,7 +4370,6 @@ void handleMainMenuSelect() {
       }
       break;
     case 11: // MUSIC
-      scanMusicFiles();
       changeState(STATE_MUSIC_PLAYER);
       break;
   }
@@ -5000,13 +5036,7 @@ void setup() {
 
   // ============ 8. DFPLAYER (OPTIONAL) ============
   Serial.println("\n--- DFPlayer Mini Init ---");
-  Serial2.begin(9600, SERIAL_8N1, DFPLAYER_RX_PIN, DFPLAYER_TX_PIN);
-  if (!myDFPlayer.begin(Serial2)) {
-    Serial.println("⚠ DFPlayer Mini not found");
-  } else {
-    Serial.println("✓ DFPlayer Mini OK");
-    myDFPlayer.volume(musicVolume);
-  }
+  initMusicPlayer();
 
   // ============ 9. WIFI ============
   String savedSSID = sysConfig.ssid;
@@ -5225,38 +5255,10 @@ void loop() {
       }
     }
      else if (currentState == STATE_MUSIC_PLAYER) {
-      if (digitalRead(BTN_UP) == BTN_ACT) {
-        if (!musicTracks.empty()) {
-          currentTrack = (currentTrack > 0) ? currentTrack - 1 : musicTracks.size() - 1;
-        }
-      }
-      if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        if (!musicTracks.empty()) {
-          currentTrack = (currentTrack < musicTracks.size() - 1) ? currentTrack + 1 : 0;
-        }
-      }
-      if (digitalRead(BTN_LEFT) == BTN_ACT) {
-        musicVolume = (musicVolume > 0) ? musicVolume - 1 : 0;
-        myDFPlayer.volume(musicVolume);
-      }
-      if (digitalRead(BTN_RIGHT) == BTN_ACT) {
-        musicVolume = (musicVolume < 30) ? musicVolume + 1 : 30;
-        myDFPlayer.volume(musicVolume);
-      }
-      if (digitalRead(BTN_SELECT) == BTN_ACT) {
-        if (!musicTracks.empty()) {
-          if (isPlaying) {
-            myDFPlayer.pause();
-            isPlaying = false;
-          } else {
-            myDFPlayer.play(currentTrack + 1);
-            isPlaying = true;
-          }
-        }
-      }
+      handleMusicInput();
        if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
         myDFPlayer.stop();
-        isPlaying = false;
+        musicIsPlaying = false;
         changeState(STATE_MAIN_MENU);
       }
     }
