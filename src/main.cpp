@@ -859,20 +859,20 @@ void drawBootScreen(const char* lines[], int lineCount, int progress);
 
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_GREEN);
-  tft.setTextSize(1);
+  canvas.fillScreen(ST77XX_BLACK);
+  canvas.setTextColor(ST77XX_GREEN);
+  canvas.setTextSize(1);
 
   // Header
-  tft.setCursor(10, 10);
-  tft.print("AI-POCKET S3 // v2.2");
-  tft.drawFastHLine(10, 22, SCREEN_WIDTH - 20, ST77XX_GREEN);
+  canvas.setCursor(10, 10);
+  canvas.print("AI-POCKET S3 // v2.2");
+  canvas.drawFastHLine(10, 22, SCREEN_WIDTH - 20, ST77XX_GREEN);
 
   // Status Lines
   int y = 35;
   for (int i = 0; i < lineCount; i++) {
-    tft.setCursor(10, y);
-    tft.print(lines[i]);
+    canvas.setCursor(10, y);
+    canvas.print(lines[i]);
     y += 12;
   }
 
@@ -881,14 +881,14 @@ void drawBootScreen(const char* lines[], int lineCount, int progress) {
   int barWidth = SCREEN_WIDTH - 40;
   int barProgress = map(progress, 0, 100, 0, barWidth);
 
-  tft.drawRect(20, barY, barWidth, 15, ST77XX_GREEN);
-  tft.fillRect(22, barY + 2, barProgress - 4, 11, ST77XX_GREEN);
+  canvas.drawRect(20, barY, barWidth, 15, ST77XX_GREEN);
+  canvas.fillRect(22, barY + 2, barProgress - 4, 11, ST77XX_GREEN);
 
   String progressText = String(progress) + "%";
-  tft.setCursor(SCREEN_WIDTH / 2 - 10, barY + 4);
-  tft.setTextColor(ST77XX_BLACK);
-  tft.print(progressText);
-  tft.setTextColor(ST77XX_GREEN);
+  canvas.setCursor(SCREEN_WIDTH / 2 - 10, barY + 4);
+  canvas.setTextColor(ST77XX_BLACK);
+  canvas.print(progressText);
+  canvas.setTextColor(ST77XX_GREEN);
 }
 
 // ============ MUSIC PLAYER FUNCTIONS ============
@@ -5034,6 +5034,7 @@ void setup() {
     canvas.setTextWrap(false);
     bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
     drawBootScreen(bootStatusLines, ++currentLine, 15);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     digitalWrite(TFT_BL, HIGH); // Backlight on right away
 
     // --- Init other peripherals ---
@@ -5043,6 +5044,7 @@ void setup() {
     pixels.show();
     bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
     drawBootScreen(bootStatusLines, ++currentLine, 30);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Init Storage
     if (!LittleFS.begin(true)) {
@@ -5056,11 +5058,13 @@ void setup() {
         bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
     }
     drawBootScreen(bootStatusLines, ++currentLine, 45);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Init Audio
     initMusicPlayer();
     bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
     drawBootScreen(bootStatusLines, ++currentLine, 60);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Load Configs ---
     loadConfig();
@@ -5080,6 +5084,7 @@ void setup() {
     }
     bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
     drawBootScreen(bootStatusLines, ++currentLine, 75);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Connect to WiFi (Shorter Timeout) ---
     String savedSSID = sysConfig.ssid;
@@ -5102,12 +5107,14 @@ void setup() {
         bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
     }
     drawBootScreen(bootStatusLines, ++currentLine, 90);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Finalize ---
     pixels.setPixelColor(0, pixels.Color(0, 20, 0)); // Green light for success
     pixels.show();
     bootStatusLines[currentLine] = "> BOOT COMPLETE....";
     drawBootScreen(bootStatusLines, ++currentLine, 100);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     delay(500); // Short delay to see the complete message
 
     // --- Go to Main State ---
