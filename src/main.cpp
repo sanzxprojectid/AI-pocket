@@ -636,10 +636,6 @@ const char* eqModeNames[] = {"Normal", "Pop", "Rock", "Jazz", "Classic", "Bass"}
 uint8_t musicEQMode = DFPLAYER_EQ_NORMAL; // Corresponds to library defines
 bool musicIsShuffled = false;
 
-// New UI State Variable
-bool isPlaylistView = false;
-int playlistScrollOffset = 0;
-int playlistSelection = 1;
 
 // --- ENHANCED MUSIC PLAYER ---
 struct MusicMetadata {
@@ -1228,72 +1224,6 @@ void drawEnhancedMusicPlayer() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-void drawMusicPlaylist() {
-    canvas.fillScreen(COLOR_BG);
-    drawStatusBar();
-
-    // --- Header ---
-    canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
-    canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
-    canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
-    canvas.setTextSize(2);
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setCursor(10, 21);
-    canvas.print("Playlist");
-
-    // --- Song List ---
-    int itemHeight = 20;
-    int startY = 45;
-    int visibleItems = (SCREEN_HEIGHT - startY - 5) / itemHeight;
-
-    // Adjust scroll offset based on selection
-    if (playlistSelection < playlistScrollOffset) {
-        playlistScrollOffset = playlistSelection;
-    }
-    if (playlistSelection >= playlistScrollOffset + visibleItems) {
-        playlistScrollOffset = playlistSelection - visibleItems + 1;
-    }
-
-
-    for (int i = 0; i < visibleItems; i++) {
-        int trackIndex = i + 1 + playlistScrollOffset;
-        if (trackIndex >= musicPlaylist.size()) break;
-
-        int y = startY + (i * itemHeight);
-
-        // Highlight selected track
-        if (trackIndex == playlistSelection) {
-            canvas.fillRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_PRIMARY);
-            canvas.setTextColor(COLOR_BG);
-        } else {
-            canvas.setTextColor(COLOR_PRIMARY);
-        }
-
-        // Highlight currently playing track
-        if (trackIndex == currentTrackIdx) {
-            canvas.drawRect(5, y, SCREEN_WIDTH - 10, itemHeight, COLOR_SUCCESS);
-        }
-
-        canvas.setTextSize(1);
-        canvas.setCursor(15, y + 6);
-        String trackLabel = String(trackIndex) + ". " + musicPlaylist[trackIndex].title;
-        canvas.print(trackLabel);
-    }
-
-    // --- Footer Hint ---
-    canvas.fillRect(0, SCREEN_HEIGHT - 18, SCREEN_WIDTH, 18, COLOR_PANEL);
-    canvas.drawFastHLine(0, SCREEN_HEIGHT - 18, SCREEN_WIDTH, COLOR_BORDER);
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setTextSize(1);
-    const char* hint = "[SELECT] to Play | Long-press to return";
-    int16_t x1, y1;
-    uint16_t w, h;
-    canvas.getTextBounds(hint, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT - 12);
-    canvas.print(hint);
-
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-}
 
 void drawEQIcon(int x, int y, uint8_t eqMode) {
     int bars[5];
@@ -5226,11 +5156,7 @@ void refreshCurrentScreen() {
       drawPinLock(true);
       break;
     case STATE_MUSIC_PLAYER:
-      if (isPlaylistView) {
-        drawMusicPlaylist();
-      } else {
-        drawEnhancedMusicPlayer();
-      }
+      drawEnhancedMusicPlayer();
       break;
     default:
       showMainMenu(x_offset);
@@ -5613,41 +5539,6 @@ void loop() {
       }
     }
     else if (currentState == STATE_MUSIC_PLAYER) {
-      if (isPlaylistView) {
-        // --- PLAYLIST VIEW CONTROLS ---
-        if (digitalRead(BTN_UP) == BTN_ACT) {
-            if (playlistSelection > 1) playlistSelection--;
-        }
-        if (digitalRead(BTN_DOWN) == BTN_ACT) {
-            if (playlistSelection < totalTracks) playlistSelection++;
-        }
-        if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-            isPlaylistView = false;
-        }
-
-        // SELECT button handling
-        if (digitalRead(BTN_SELECT) == BTN_ACT) {
-            if (btnSelectPressTime == 0) {
-                btnSelectPressTime = currentMillis;
-            } else if (!btnSelectLongPressTriggered && (currentMillis - btnSelectPressTime > longPressDuration)) {
-                btnSelectLongPressTriggered = true;
-                // LONG PRESS ACTION: Return to now playing
-                isPlaylistView = false;
-            }
-        } else {
-            if (btnSelectPressTime > 0 && !btnSelectLongPressTriggered) {
-                // SHORT PRESS ACTION: Play selected track
-                currentTrackIdx = playlistSelection;
-                myDFPlayer.play(currentTrackIdx);
-                preferences.putInt("musicTrack", currentTrackIdx);
-                musicIsPlaying = true;
-                isPlaylistView = false; // Switch back to now playing
-            }
-            btnSelectPressTime = 0;
-            btnSelectLongPressTriggered = false;
-        }
-
-      } else {
         // --- NOW PLAYING VIEW CONTROLS ---
 
         // BTN_LEFT
@@ -5667,7 +5558,6 @@ void loop() {
             myDFPlayer.previous();
             if (currentTrackIdx > 1) currentTrackIdx--;
             else currentTrackIdx = totalTracks;
-            playlistSelection = currentTrackIdx;
             preferences.putInt("musicTrack", currentTrackIdx);
             musicIsPlaying = true;
             }
@@ -5681,25 +5571,19 @@ void loop() {
             btnRightPressTime = currentMillis;
             } else if (!btnRightLongPressTriggered && (currentMillis - btnRightPressTime > longPressDuration)) {
             btnRightLongPressTriggered = true;
-            // LONG PRESS ACTION: Cycle Loop/Shuffle Mode
-            if (musicIsShuffled) { // If already shuffled, turn off shuffle
-                musicIsShuffled = false;
+            // LONG PRESS ACTION: Cycle Loop Mode
+            if (musicLoopMode == LOOP_NONE) {
                 musicLoopMode = LOOP_ALL;
                 myDFPlayer.enableLoopAll();
-                showStatus("Shuffle Off", 800);
-            } else {
-                musicLoopMode = (MusicLoopMode)(((int)musicLoopMode + 1) % 3);
-                if (musicLoopMode == LOOP_ALL) {
-                    myDFPlayer.enableLoopAll();
-                    showStatus("Loop All", 800);
-                } else if (musicLoopMode == LOOP_ONE) {
-                    myDFPlayer.enableLoop();
-                    showStatus("Loop One", 800);
-                } else { // LOOP_NONE, so activate shuffle
-                    musicIsShuffled = true;
-                    myDFPlayer.randomAll();
-                    showStatus("Shuffle On", 800);
-                }
+                showStatus("Loop All", 800);
+            } else if (musicLoopMode == LOOP_ALL) {
+                musicLoopMode = LOOP_ONE;
+                myDFPlayer.enableLoop();
+                showStatus("Loop One", 800);
+            } else { // was LOOP_ONE
+                musicLoopMode = LOOP_NONE;
+                myDFPlayer.disableLoop();
+                showStatus("Loop Off", 800);
             }
             }
         } else {
@@ -5708,7 +5592,6 @@ void loop() {
             myDFPlayer.next();
             if (currentTrackIdx < totalTracks) currentTrackIdx++;
             else currentTrackIdx = 1;
-            playlistSelection = currentTrackIdx;
             preferences.putInt("musicTrack", currentTrackIdx);
             musicIsPlaying = true;
             }
@@ -5722,9 +5605,17 @@ void loop() {
             btnSelectPressTime = currentMillis;
             } else if (!btnSelectLongPressTriggered && (currentMillis - btnSelectPressTime > longPressDuration)) {
             btnSelectLongPressTriggered = true;
-            // LONG PRESS ACTION: Show Playlist
-            playlistSelection = currentTrackIdx; // Sync selection
-            isPlaylistView = true;
+            // LONG PRESS ACTION: Toggle Shuffle
+            musicIsShuffled = !musicIsShuffled;
+            if (musicIsShuffled) {
+                myDFPlayer.randomAll();
+                showStatus("Shuffle On", 800);
+            } else {
+                // Revert to loop all when shuffle is turned off
+                myDFPlayer.enableLoopAll();
+                musicLoopMode = LOOP_ALL;
+                showStatus("Shuffle Off", 800);
+            }
             }
         } else {
             if (btnSelectPressTime > 0 && !btnSelectLongPressTriggered) {
@@ -5763,7 +5654,6 @@ void loop() {
             musicIsPlaying = false;
             changeState(STATE_MAIN_MENU);
         }
-      }
     }
     
     if (isSelectingMode) {
