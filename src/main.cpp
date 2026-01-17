@@ -901,16 +901,28 @@ void drawBootScreen(const char* lines[], int lineCount, int progress) {
   }
 
   // Progress Bar
+  int barX = 20;
   int barY = SCREEN_HEIGHT - 30;
-  int barWidth = SCREEN_WIDTH - 40;
-  int barProgress = map(progress, 0, 100, 0, barWidth);
+  int barW = SCREEN_WIDTH - 40;
+  int barH = 15;
 
-  canvas.drawRect(20, barY, barWidth, 15, ST77XX_GREEN);
-  canvas.fillRect(22, barY + 2, barProgress - 4, 11, ST77XX_GREEN);
+  canvas.drawRoundRect(barX, barY, barW, barH, 5, ST77XX_GREEN);
+
+  progress = constrain(progress, 0, 100);
+  int fillW = map(progress, 0, 100, 0, barW - 4);
+
+  if (fillW > 0) {
+    // Simple fill for boot screen, gradient is overkill here
+    canvas.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 3, ST77XX_GREEN);
+  }
 
   String progressText = String(progress) + "%";
-  canvas.setCursor(SCREEN_WIDTH / 2 - 10, barY + 4);
+  int16_t x1, y1;
+  uint16_t w, h;
+  canvas.getTextBounds(progressText, 0, 0, &x1, &y1, &w, &h);
+
   canvas.setTextColor(ST77XX_BLACK);
+  canvas.setCursor(barX + (barW - w) / 2, barY + (barH - h) / 2);
   canvas.print(progressText);
   canvas.setTextColor(ST77XX_GREEN);
 }
@@ -3648,39 +3660,99 @@ void drawStatusBar() {
 // ============ UTILITY FUNCTIONS ============
 void showStatus(String message, int delayMs) {
   canvas.fillScreen(COLOR_BG);
-  
+  drawStatusBar(); // Draw status bar for context
+
+  // Determine box color and icon based on message content
+  uint16_t boxColor = COLOR_PANEL;
+  String lowerCaseMsg = message;
+  lowerCaseMsg.toLowerCase();
+
+  bool isSuccess = false;
+  bool isError = false;
+
+  if (lowerCaseMsg.indexOf("success") != -1 || lowerCaseMsg.indexOf("connected") != -1 ||
+      lowerCaseMsg.indexOf("unlocked") != -1 || lowerCaseMsg.indexOf("enabled") != -1 ||
+      lowerCaseMsg.indexOf("disabled") != -1 || lowerCaseMsg.indexOf("cleared") != -1 ||
+      lowerCaseMsg.indexOf("saved") != -1 || lowerCaseMsg.indexOf("sent") != -1) {
+    boxColor = COLOR_SUCCESS;
+    isSuccess = true;
+  } else if (lowerCaseMsg.indexOf("error") != -1 || lowerCaseMsg.indexOf("failed") != -1 ||
+             lowerCaseMsg.indexOf("incorrect") != -1 || lowerCaseMsg.indexOf("invalid") != -1 ||
+             lowerCaseMsg.indexOf("not found") != -1) {
+    boxColor = COLOR_ERROR;
+    isError = true;
+  } else if (lowerCaseMsg.indexOf("warn") != -1 || lowerCaseMsg.indexOf("wait") != -1 ||
+             lowerCaseMsg.indexOf("wip") != -1 || lowerCaseMsg.indexOf("connecting") != -1) {
+    boxColor = COLOR_WARN;
+  }
+
+
   int boxW = 280;
   int boxH = 80;
   int boxX = (SCREEN_WIDTH - boxW) / 2;
   int boxY = (SCREEN_HEIGHT - boxH) / 2;
-  
-  canvas.drawRect(boxX, boxY, boxW, boxH, COLOR_PRIMARY);
-  canvas.drawRect(boxX + 1, boxY + 1, boxW - 2, boxH - 2, COLOR_PRIMARY);
-  
+
+  canvas.fillRoundRect(boxX, boxY, boxW, boxH, 8, boxColor);
+  canvas.drawRoundRect(boxX, boxY, boxW, boxH, 8, COLOR_BORDER);
+
+  // Draw Icon
+  int iconX = boxX + 20;
+  int iconY = boxY + (boxH / 2) - 12;
+  if (isSuccess) {
+    // Draw Checkmark
+    canvas.drawLine(iconX, iconY + 12, iconX + 8, iconY + 20, COLOR_PRIMARY);
+    canvas.drawLine(iconX + 8, iconY + 20, iconX + 24, iconY + 4, COLOR_PRIMARY);
+    canvas.drawLine(iconX, iconY + 13, iconX + 8, iconY + 21, COLOR_PRIMARY);
+    canvas.drawLine(iconX + 8, iconY + 21, iconX + 24, iconY + 5, COLOR_PRIMARY);
+  } else if (isError) {
+    // Draw 'X'
+    canvas.drawLine(iconX, iconY, iconX + 24, iconY + 24, COLOR_PRIMARY);
+    canvas.drawLine(iconX, iconY + 1, iconX + 24, iconY + 25, COLOR_PRIMARY);
+    canvas.drawLine(iconX + 24, iconY, iconX, iconY + 24, COLOR_PRIMARY);
+    canvas.drawLine(iconX + 24, iconY + 1, iconX, iconY + 25, COLOR_PRIMARY);
+  } else {
+    // Draw Info 'i'
+    canvas.drawCircle(iconX + 12, iconY + 6, 4, COLOR_PRIMARY);
+    canvas.fillRect(iconX + 10, iconY + 12, 4, 12, COLOR_PRIMARY);
+  }
+
+
   canvas.setTextColor(COLOR_TEXT);
   canvas.setTextSize(2);
-  
+
+  int textStartX = iconX + 40;
   int cursorY = boxY + 20;
-  int cursorX = boxX + 10;
+  int cursorX = textStartX;
   String word = "";
-  
+
   for (unsigned int i = 0; i < message.length(); i++) {
     char c = message.charAt(i);
     if (c == ' ' || c == '\n' || i == message.length() - 1) {
       if (i == message.length() - 1 && c != ' ' && c != '\n') word += c;
+
+      int16_t x1, y1;
+      uint16_t w, h;
+      canvas.getTextBounds(word, 0, 0, &x1, &y1, &w, &h);
+
+      if (cursorX + w > boxX + boxW - 15) {
+        cursorY += 18;
+        cursorX = textStartX;
+      }
+
       canvas.setCursor(cursorX, cursorY);
       canvas.print(word);
-      cursorX += (word.length() * 12);
-      if (c == '\n' || cursorX > boxX + boxW - 20) {
+      cursorX += w + 12; // 12 is width of a char in size 2
+
+      if (c == '\n') {
         cursorY += 18;
-        cursorX = boxX + 10;
+        cursorX = textStartX;
       }
       word = "";
     } else {
       word += c;
     }
   }
-  
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
   if (delayMs > 0) delay(delayMs);
 }
@@ -3688,31 +3760,55 @@ void showStatus(String message, int delayMs) {
 void showProgressBar(String title, int percent) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  
+
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(2);
-  int titleW = title.length() * 12;
-  canvas.setCursor((SCREEN_WIDTH - titleW) / 2, 50);
-  canvas.print(title);
   
+  int16_t x1, y1;
+  uint16_t w, h;
+  canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor((SCREEN_WIDTH - w) / 2, 60);
+  canvas.print(title);
+
   int barX = 40;
   int barY = 90;
   int barW = SCREEN_WIDTH - 80;
-  int barH = 16;
-  
-  canvas.drawRect(barX, barY, barW, barH, COLOR_PRIMARY);
-  
-  int fillW = map(percent, 0, 100, 0, barW - 2);
+  int barH = 20;
+
+  // Draw the background/border of the progress bar
+  canvas.drawRoundRect(barX, barY, barW, barH, 6, COLOR_BORDER);
+
+  percent = constrain(percent, 0, 100);
+  int fillW = map(percent, 0, 100, 0, barW - 4);
+
   if (fillW > 0) {
-    canvas.fillRect(barX + 1, barY + 1, fillW, barH - 2, COLOR_PRIMARY);
+    // Draw the gradient fill
+    uint16_t startColor = 0x07E0; // Green
+    uint16_t endColor = 0x07FF;   // Cyan
+    for (int i = 0; i < fillW; i++) {
+      uint8_t r = ((startColor >> 11) & 0x1F) + ((((endColor >> 11) & 0x1F) - ((startColor >> 11) & 0x1F)) * i) / fillW;
+      uint8_t g = ((startColor >> 5) & 0x3F) + ((((endColor >> 5) & 0x3F) - ((startColor >> 5) & 0x3F)) * i) / fillW;
+      uint8_t b = (startColor & 0x1F) + (((endColor & 0x1F) - (startColor & 0x1F)) * i) / fillW;
+      drawGradientVLine(barX + 2 + i, barY + 2, barH - 4, (r << 11) | (g << 5) | b, (r << 11) | (g << 5) | b);
+    }
   }
-  
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(SCREEN_WIDTH / 2 - 12, barY + 25);
-  canvas.print(percent);
-  canvas.print("%");
-  
+
+  // Draw percentage text inside the bar
+  String progressText = String(percent) + "%";
+  canvas.setTextSize(2);
+  canvas.getTextBounds(progressText, 0, 0, &x1, &y1, &w, &h);
+
+  // If progress is low, draw text outside, otherwise inside
+  if (fillW < w + 10) {
+      canvas.setTextColor(COLOR_PRIMARY);
+      canvas.setCursor(barX + barW + 5, barY + 4);
+  } else {
+      canvas.setTextColor(COLOR_BG);
+      canvas.setCursor(barX + (barW - w) / 2, barY + 4);
+  }
+  canvas.print(progressText);
+
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -4398,13 +4494,14 @@ void scanWiFiNetworks(bool switchToScanState) {
 }
 
 void connectToWiFi(String ssid, String password) {
-  showProgressBar("Connecting", 0);
+  String title = "Connecting to\n" + ssid;
+  showProgressBar(title, 0);
   WiFi.begin(ssid.c_str(), password.c_str());
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     attempts++;
-    showProgressBar("Connecting", attempts * 5);
+    showProgressBar(title, attempts * 5);
   }
   if (WiFi.status() == WL_CONNECTED) {
     savePreferenceString("ssid", ssid);
