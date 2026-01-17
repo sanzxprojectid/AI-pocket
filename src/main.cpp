@@ -3571,13 +3571,13 @@ void drawBatteryIcon() {
     int w = 22;
     int h = 10;
 
+    // Draw icon box first
     canvas.drawRect(x, y, w, h, COLOR_DIM);
     canvas.fillRect(x + w, y + 2, 2, h - 4, COLOR_DIM);
 
     if (batteryPercentage == -1) return;
 
-    int fillW = map(batteryPercentage, 0, 100, 0, w - 2);
-
+    // Determine color based on percentage
     uint16_t battColor = COLOR_SUCCESS;
     if (batteryPercentage < 20) {
         battColor = COLOR_ERROR;
@@ -3585,9 +3585,22 @@ void drawBatteryIcon() {
         battColor = COLOR_WARN;
     }
 
+    // Draw the fill level inside the icon
+    int fillW = map(batteryPercentage, 0, 100, 0, w - 2);
     if (fillW > 0) {
       canvas.fillRect(x + 1, y + 1, fillW, h - 2, battColor);
     }
+
+    // Draw percentage text to the left of the icon
+    canvas.setTextSize(1);
+    canvas.setTextColor(battColor);
+    String text = String(batteryPercentage) + "%";
+    int16_t x1, y1;
+    uint16_t textW, textH;
+    canvas.getTextBounds(text, 0, 0, &x1, &y1, &textW, &textH);
+    // Position text with a 5px gap to the left of the icon
+    canvas.setCursor(x - textW - 5, y + 2);
+    canvas.print(text);
 }
 
 
