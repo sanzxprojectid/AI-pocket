@@ -4549,13 +4549,11 @@ void sendToGemini() {
   if (currentAIMode == MODE_SUBARU) {
     jsonPayload += "\"temperature\":0.9,";
     jsonPayload += "\"topP\":0.95,";
-    jsonPayload += "\"topK\":40,";
-    jsonPayload += "\"maxOutputTokens\":1000";
+    jsonPayload += "\"topK\":40";
   } else {
     jsonPayload += "\"temperature\":0.7,";
     jsonPayload += "\"topP\":0.9,";
-    jsonPayload += "\"topK\":40,";
-    jsonPayload += "\"maxOutputTokens\":800";
+    jsonPayload += "\"topK\":40";
   }
   
   jsonPayload += "},";
