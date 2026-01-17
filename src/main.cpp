@@ -188,6 +188,7 @@ unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 75;
 
 // ============ UI ANIMATION PHYSICS ============
+bool screenIsDirty = true; // Flag to request a screen redraw
 float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
 // float menuVelocity = 0.0f; // Not used in Lerp
@@ -4374,6 +4375,7 @@ void sendToGemini() {
 // ============ TRANSITION SYSTEM ============
 void changeState(AppState newState) {
   if (transitionState == TRANSITION_NONE && currentState != newState) {
+    screenIsDirty = true; // Request a redraw for the new state
     transitionTargetState = newState;
     transitionState = TRANSITION_OUT;
     transitionProgress = 0.0f;
@@ -5179,8 +5181,33 @@ void loop() {
     if (currentMillis - lastLoadingUpdate > 100) {
       lastLoadingUpdate = currentMillis;
       loadingFrame = (loadingFrame + 1) % 8;
-      showLoadingAnimation(0);
     }
+  }
+
+  // Force redraw for states that are always animating
+  switch (currentState) {
+    case STATE_MAIN_MENU: // For smooth scrolling
+    case STATE_LOADING:
+    case STATE_VIS_STARFIELD:
+    case STATE_VIS_LIFE:
+    case STATE_VIS_FIRE:
+    case STATE_GAME_PONG:
+    case STATE_GAME_SNAKE:
+    case STATE_GAME_RACING:
+    case STATE_TOOL_SNIFFER:
+    case STATE_TOOL_WIFI_SONAR:
+    case STATE_TOOL_DEAUTH_ATTACK:
+    case STATE_MUSIC_PLAYER: // For visualizer
+      screenIsDirty = true;
+      break;
+    default:
+      break;
+  }
+
+  // Also set dirty flag during screen transitions or other specific animations
+  if (transitionState != TRANSITION_NONE ||
+     (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f)) {
+    screenIsDirty = true;
   }
   
   if (transitionState != TRANSITION_NONE) {
@@ -5199,8 +5226,11 @@ void loop() {
   
   if (currentMillis - lastUiUpdate > uiFrameDelay) {
     lastUiUpdate = currentMillis;
-    perfFrameCount++;
-    refreshCurrentScreen();
+    if (screenIsDirty) {
+      perfFrameCount++;
+      refreshCurrentScreen();
+      screenIsDirty = false;
+    }
   }
   
   // Attack loop needs to run outside of throttled UI updates
@@ -5822,6 +5852,7 @@ void loop() {
    }
     
     if (buttonPressed) {
+      screenIsDirty = true;
       lastDebounce = currentMillis;
       lastInputTime = currentMillis;
       ledQuickFlash();
