@@ -1086,26 +1086,33 @@ float custom_lerp(float a, float b, float f) {
 }
 
 void drawSpectrumVisualizer() {
-    // NOTE: This is a simulated spectrum visualizer. It does not use real audio data (FFT).
-    // It generates a visually pleasing, music-like animation procedurally.
+    // NOTE: This is a simulated spectrum visualizer that reacts to volume changes.
     int numBars = 16;
     int barWidth = SCREEN_WIDTH / numBars;
-    int maxBarHeight = 80;
+
+    // --- Make visualization reactive to volume ---
+    // Map musicVol (0-30) to maxBarHeight (10-80)
+    int maxBarHeight = map(musicVol, 0, 30, 10, 80);
+    // Map musicVol to animation speed/energy (higher vol = faster updates)
+    float animationEnergy = map(musicVol, 0, 30, 150, 50); // Lower interval = faster
+    // Map musicVol to lerp factor (higher vol = faster transitions)
+    float lerpFactor = map(musicVol, 0, 30, 10, 30) / 100.0f; // Range 0.1 to 0.3
+
     static float barHeights[16] = {0};
     static float barTargets[16] = {0};
 
     // Every so often, pick a new target height for each bar
-    if (millis() % 150 < 20) { // Update targets roughly 6 times a second
+    if (millis() % (int)animationEnergy < 20) {
         for (int i = 0; i < numBars; i++) {
             // Create a wave-like pattern for more realism
             float sineFactor = (sin(i * 0.5f + millis() * 0.005f) + 1.0f) / 2.0f; // 0.0 to 1.0
-            barTargets[i] = (random(10, maxBarHeight) * sineFactor) + 5;
+            barTargets[i] = (random(5, maxBarHeight) * sineFactor) + 5;
         }
     }
 
     // Smoothly move from current height to target height
     for (int i = 0; i < numBars; i++) {
-        barHeights[i] = custom_lerp(barHeights[i], barTargets[i], 0.2f);
+        barHeights[i] = custom_lerp(barHeights[i], barTargets[i], lerpFactor);
     }
 
     // Draw the bars
