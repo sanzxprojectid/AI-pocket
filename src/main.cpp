@@ -62,8 +62,9 @@ typedef struct {
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 170
 
-// Gunakan Software SPI untuk TFT agar tidak konflik dengan SD Card
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+// Gunakan Hardware SPI untuk TFT untuk Performa Maksimal
+// Pin MOSI (11) dan SCLK (12) sudah sesuai dengan default VSPI hardware
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 
 // ============ NEOPIXEL ============
@@ -605,6 +606,8 @@ const int uiFrameDelay = 1000 / TARGET_FPS;
 #define SDCARD_MISO 8
 #define SDCARD_MOSI 17
 
+SPIClass spiSD(HSPI); // Dedicated SPI bus for SD Card
+
 #include <SD.h>
 #include <FS.h>
 
@@ -1030,20 +1033,19 @@ const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // ============ API KEY MANAGEMENT ============
 // New helper functions to manage SPI bus between TFT and SD Card
 bool beginSD() {
-  SPI.end();
-  SPI.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
-  if (SD.begin(SDCARD_CS)) {
+  // Gunakan bus SPI khusus untuk SD Card
+  spiSD.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
+  if (SD.begin(SDCARD_CS, spiSD)) {
     return true;
   }
-  // If begin fails, just end this SPI session and return false.
-  // DO NOT reconfigure for TFT, as it uses Software SPI.
-  SPI.end();
+  // Jika gagal, matikan bus SD Card saja
+  spiSD.end();
   return false;
 }
 
 void endSD() {
-  SPI.end();
-  // Tidak perlu menginisialisasi ulang SPI untuk TFT karena sekarang menggunakan Software SPI
+  // Matikan hanya bus SPI milik SD Card
+  spiSD.end();
 }
 
 void loadApiKeys() {
