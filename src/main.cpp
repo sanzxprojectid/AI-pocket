@@ -186,7 +186,7 @@ String aiResponse = "";
 int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
-const unsigned long debounceDelay = 75;
+const unsigned long debounceDelay = 150;
 
 // ============ UI ANIMATION PHYSICS ============
 bool screenIsDirty = true; // Flag to request a screen redraw
