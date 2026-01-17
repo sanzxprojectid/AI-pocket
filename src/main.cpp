@@ -623,12 +623,25 @@ bool musicIsPlaying = false;
 unsigned long visualizerMillis = 0;
 unsigned long lastVolumeChangeMillis = 0;
 
+// Time and session tracking
+uint16_t musicCurrentTime = 0;
+uint16_t musicTotalTime = 0;
+unsigned long lastTrackInfoUpdate = 0; // For throttling DFPlayer queries
+unsigned long lastTrackSaveMillis = 0; // For throttling preference writes
+
 // New state variables for enhanced music player
 enum MusicLoopMode { LOOP_NONE, LOOP_ALL, LOOP_ONE };
 MusicLoopMode musicLoopMode = LOOP_NONE;
 const char* eqModeNames[] = {"Normal", "Pop", "Rock", "Jazz", "Classic", "Bass"};
 uint8_t musicEQMode = DFPLAYER_EQ_NORMAL; // Corresponds to library defines
 bool musicIsShuffled = false;
+
+// --- ENHANCED MUSIC PLAYER ---
+struct MusicMetadata {
+  String title;
+  String artist;
+};
+std::vector<MusicMetadata> musicPlaylist;
 
 // Long press state variables for music player
 unsigned long btnLeftPressTime = 0;
@@ -854,7 +867,12 @@ void drawSnakeGame();
 void updateSnakeLogic();
 bool beginSD();
 void endSD();
+void loadMusicMetadata();
 void initMusicPlayer();
+void drawEnhancedMusicPlayer();
+void drawVUMeter(int x, int y, int value, const char* label);
+void drawEQIcon(int x, int y, uint8_t eqMode);
+String formatTime(int seconds);
 void updateBatteryLevel();
 void drawBatteryIcon();
 void drawBootScreen(const char* lines[], int lineCount, int progress);
@@ -894,6 +912,61 @@ void drawBootScreen(const char* lines[], int lineCount, int progress) {
 }
 
 // ============ MUSIC PLAYER FUNCTIONS ============
+void loadMusicMetadata() {
+  if (!sdCardMounted) {
+    Serial.println("Cannot load metadata, SD card not mounted.");
+    return;
+  }
+
+  if (!beginSD()) {
+    Serial.println("Failed to begin SD for metadata");
+    return;
+  }
+
+  const char* metadataFile = "/music/playlist.csv";
+  musicPlaylist.clear();
+
+  if (SD.exists(metadataFile)) {
+    File file = SD.open(metadataFile, FILE_READ);
+    if (file) {
+      Serial.println("Reading playlist.csv...");
+      // Add a default entry for track 0 (vectors are 0-indexed, but tracks are 1-indexed)
+      musicPlaylist.push_back({"Unknown Track", "Unknown Artist"});
+
+      while (file.available()) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+
+        // Simple CSV parsing. Format: 1,"Song Title","Artist Name"
+        int firstComma = line.indexOf(',');
+        int secondComma = line.indexOf(',', firstComma + 1);
+
+        if (firstComma > 0 && secondComma > 0) {
+          String title = line.substring(firstComma + 2, secondComma - 1);
+          String artist = line.substring(secondComma + 2, line.length() - 1);
+
+          title.replace("\"\"", "\""); // Handle escaped quotes
+          artist.replace("\"\"", "\"");
+
+          musicPlaylist.push_back({title, artist});
+        }
+      }
+      file.close();
+      Serial.printf("✓ Metadata for %d tracks loaded.\n", musicPlaylist.size() - 1);
+    }
+  } else {
+    Serial.println("! playlist.csv not found. Music metadata will be unavailable.");
+  }
+
+  // If metadata is less than total tracks, fill with placeholders to prevent crashes
+  while(musicPlaylist.size() <= totalTracks) {
+      musicPlaylist.push_back({"Unknown Track", "Unknown Artist"});
+  }
+
+  endSD();
+}
+
 void initMusicPlayer() {
     // Memulai Serial2 di Pin 4 dan 5
     Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
@@ -908,91 +981,208 @@ void initMusicPlayer() {
         // Hitung total lagu di SD Card
         totalTracks = myDFPlayer.readFileCounts();
 
+        // Load metadata after getting track count
+        loadMusicMetadata();
+
+        // --- Load Last Session ---
+        int lastTrack = preferences.getInt("musicTrack", 1);
+        int lastTime = preferences.getInt("musicTime", 0);
+        if (lastTrack > 0 && lastTrack <= totalTracks) {
+          currentTrackIdx = lastTrack;
+          // Play the track and then seek. This is more reliable.
+          myDFPlayer.play(currentTrackIdx);
+          delay(100); // Give player time to start
+          myDFPlayer.seek(lastTime);
+          // Wait a moment before pausing to ensure the seek command is processed
+          delay(200);
+          myDFPlayer.pause();
+          musicIsPlaying = false; // Start in paused state
+          Serial.printf("Resuming track %d at %d seconds.\n", currentTrackIdx, lastTime);
+        } else {
+          currentTrackIdx = 1; // Default to first track if saved data is invalid
+        }
+
         Serial.printf("Music Engine Ready. Total: %d tracks\n", totalTracks);
     } else {
         Serial.println(F("DFPlayer Error: SD Card missing or wiring wrong."));
     }
 }
 
-void drawMusicPlayer() {
+void drawVUMeter(int x, int y, int value, const char* label) {
+    int radius = 40;
+    float startAngle = 135; // Corresponds to -10 on the meter
+    float endAngle = 45;   // Corresponds to +3 on the meter
+    float angleRange = startAngle - endAngle;
+
+    // Draw meter background (arc)
+    for (int i = 0; i <= angleRange; i += 5) {
+        float angle = radians(startAngle - i);
+        int x1 = x + cos(angle) * (radius - 10);
+        int y1 = y - sin(angle) * (radius - 10);
+        int x2 = x + cos(angle) * radius;
+        int y2 = y - sin(angle) * radius;
+        canvas.drawLine(x1, y1, x2, y2, COLOR_BORDER);
+    }
+
+    // Draw tick marks
+    for (int i = 0; i <= 10; i++) {
+        float percent = i / 10.0;
+        float angle = radians(startAngle - (angleRange * percent));
+        int r = (i % 5 == 0) ? 8 : 4;
+        int x1 = x + cos(angle) * (radius - r);
+        int y1 = y - sin(angle) * (radius - r);
+        int x2 = x + cos(angle) * radius;
+        int y2 = y - sin(angle) * radius;
+        canvas.drawLine(x1, y1, x2, y2, COLOR_DIM);
+    }
+
+    // Draw needle
+    float valuePercent = constrain(value / 100.0f, 0.0f, 1.0f);
+    float needleAngle = radians(startAngle - (angleRange * valuePercent));
+    int needleX = x + cos(needleAngle) * (radius - 5);
+    int needleY = y - sin(needleAngle) * (radius - 5);
+    canvas.drawLine(x, y, needleX, needleY, 0xF800); // Red needle
+
+    // Draw pivot
+    canvas.fillCircle(x, y, 3, COLOR_SECONDARY);
+
+    // Draw label
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(x - 4, y + 5);
+    canvas.print(label);
+}
+
+void drawEnhancedMusicPlayer() {
     canvas.fillScreen(COLOR_BG);
-    drawStatusBar(); // Menampilkan jam/baterai di atas
+    drawStatusBar();
 
-    // Header Frame
-    canvas.fillRoundRect(10, 25, SCREEN_WIDTH-20, 105, 10, COLOR_PANEL);
-    canvas.drawRoundRect(10, 25, SCREEN_WIDTH-20, 105, 10, COLOR_BORDER);
-
-    // Judul & Indikator Track
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setTextSize(2);
-    canvas.setCursor(30, 45);
-    canvas.printf("Track: %03d/%03d", currentTrackIdx, totalTracks);
+    // --- Judul & Latar Belakang Utama ---
+    canvas.fillRoundRect(5, 18, SCREEN_WIDTH - 10, 130, 8, COLOR_PANEL);
+    canvas.drawRoundRect(5, 18, SCREEN_WIDTH - 10, 130, 8, COLOR_BORDER);
+    canvas.drawFastHLine(10, 40, SCREEN_WIDTH - 20, COLOR_BORDER);
 
     canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(30, 70);
-    canvas.print("STATUS: ");
-    canvas.setTextColor(musicIsPlaying ? COLOR_ACCENT : COLOR_DIM);
-    canvas.print(musicIsPlaying ? "PLAYING" : "PAUSED");
-
-    // Display EQ and Loop Mode
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(30, 85);
-    canvas.print("EQ: ");
     canvas.setTextColor(COLOR_PRIMARY);
-    canvas.print(eqModeNames[musicEQMode]);
+    canvas.setCursor(15, 25);
+    canvas.print("AI-POCKET MUSIC");
 
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(150, 85);
-    canvas.print("MODE: ");
-    canvas.setTextColor(COLOR_PRIMARY);
-    if (musicIsShuffled) {
-        canvas.print("Shuffle");
-    } else {
-        switch (musicLoopMode) {
-            case LOOP_ALL: canvas.print("Loop All"); break;
-            case LOOP_ONE: canvas.print("Loop One"); break;
-            default: canvas.print("Normal"); break;
-        }
-    }
-
-    // --- Visualizer UX (Bar Animasi) ---
+    // --- VU METERS ---
+    int vuValue = 0;
     if (musicIsPlaying) {
-        // More structured "breathing" sine wave animation
-        unsigned long currentTime = millis();
-        for (int i = 0; i < 16; i++) {
-            float sineValue = sin(currentTime * 0.005f + i * 0.5f); // Adjust frequency and phase
-            int h = map(sineValue, -1, 1, 5, 35); // Map sine output to height
-            canvas.fillRect(25 + (i * 14), 118 - h, 8, h, COLOR_ACCENT);
-        }
-    } else {
-        // Garis datar saat stop
-        canvas.fillRect(25, 116, SCREEN_WIDTH - 50, 2, COLOR_BORDER);
+        // Simulate needle movement based on volume and random jitter
+        vuValue = map(musicVol, 0, 30, 0, 80) + random(0, 20);
+    }
+    drawVUMeter(80, 95, vuValue, "L");
+    drawVUMeter(SCREEN_WIDTH - 80, 95, vuValue, "R");
+
+    // --- METADATA ---
+    if (currentTrackIdx > 0 && currentTrackIdx < musicPlaylist.size()) {
+        canvas.setTextSize(2);
+        canvas.setTextColor(COLOR_PRIMARY);
+        String title = musicPlaylist[currentTrackIdx].title;
+        int16_t x1, y1;
+        uint16_t w, h;
+        canvas.getTextBounds(title.c_str(), 0, 0, &x1, &y1, &w, &h);
+        canvas.setCursor((SCREEN_WIDTH - w) / 2, 48);
+        canvas.print(title);
+
+        canvas.setTextSize(1);
+        canvas.setTextColor(COLOR_SECONDARY);
+        String artist = musicPlaylist[currentTrackIdx].artist;
+        canvas.getTextBounds(artist.c_str(), 0, 0, &x1, &y1, &w, &h);
+        canvas.setCursor((SCREEN_WIDTH - w) / 2, 68);
+        canvas.print(artist);
     }
 
-    // --- Volume Control UX ---
-    canvas.setTextColor(COLOR_PRIMARY);
+    // --- PROGRESS BAR ---
+    int progressBarY = 130;
+    canvas.drawRect(15, progressBarY, SCREEN_WIDTH - 30, 8, COLOR_BORDER);
+    if (musicTotalTime > 0) {
+        int progress = map(musicCurrentTime, 0, musicTotalTime, 0, SCREEN_WIDTH - 32);
+        canvas.fillRect(16, progressBarY + 1, progress, 6, COLOR_PRIMARY);
+    }
     canvas.setTextSize(1);
-    canvas.setCursor(15, 142);
-    canvas.print("VOL");
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(15, progressBarY + 12);
+    canvas.print(formatTime(musicCurrentTime));
+    String totalTimeStr = formatTime(musicTotalTime);
+    canvas.setCursor(SCREEN_WIDTH - 15 - (totalTimeStr.length() * 6), progressBarY + 12);
+    canvas.print(totalTimeStr);
 
-    // Background bar volume
-    canvas.drawRect(50, 142, 160, 10, COLOR_BORDER);
-    // Fill bar volume
-    int vBar = map(musicVol, 0, 30, 0, 160);
-    canvas.fillRect(50, 142, vBar, 10, COLOR_PRIMARY);
+    // --- STATUS ICONS/TEXT ---
+    drawEQIcon(SCREEN_WIDTH - 55, 35, musicEQMode);
 
-    canvas.setCursor(220, 142);
-    canvas.print(musicVol);
-
-    // --- Navigation Footer (UX Tip) ---
-    canvas.fillRect(0, SCREEN_HEIGHT - 22, SCREEN_WIDTH, 22, COLOR_PANEL);
+    canvas.setTextSize(1);
     canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(8, SCREEN_HEIGHT - 16);
-    canvas.print("U/D:Vol | L/R(hold):EQ/Mode | SEL(hold):Shuffle");
+    int statusX = SCREEN_WIDTH - 90;
 
-    // Kirim Buffer ke Layar
+    if (musicIsShuffled) {
+        canvas.drawRect(statusX, 22, 28, 12, COLOR_DIM);
+        canvas.setCursor(statusX + 4, 24);
+        canvas.print("SHFL");
+    } else {
+        if (musicLoopMode == LOOP_ALL) {
+            canvas.drawRect(statusX, 22, 28, 12, COLOR_DIM);
+            canvas.setCursor(statusX + 5, 24);
+            canvas.print("ALL");
+        }
+        if (musicLoopMode == LOOP_ONE) {
+            canvas.drawRect(statusX, 22, 28, 12, COLOR_DIM);
+            canvas.setCursor(statusX + 5, 24);
+            canvas.print("ONE");
+        }
+    }
+
+
+    // --- SPECTRUM VISUALIZER ---
+    canvas.fillRect(0, SCREEN_HEIGHT - 30, SCREEN_WIDTH, 30, COLOR_PANEL);
+    canvas.drawFastHLine(0, SCREEN_HEIGHT - 30, SCREEN_WIDTH, COLOR_BORDER);
+    int numBars = 32;
+    int barWidth = SCREEN_WIDTH / numBars;
+    for (int i = 0; i < numBars; i++) {
+        int barHeight = 0;
+        if (musicIsPlaying) {
+            // Simulate spectrum data with sine waves
+            float sineValue = sin(millis() * 0.01f + i * 0.5f);
+            barHeight = map(sineValue, -1, 1, 2, 28);
+        }
+        canvas.fillRect(i * barWidth, SCREEN_HEIGHT - barHeight, barWidth - 1, barHeight, COLOR_PRIMARY);
+    }
+
+
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawEQIcon(int x, int y, uint8_t eqMode) {
+    int bars[5];
+    switch (eqMode) {
+        case DFPLAYER_EQ_POP:     { int b[] = {3, 5, 6, 5, 3}; memcpy(bars, b, sizeof(bars)); break; }
+        case DFPLAYER_EQ_ROCK:    { int b[] = {6, 4, 3, 5, 6}; memcpy(bars, b, sizeof(bars)); break; }
+        case DFPLAYER_EQ_JAZZ:    { int b[] = {5, 6, 4, 5, 3}; memcpy(bars, b, sizeof(bars)); break; }
+        case DFPLAYER_EQ_CLASSIC: { int b[] = {6, 5, 4, 3, 2}; memcpy(bars, b, sizeof(bars)); break; }
+        case DFPLAYER_EQ_BASS:    { int b[] = {6, 5, 2, 3, 4}; memcpy(bars, b, sizeof(bars)); break; }
+        default:                  { int b[] = {4, 4, 4, 4, 4}; memcpy(bars, b, sizeof(bars)); break; } // Normal
+    }
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(x - 10, y + 12);
+    canvas.print(eqModeNames[eqMode]);
+
+    for (int i = 0; i < 5; i++) {
+        int barHeight = bars[i];
+        canvas.fillRect(x + i * 4, y - barHeight, 3, barHeight, COLOR_DIM);
+    }
+}
+
+
+String formatTime(int seconds) {
+    int mins = seconds / 60;
+    int secs = seconds % 60;
+    char buf[6];
+    sprintf(buf, "%02d:%02d", mins, secs);
+    return String(buf);
 }
 
 float custom_lerp(float a, float b, float f) {
@@ -4899,7 +5089,7 @@ void refreshCurrentScreen() {
       drawPinLock(true);
       break;
     case STATE_MUSIC_PLAYER:
-      drawMusicPlayer();
+      drawEnhancedMusicPlayer();
       break;
     default:
       showMainMenu(x_offset);
@@ -5282,6 +5472,20 @@ void loop() {
       }
     }
     else if (currentState == STATE_MUSIC_PLAYER) {
+      // --- Update track time & save session periodically ---
+      if (musicIsPlaying && now - lastTrackInfoUpdate > 1000) { // Update once per second
+        musicCurrentTime = myDFPlayer.readCurrentFileNumber(); // This is misnamed in library, it's current time
+        musicTotalTime = myDFPlayer.readCurrentFileTime();
+        lastTrackInfoUpdate = now;
+
+        // Save progress every 5 seconds
+        if (now - lastTrackSaveMillis > 5000) {
+          preferences.putInt("musicTime", musicCurrentTime);
+          preferences.putInt("musicTrack", currentTrackIdx);
+          lastTrackSaveMillis = now;
+        }
+      }
+
       // Music player input handling with long press
       unsigned long now = millis();
 
@@ -5302,6 +5506,7 @@ void loop() {
           myDFPlayer.previous();
           if (currentTrackIdx > 1) currentTrackIdx--;
           else currentTrackIdx = totalTracks;
+          preferences.putInt("musicTrack", currentTrackIdx); // Save track immediately
           musicIsPlaying = true;
         }
         btnLeftPressTime = 0;
@@ -5337,6 +5542,7 @@ void loop() {
           myDFPlayer.next();
           if (currentTrackIdx < totalTracks) currentTrackIdx++;
           else currentTrackIdx = 1;
+          preferences.putInt("musicTrack", currentTrackIdx); // Save track immediately
           musicIsPlaying = true;
         }
         btnRightPressTime = 0;
