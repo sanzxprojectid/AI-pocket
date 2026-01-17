@@ -992,7 +992,6 @@ void initMusicPlayer() {
           // Play the track and then seek. This is more reliable.
           myDFPlayer.play(currentTrackIdx);
           delay(100); // Give player time to start
-          myDFPlayer.seek(lastTime);
           // Wait a moment before pausing to ensure the seek command is processed
           delay(200);
           myDFPlayer.pause();
@@ -1095,20 +1094,22 @@ void drawEnhancedMusicPlayer() {
         canvas.print(artist);
     }
 
-    // --- PROGRESS BAR ---
+    // --- PROGRESS BAR (DISABLED) ---
+    // NOTE: The DFPlayer library used does not support reading track time,
+    // so the progress bar functionality is disabled.
     int progressBarY = 130;
     canvas.drawRect(15, progressBarY, SCREEN_WIDTH - 30, 8, COLOR_BORDER);
-    if (musicTotalTime > 0) {
-        int progress = map(musicCurrentTime, 0, musicTotalTime, 0, SCREEN_WIDTH - 32);
-        canvas.fillRect(16, progressBarY + 1, progress, 6, COLOR_PRIMARY);
-    }
+    // if (musicTotalTime > 0) {
+    //     int progress = map(musicCurrentTime, 0, musicTotalTime, 0, SCREEN_WIDTH - 32);
+    //     canvas.fillRect(16, progressBarY + 1, progress, 6, COLOR_PRIMARY);
+    // }
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_SECONDARY);
     canvas.setCursor(15, progressBarY + 12);
-    canvas.print(formatTime(musicCurrentTime));
+    // canvas.print(formatTime(musicCurrentTime));
     String totalTimeStr = formatTime(musicTotalTime);
-    canvas.setCursor(SCREEN_WIDTH - 15 - (totalTimeStr.length() * 6), progressBarY + 12);
-    canvas.print(totalTimeStr);
+    // canvas.setCursor(SCREEN_WIDTH - 15 - (totalTimeStr.length() * 6), progressBarY + 12);
+    // canvas.print(totalTimeStr);
 
     // --- STATUS ICONS/TEXT ---
     drawEQIcon(SCREEN_WIDTH - 55, 35, musicEQMode);
@@ -5473,27 +5474,29 @@ void loop() {
     }
     else if (currentState == STATE_MUSIC_PLAYER) {
       // --- Update track time & save session periodically ---
-      if (musicIsPlaying && now - lastTrackInfoUpdate > 1000) { // Update once per second
-        musicCurrentTime = myDFPlayer.readCurrentFileNumber(); // This is misnamed in library, it's current time
-        musicTotalTime = myDFPlayer.readCurrentFileTime();
-        lastTrackInfoUpdate = now;
+      // NOTE: The DFPlayer Mini library used does not support reading current/total time.
+      // The following logic is disabled to prevent compile errors and will not be functional.
+      if (musicIsPlaying && currentMillis - lastTrackInfoUpdate > 1000) { // Update once per second
+        // musicCurrentTime = myDFPlayer.readCurrentFileNumber(); // This function does not exist for getting time
+        // musicTotalTime = myDFPlayer.readCurrentFileTime(); // This function does not exist
+        lastTrackInfoUpdate = currentMillis;
 
         // Save progress every 5 seconds
-        if (now - lastTrackSaveMillis > 5000) {
-          preferences.putInt("musicTime", musicCurrentTime);
+        if (currentMillis - lastTrackSaveMillis > 5000) {
+          // preferences.putInt("musicTime", musicCurrentTime); // Can't save time
           preferences.putInt("musicTrack", currentTrackIdx);
-          lastTrackSaveMillis = now;
+          lastTrackSaveMillis = currentMillis;
         }
       }
 
       // Music player input handling with long press
-      unsigned long now = millis();
+      // unsigned long now = millis(); // 'now' is not needed, using 'currentMillis' from loop start
 
       // BTN_LEFT
       if (digitalRead(BTN_LEFT) == BTN_ACT) {
         if (btnLeftPressTime == 0) {
-          btnLeftPressTime = now;
-        } else if (!btnLeftLongPressTriggered && (now - btnLeftPressTime > longPressDuration)) {
+          btnLeftPressTime = currentMillis;
+        } else if (!btnLeftLongPressTriggered && (currentMillis - btnLeftPressTime > longPressDuration)) {
           btnLeftLongPressTriggered = true;
           // LONG PRESS ACTION: Cycle EQ
           musicEQMode = (musicEQMode + 1) % 6; // 6 EQ modes
@@ -5516,8 +5519,8 @@ void loop() {
       // BTN_RIGHT
       if (digitalRead(BTN_RIGHT) == BTN_ACT) {
         if (btnRightPressTime == 0) {
-          btnRightPressTime = now;
-        } else if (!btnRightLongPressTriggered && (now - btnRightPressTime > longPressDuration)) {
+          btnRightPressTime = currentMillis;
+        } else if (!btnRightLongPressTriggered && (currentMillis - btnRightPressTime > longPressDuration)) {
           btnRightLongPressTriggered = true;
           // LONG PRESS ACTION: Cycle Loop Mode
           musicLoopMode = (MusicLoopMode)(((int)musicLoopMode + 1) % 3);
@@ -5552,8 +5555,8 @@ void loop() {
       // BTN_SELECT
       if (digitalRead(BTN_SELECT) == BTN_ACT) {
         if (btnSelectPressTime == 0) {
-          btnSelectPressTime = now;
-        } else if (!btnSelectLongPressTriggered && (now - btnSelectPressTime > longPressDuration)) {
+          btnSelectPressTime = currentMillis;
+        } else if (!btnSelectLongPressTriggered && (currentMillis - btnSelectPressTime > longPressDuration)) {
           btnSelectLongPressTriggered = true;
           // LONG PRESS ACTION: Toggle Shuffle
           musicIsShuffled = !musicIsShuffled;
@@ -5580,13 +5583,13 @@ void loop() {
       }
 
       // Volume controls (non-blocking)
-      if (now - lastVolumeChangeMillis > 80) { // Rate limit volume changes
+      if (currentMillis - lastVolumeChangeMillis > 80) { // Rate limit volume changes
         if (digitalRead(BTN_UP) == BTN_ACT) {
           if (musicVol < 30) {
               musicVol++;
               myDFPlayer.volume(musicVol);
               preferences.putInt("musicVol", musicVol);
-              lastVolumeChangeMillis = now;
+              lastVolumeChangeMillis = currentMillis;
           }
         }
         if (digitalRead(BTN_DOWN) == BTN_ACT) {
@@ -5594,7 +5597,7 @@ void loop() {
               musicVol--;
               myDFPlayer.volume(musicVol);
               preferences.putInt("musicVol", musicVol);
-              lastVolumeChangeMillis = now;
+              lastVolumeChangeMillis = currentMillis;
           }
         }
       }
