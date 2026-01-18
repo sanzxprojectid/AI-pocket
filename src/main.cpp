@@ -778,6 +778,7 @@ int currentTrackIdx = 1;
 bool musicIsPlaying = false;
 unsigned long visualizerMillis = 0;
 unsigned long lastVolumeChangeMillis = 0;
+unsigned long lastTrackCheckMillis = 0;
 
 // Time and session tracking
 uint16_t musicCurrentTime = 0;
@@ -6227,6 +6228,21 @@ void loop() {
     changeState(STATE_SCREENSAVER);
   }
 
+  // --- Music Player State-Specific Updates ---
+  if (currentState == STATE_MUSIC_PLAYER) {
+    // Periodically check the hardware for the currently playing track to stay in sync
+    if (currentMillis - lastTrackCheckMillis > 500) { // Check every 500ms
+      lastTrackCheckMillis = currentMillis;
+      int fileNumber = myDFPlayer.readCurrentFileNumber(); // This can return -1 on error
+      if (fileNumber > 0 && fileNumber <= totalTracks) {
+        if (currentTrackIdx != fileNumber) {
+          currentTrackIdx = fileNumber;
+          preferences.putInt("musicTrack", currentTrackIdx);
+        }
+      }
+    }
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
 
@@ -6287,9 +6303,6 @@ void loop() {
             if (btnLeftPressTime > 0 && !btnLeftLongPressTriggered) {
             // SHORT PRESS ACTION: Previous Track
             myDFPlayer.previous();
-            if (currentTrackIdx > 1) currentTrackIdx--;
-            else currentTrackIdx = totalTracks;
-            preferences.putInt("musicTrack", currentTrackIdx);
             musicIsPlaying = true;
             }
             btnLeftPressTime = 0;
@@ -6321,9 +6334,6 @@ void loop() {
             if (btnRightPressTime > 0 && !btnRightLongPressTriggered) {
             // SHORT PRESS ACTION: Next Track
             myDFPlayer.next();
-            if (currentTrackIdx < totalTracks) currentTrackIdx++;
-            else currentTrackIdx = 1;
-            preferences.putInt("musicTrack", currentTrackIdx);
             musicIsPlaying = true;
             }
             btnRightPressTime = 0;
