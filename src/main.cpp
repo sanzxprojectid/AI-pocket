@@ -746,6 +746,7 @@ String chatHistory = "";
 
 // Screensaver
 #define SCREENSAVER_TIMEOUT 90000 // 1.5 minutes
+unsigned long lastScreensaverUpdate = 0;
 
 enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
@@ -1467,7 +1468,7 @@ const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // New helper functions to manage SPI bus between TFT and SD Card
 bool beginSD() {
   // Gunakan bus SPI khusus untuk SD Card
-  spiSD.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, SDCARD_CS);
+  spiSD.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, -1);
   if (SD.begin(SDCARD_CS, spiSD)) {
     return true;
   }
@@ -6157,7 +6158,7 @@ void loop() {
     case STATE_TOOL_WIFI_SONAR:
     case STATE_TOOL_DEAUTH_ATTACK:
     case STATE_MUSIC_PLAYER: // For visualizer
-    case STATE_SCREENSAVER: // For blinking colon and starfield
+    // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
     default:
@@ -6212,6 +6213,13 @@ void loop() {
 
   if (currentState == STATE_GAME_PLATFORMER) {
     updatePlatformerLogic();
+  }
+
+  if (currentState == STATE_SCREENSAVER) {
+    if (currentMillis - lastScreensaverUpdate > 33) { // ~30 FPS
+      screenIsDirty = true;
+      lastScreensaverUpdate = currentMillis;
+    }
   }
 
   // Screensaver check
