@@ -22,7 +22,6 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
-#include "font_retro.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -1835,30 +1834,31 @@ void drawScreensaver() {
 
   struct tm timeinfo;
   if (getLocalTime(&timeinfo, 0)) {
-    char timeHour[3];
-    char timeMin[3];
-    sprintf(timeHour, "%02d", timeinfo.tm_hour);
-    sprintf(timeMin, "%02d", timeinfo.tm_min);
+    char timeString[6];
+    // Format the time string with a colon
+    sprintf(timeString, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
 
-    int scale = 8;
-    int charWidth = 5 * scale;
-    int charHeight = 7 * scale;
-    int totalWidth = (4 * charWidth) + (2 * scale); // 4 digit + spasi pemisah
-    int startX = (SCREEN_WIDTH - totalWidth) / 2;
-    int startY = (SCREEN_HEIGHT - charHeight) / 2;
-
-    // Gambar jam
-    drawRetroChar(canvas, startX, startY, timeHour[0], scale, COLOR_PRIMARY);
-    drawRetroChar(canvas, startX + charWidth, startY, timeHour[1], scale, COLOR_PRIMARY);
-
-    // Gambar pemisah (titik dua) yang berkedip
-    if (timeinfo.tm_sec % 2 == 0) {
-      canvas.fillRect(startX + (2 * charWidth) + (scale/2), startY + scale, scale, scale, COLOR_PRIMARY);
-      canvas.fillRect(startX + (2 * charWidth) + (scale/2), startY + (4 * scale), scale, scale, COLOR_PRIMARY);
+    // Make the colon blink by replacing it with a space on odd seconds
+    if (timeinfo.tm_sec % 2 != 0) {
+      timeString[2] = ' ';
     }
 
-    drawRetroChar(canvas, startX + (2 * charWidth) + (2*scale), startY, timeMin[0], scale, COLOR_PRIMARY);
-    drawRetroChar(canvas, startX + (3 * charWidth) + (2*scale), startY, timeMin[1], scale, COLOR_PRIMARY);
+    int scale = 8;
+    canvas.setTextSize(scale);
+    canvas.setTextColor(COLOR_PRIMARY);
+
+    // Get the actual pixel dimensions of the text
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds(timeString, 0, 0, &x1, &y1, &w, &h);
+
+    // Calculate the coordinates to center the text
+    int startX = (SCREEN_WIDTH - w) / 2;
+    int startY = (SCREEN_HEIGHT - h) / 2;
+
+    canvas.setCursor(startX, startY);
+    canvas.print(timeString);
+
   } else {
     // Tampilkan jika waktu belum tersinkronisasi
     canvas.setTextSize(2);
