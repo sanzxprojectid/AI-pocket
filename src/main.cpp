@@ -2419,7 +2419,8 @@ void initPlatformerGame() {
   jumperPlayer.vy = JUMPER_LIFT;
 
   // Initial platforms
-  jumperPlatforms[0] = {SCREEN_WIDTH / 2 - 30, SCREEN_HEIGHT - 30, 60, PLATFORM_STATIC, true, 0};
+  // Buat platform pertama lebih lebar agar lebih mudah untuk pemula
+  jumperPlatforms[0] = {SCREEN_WIDTH / 2 - 40, SCREEN_HEIGHT - 30, 80, PLATFORM_STATIC, true, 0};
   for (int i = 1; i < JUMPER_MAX_PLATFORMS; i++) {
     jumperPlatforms[i] = {
       (float)random(0, SCREEN_WIDTH - 50),
@@ -2603,6 +2604,14 @@ void drawPlatformerGame() {
   canvas.setCursor(10, 10);
   canvas.print(jumperScore);
 
+  // Tampilkan instruksi selama permainan
+  if (jumperGameActive) {
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(10, SCREEN_HEIGHT - 12);
+    canvas.print("LEFT/RIGHT to Move | L+R to Exit");
+  }
+
   // --- Draw Game Over Screen ---
   if (!jumperGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 40, 200, 80, 8, COLOR_PANEL);
@@ -2623,9 +2632,9 @@ void drawPlatformerGame() {
     canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2);
     canvas.print(finalScore);
 
-    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.getTextBounds("SELECT to Restart | L+R to Exit", 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 + 20);
-    canvas.print("SELECT to Restart");
+    canvas.print("SELECT to Restart | L+R to Exit");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -2751,6 +2760,13 @@ void drawRacingGame() {
     canvas.print((int)playerCar.speed);
     canvas.setTextSize(1);
     canvas.print(" KM/H");
+
+    // Tampilkan FPS di pojok kanan atas
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(SCREEN_WIDTH - 50, 5);
+    canvas.print("FPS: ");
+    canvas.print(perfFPS);
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
