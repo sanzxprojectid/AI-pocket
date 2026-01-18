@@ -22,7 +22,6 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
-#include "font_retro.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -1848,8 +1847,12 @@ void drawScreensaver() {
     int startY = (SCREEN_HEIGHT - charHeight) / 2;
 
     // Gambar jam
-    drawRetroChar(canvas, startX, startY, timeHour[0], scale, COLOR_PRIMARY);
-    drawRetroChar(canvas, startX + charWidth, startY, timeHour[1], scale, COLOR_PRIMARY);
+    canvas.setTextSize(scale);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(startX, startY);
+    canvas.print(timeHour[0]);
+    canvas.setCursor(startX + charWidth, startY);
+    canvas.print(timeHour[1]);
 
     // Gambar pemisah (titik dua) yang berkedip
     if (timeinfo.tm_sec % 2 == 0) {
@@ -1857,8 +1860,10 @@ void drawScreensaver() {
       canvas.fillRect(startX + (2 * charWidth) + (scale/2), startY + (4 * scale), scale, scale, COLOR_PRIMARY);
     }
 
-    drawRetroChar(canvas, startX + (2 * charWidth) + (2*scale), startY, timeMin[0], scale, COLOR_PRIMARY);
-    drawRetroChar(canvas, startX + (3 * charWidth) + (2*scale), startY, timeMin[1], scale, COLOR_PRIMARY);
+    canvas.setCursor(startX + (2 * charWidth) + (2*scale), startY);
+    canvas.print(timeMin[0]);
+    canvas.setCursor(startX + (3 * charWidth) + (2*scale), startY);
+    canvas.print(timeMin[1]);
   } else {
     // Tampilkan jika waktu belum tersinkronisasi
     canvas.setTextSize(2);
