@@ -2422,14 +2422,25 @@ void initPlatformerGame() {
   // Buat platform pertama lebih lebar agar lebih mudah untuk pemula
   jumperPlatforms[0] = {SCREEN_WIDTH / 2 - 40, SCREEN_HEIGHT - 30, 80, PLATFORM_STATIC, true, 0};
   for (int i = 1; i < JUMPER_MAX_PLATFORMS; i++) {
-    jumperPlatforms[i] = {
-      (float)random(0, SCREEN_WIDTH - 50),
-      (float)(SCREEN_HEIGHT - 100 - (i * 70)),
-      (float)random(40, 70),
-      PLATFORM_STATIC,
-      true,
-      0
-    };
+    jumperPlatforms[i].y = (float)(SCREEN_HEIGHT - 100 - (i * 70));
+    jumperPlatforms[i].x = (float)random(0, SCREEN_WIDTH - 50);
+    jumperPlatforms[i].active = true;
+
+    // Add different types of platforms right from the start
+    int randType = random(0, 10);
+    if (randType > 8) {
+      jumperPlatforms[i].type = PLATFORM_BREAKABLE;
+      jumperPlatforms[i].width = 50;
+      jumperPlatforms[i].speed = 0;
+    } else if (randType > 6) {
+      jumperPlatforms[i].type = PLATFORM_MOVING;
+      jumperPlatforms[i].width = 60;
+      jumperPlatforms[i].speed = random(0, 2) == 0 ? 1.5f : -1.5f;
+    } else {
+      jumperPlatforms[i].type = PLATFORM_STATIC;
+      jumperPlatforms[i].width = random(40, 70);
+      jumperPlatforms[i].speed = 0;
+    }
   }
 
   // Clear particles
