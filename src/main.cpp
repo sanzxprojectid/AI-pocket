@@ -22,6 +22,7 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+#include "font_retro.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -139,7 +140,8 @@ enum AppState {
   STATE_TOOL_BLE_MENU,
   STATE_DEAUTH_DETECTOR,
   STATE_LOCAL_AI_CHAT,
-  STATE_MUSIC_PLAYER
+  STATE_MUSIC_PLAYER,
+  STATE_SCREENSAVER
 };
 
 AppState currentState = STATE_BOOT;
@@ -743,6 +745,9 @@ int batteryPercentage = -1; // -1 indicates not yet read
 unsigned long lastInputTime = 0;
 String chatHistory = "";
 
+// Screensaver
+#define SCREENSAVER_TIMEOUT 120000 // 2 minutes
+
 enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
 float transitionProgress = 0.0;
@@ -1034,6 +1039,7 @@ void drawBatteryIcon();
 void drawBootScreen(const char* lines[], int lineCount, int progress);
 float custom_lerp(float a, float b, float f);
 void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_t color2);
+void drawScreensaver();
 
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
@@ -1819,6 +1825,51 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ SCREENSAVER ============
+void drawScreensaver() {
+  // Gunakan kembali efek starfield untuk latar belakang yang dinamis
+  drawStarfield();
+
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 0)) {
+    char timeHour[3];
+    char timeMin[3];
+    sprintf(timeHour, "%02d", timeinfo.tm_hour);
+    sprintf(timeMin, "%02d", timeinfo.tm_min);
+
+    int scale = 8;
+    int charWidth = 5 * scale;
+    int charHeight = 7 * scale;
+    int totalWidth = (4 * charWidth) + (2 * scale); // 4 digit + spasi pemisah
+    int startX = (SCREEN_WIDTH - totalWidth) / 2;
+    int startY = (SCREEN_HEIGHT - charHeight) / 2;
+
+    // Gambar jam
+    drawRetroChar(canvas, startX, startY, timeHour[0], scale, COLOR_PRIMARY);
+    drawRetroChar(canvas, startX + charWidth, startY, timeHour[1], scale, COLOR_PRIMARY);
+
+    // Gambar pemisah (titik dua) yang berkedip
+    if (timeinfo.tm_sec % 2 == 0) {
+      canvas.fillRect(startX + (2 * charWidth) + (scale/2), startY + scale, scale, scale, COLOR_PRIMARY);
+      canvas.fillRect(startX + (2 * charWidth) + (scale/2), startY + (4 * scale), scale, scale, COLOR_PRIMARY);
+    }
+
+    drawRetroChar(canvas, startX + (2 * charWidth) + (2*scale), startY, timeMin[0], scale, COLOR_PRIMARY);
+    drawRetroChar(canvas, startX + (3 * charWidth) + (2*scale), startY, timeMin[1], scale, COLOR_PRIMARY);
+  } else {
+    // Tampilkan jika waktu belum tersinkronisasi
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_WARN);
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds("Waiting for time sync...", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    canvas.print("Waiting for time sync...");
+  }
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -5799,6 +5850,9 @@ void refreshCurrentScreen() {
     case STATE_MUSIC_PLAYER:
       drawEnhancedMusicPlayer();
       break;
+    case STATE_SCREENSAVER:
+      drawScreensaver();
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -6098,6 +6152,7 @@ void loop() {
     case STATE_TOOL_WIFI_SONAR:
     case STATE_TOOL_DEAUTH_ATTACK:
     case STATE_MUSIC_PLAYER: // For visualizer
+    case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
     default:
@@ -6154,8 +6209,26 @@ void loop() {
     updatePlatformerLogic();
   }
 
+  // Screensaver check
+  if (currentState != STATE_SCREENSAVER && currentState != STATE_BOOT && currentMillis - lastInputTime > SCREENSAVER_TIMEOUT) {
+    changeState(STATE_SCREENSAVER);
+  }
+
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
     bool buttonPressed = false;
+
+    // Check for any button press to exit screensaver
+    if (currentState == STATE_SCREENSAVER) {
+      if (digitalRead(BTN_UP) == BTN_ACT || digitalRead(BTN_DOWN) == BTN_ACT ||
+          digitalRead(BTN_LEFT) == BTN_ACT || digitalRead(BTN_RIGHT) == BTN_ACT ||
+          digitalRead(BTN_SELECT) == BTN_ACT) {
+        changeState(previousState); // Kembali ke state sebelumnya
+        lastInputTime = currentMillis;
+        lastDebounce = currentMillis;
+        ledQuickFlash();
+        return; // Skip sisa input handling
+      }
+    }
 
     if (currentState == STATE_MUSIC_PLAYER) {
       musicIsPlaying = (digitalRead(DFPLAYER_BUSY_PIN) == LOW);
