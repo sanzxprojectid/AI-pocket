@@ -745,7 +745,7 @@ unsigned long lastInputTime = 0;
 String chatHistory = "";
 
 // Screensaver
-#define SCREENSAVER_TIMEOUT 120000 // 2 minutes
+#define SCREENSAVER_TIMEOUT 90000 // 1.5 minutes
 
 enum TransitionState { TRANSITION_NONE, TRANSITION_OUT, TRANSITION_IN };
 TransitionState transitionState = TRANSITION_NONE;
@@ -1319,7 +1319,12 @@ void drawEnhancedMusicPlayer() {
     drawSpectrumVisualizer();
 
     // --- Track Counter ---
-    String trackInfo = String(currentTrackIdx) + " / " + String(totalTracks);
+    int folderNum = (currentTrackIdx - 1) / 100 + 1;
+    int trackInFolder = (currentTrackIdx - 1) % 100 + 1;
+    char trackInfoBuffer[50];
+    sprintf(trackInfoBuffer, "Folder: %02d | Track: %03d (%d/%d)", folderNum, trackInFolder, currentTrackIdx, totalTracks);
+    String trackInfo = String(trackInfoBuffer);
+
     int16_t x1, y1;
     uint16_t w, h;
     canvas.setTextSize(1);
