@@ -267,7 +267,7 @@ bool snakeGameOver;
 int snakeScore;
 unsigned long lastSnakeUpdate = 0;
 
-// ============ GAME: RACING V2 ============
+// ============ GAME: RACING V3 ============
 #define RACE_MODE_SINGLE 0
 #define RACE_MODE_MULTI 1
 int raceGameMode = RACE_MODE_SINGLE;
@@ -287,6 +287,22 @@ struct Camera {
   float z;
 };
 
+// New data structures for segment-based track
+enum RoadSegmentType { STRAIGHT, CURVE, HILL };
+struct RoadSegment {
+  RoadSegmentType type;
+  float curvature; // -1 (left) to 1 (right)
+  float hill;      // -1 (down) to 1 (up)
+  int length;      // Number of steps in this segment
+};
+
+enum SceneryType { TREE, BUSH, SIGN };
+struct SceneryObject {
+  SceneryType type;
+  float x; // Position relative to road center (-ve is left, +ve is right)
+  float z; // Position along the track
+};
+
 Car playerCar = {0, 0, 0, 0, 0, 0};
 Car aiCar = {0.5, 0, 10, 0, 0, 0};
 Car opponentCar = {0, 0, 0, 0, 0, 0};
@@ -296,10 +312,14 @@ unsigned long lastOpponentUpdate = 0;
 Camera camera = {0, 1500, -5000};
 
 bool racingGameActive = false;
-#define MAX_ROAD_POINTS 500
-float roadCurvature[MAX_ROAD_POINTS];
-float roadHeight[MAX_ROAD_POINTS];
-int roadPoints = 0;
+#define MAX_ROAD_SEGMENTS 200
+#define SEGMENT_STEP_LENGTH 100
+RoadSegment track[MAX_ROAD_SEGMENTS];
+int totalSegments = 0;
+
+#define MAX_SCENERY 100
+SceneryObject scenery[MAX_SCENERY];
+int sceneryCount = 0;
 
 unsigned long lastRaceUpdate = 0;
 
@@ -313,19 +333,78 @@ struct RacePacket {
 RacePacket outgoingRacePacket;
 RacePacket incomingRacePacket;
 
+// --- NEW V3 COLOR SPRITES (RGB565 format) ---
+// Each value is a 16-bit color, 0x0000 is transparent
+#define C_BLACK   0x0000
+#define C_RED     0xF800
+#define C_WHITE   0xFFFF
+#define C_DGREY   0x3186
+#define C_LGREY   0x7BCF
+#define C_BLUE    0x001F
+#define C_DBLUE   0x000A
+#define C_YELLOW  0xFFE0
+#define C_GREEN   0x07E0
+#define C_DGREEN  0x03E0
+#define C_BROWN   0xA280
 
-// Racing sprites (16x16)
-const unsigned char sprite_car_player[] PROGMEM = {
-    0x00, 0x00, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x0f, 0xf0, 0x3f, 0xfc, 0x7f, 0xfe, 0x7f, 0xfe,
-    0xff, 0xff, 0xff, 0xff, 0x7f, 0xfe, 0x7f, 0xfe, 0x3f, 0xfc, 0x0f, 0xf0, 0x07, 0xe0, 0x00, 0x00
+// Player Car (Red) - 32x16 sprite
+const uint16_t sprite_car_player[] PROGMEM = {
+  0,0,0,0,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,0,0,0,0,
+  0,0,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,0,0,
+  0,C_DGREY,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_DGREY,0,
+  C_DGREY,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_DGREY,
+  C_LGREY,C_DBLUE,C_DBLUE,C_DBLUE,C_RED,C_RED,C_RED,C_RED,C_DBLUE,C_DBLUE,C_DBLUE,C_LGREY,
+  C_WHITE,C_BLUE,C_BLUE,C_BLUE,C_RED,C_RED,C_RED,C_RED,C_BLUE,C_BLUE,C_BLUE,C_WHITE,
+  C_DGREY,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_DGREY,
+  0,C_DGREY,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_RED,C_DGREY,0,
+  0,0,C_BLACK,C_BLACK,0,0,0,0,0,C_BLACK,C_BLACK,0,0,
+  0,0,C_BLACK,C_BLACK,0,0,0,0,0,C_BLACK,C_BLACK,0,0
 };
-const unsigned char sprite_car_opponent[] PROGMEM = {
-    0x00, 0x00, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x0f, 0xf0, 0x3f, 0xfc, 0x78, 0x1e, 0x78, 0x1e,
-    0xf8, 0x1f, 0xf8, 0x1f, 0x78, 0x1e, 0x78, 0x1e, 0x3f, 0xfc, 0x0f, 0xf0, 0x07, 0xe0, 0x00, 0x00
+
+// Opponent Car (Blue) - 32x16 sprite
+const uint16_t sprite_car_opponent[] PROGMEM = {
+  0,0,0,0,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,0,0,0,0,
+  0,0,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,C_DGREY,0,0,
+  0,C_DGREY,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_DGREY,0,
+  C_DGREY,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_DGREY,
+  C_LGREY,C_LGREY,C_LGREY,C_LGREY,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_LGREY,C_LGREY,C_LGREY,C_LGREY,
+  C_WHITE,C_WHITE,C_WHITE,C_WHITE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_WHITE,C_WHITE,C_WHITE,C_WHITE,
+  C_DGREY,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_DGREY,
+  0,C_DGREY,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_BLUE,C_DGREY,0,
+  0,0,C_BLACK,C_BLACK,0,0,0,0,0,C_BLACK,C_BLACK,0,0,
+  0,0,C_BLACK,C_BLACK,0,0,0,0,0,C_BLACK,C_BLACK,0,0
 };
-const unsigned char sprite_tree[] PROGMEM = {
-    0x01, 0x80, 0x03, 0xc0, 0x07, 0xe0, 0x0f, 0xf0, 0x1f, 0xf8, 0x3f, 0xfc, 0x7f, 0xfe, 0xff, 0xff,
-    0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0
+
+
+// Tree - 16x16 sprite
+const uint16_t sprite_tree[] PROGMEM = {
+    0, 0, C_DGREEN, C_DGREEN, C_DGREEN, C_DGREEN, C_DGREEN, 0, 0,
+    0, C_DGREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_DGREEN, 0,
+    C_DGREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_DGREEN,
+    C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN,
+    0, C_DGREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_DGREEN, 0,
+    0, 0, 0, C_BROWN, C_BROWN, 0, 0, 0,
+    0, 0, 0, C_BROWN, C_BROWN, 0, 0, 0,
+    0, 0, 0, C_BROWN, C_BROWN, 0, 0, 0
+};
+
+// Bush - 16x8 sprite
+const uint16_t sprite_bush[] PROGMEM = {
+    0, C_DGREEN, C_GREEN, C_GREEN, C_GREEN, C_DGREEN, 0,
+    C_DGREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_DGREEN,
+    C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN, C_GREEN
+};
+
+// Road Sign (Left Arrow) - 16x16 sprite
+const uint16_t sprite_sign_left[] PROGMEM = {
+    0, C_LGREY, C_LGREY, C_LGREY, C_LGREY, C_LGREY, C_LGREY, 0,
+    C_LGREY, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_LGREY,
+    C_LGREY, C_WHITE, C_BLUE, C_BLUE, 0, C_BLUE, C_WHITE, C_LGREY,
+    C_LGREY, C_WHITE, C_BLUE, C_BLUE, C_BLUE, 0, C_WHITE, C_LGREY,
+    C_LGREY, C_WHITE, C_BLUE, C_BLUE, C_BLUE, C_BLUE, C_WHITE, C_LGREY,
+    C_LGREY, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_WHITE, C_LGREY,
+    0, 0, C_DGREY, C_DGREY, 0, 0,
+    0, 0, C_DGREY, C_DGREY, 0, 0
 };
 
 // ============ ICONS (32x32) ============
@@ -1706,6 +1785,7 @@ void drawSnakeGame() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+
 void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, float scale, uint16_t color) {
   if (scale <= 0) return;
   int16_t scaledW = w * scale;
@@ -1717,6 +1797,24 @@ void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, in
       int16_t srcY = j / scale;
       uint8_t byte = pgm_read_byte(&bitmap[(srcY * w + srcX) / 8]);
       if (byte & (128 >> (srcX & 7))) {
+        canvas.drawPixel(x + i, y + j, color);
+      }
+    }
+  }
+}
+
+// New function for drawing scaled 16-bit color bitmaps
+void drawScaledColorBitmap(int16_t x, int16_t y, const uint16_t *bitmap, int16_t w, int16_t h, float scale) {
+  if (scale <= 0) return;
+  int16_t scaledW = w * scale;
+  int16_t scaledH = h * scale;
+
+  for (int16_t j = 0; j < scaledH; j++) {
+    for (int16_t i = 0; i < scaledW; i++) {
+      int16_t srcX = i / scale;
+      int16_t srcY = j / scale;
+      uint16_t color = pgm_read_word(&bitmap[srcY * w + srcX]);
+      if (color != 0x0000) { // Assuming 0x0000 is transparent
         canvas.drawPixel(x + i, y + j, color);
       }
     }
@@ -2082,7 +2180,25 @@ void drawFireEffect() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ RACING GAME V2 LOGIC & DRAWING ============
+// ============ RACING GAME V3 LOGIC & DRAWING ============
+void generateTrack() {
+  totalSegments = 0;
+  sceneryCount = 0;
+
+  // Add some segments to the track
+  track[totalSegments++] = {STRAIGHT, 0, 0, 50};
+  track[totalSegments++] = {CURVE, 0.5, 0, 30};
+  track[totalSegments++] = {HILL, 0, 0.5, 20};
+  track[totalSegments++] = {HILL, 0, -0.5, 20};
+  track[totalSegments++] = {CURVE, -0.7, 0, 40};
+  track[totalSegments++] = {STRAIGHT, 0, 0, 30};
+
+  // Add some scenery
+  scenery[sceneryCount++] = {TREE, -1.5, 2000};
+  scenery[sceneryCount++] = {BUSH, 1.2, 4000};
+  scenery[sceneryCount++] = {SIGN, -1.8, 6000};
+}
+
 void updateRacingLogic() {
     if (!racingGameActive) {
         // Reset player and AI cars
@@ -2091,13 +2207,7 @@ void updateRacingLogic() {
         opponentCar = {0, 0, 0, 0, 0, 0};
         opponentPresent = false;
 
-        // Generate track
-        roadPoints = MAX_ROAD_POINTS;
-        float currentCurvature = 0;
-        for(int i=0; i<MAX_ROAD_POINTS; i++) {
-            roadCurvature[i] = sin(i * 0.05f) * 2.0f; // Example: sine wave track
-            roadHeight[i] = sin(i * 0.1f) * 300.0f; // Example: sine wave hills
-        }
+        generateTrack();
 
         racingGameActive = true;
     }
@@ -2107,40 +2217,90 @@ void updateRacingLogic() {
     lastRaceUpdate = millis();
 
     // --- Player Input ---
-    if (digitalRead(BTN_UP) == BTN_ACT) playerCar.speed += 80.0f * dt;
-    else playerCar.speed -= 40.0f * dt;
-    if (digitalRead(BTN_DOWN) == BTN_ACT) playerCar.speed -= 100.0f * dt;
+    if (digitalRead(BTN_UP) == BTN_ACT) playerCar.speed += 150.0f * dt; // Faster acceleration
+    else playerCar.speed -= 50.0f * dt; // Natural deceleration
+    if (digitalRead(BTN_DOWN) == BTN_ACT) playerCar.speed -= 200.0f * dt; // Stronger brake
 
-    if (digitalRead(BTN_LEFT) == BTN_ACT) playerCar.x -= 2.0f * dt * (playerCar.speed / 150.0f);
-    if (digitalRead(BTN_RIGHT) == BTN_ACT) playerCar.x += 2.0f * dt * (playerCar.speed / 150.0f);
+    playerCar.speed = constrain(playerCar.speed, 0, 250); // Higher top speed
 
-    playerCar.speed = constrain(playerCar.speed, 0, 200);
-    playerCar.x = constrain(playerCar.x, -2, 2);
-
-    // --- Physics ---
-    int playerSegment = (int)(playerCar.z / 100.0f) % roadPoints;
-    float speedPercent = playerCar.speed / 200.0f;
-    playerCar.steerAngle = roadCurvature[playerSegment] * (1.0f - speedPercent);
-    playerCar.x -= playerCar.steerAngle * speedPercent * dt * 2.0f;
-
-    // Hills effect
-    float heightDiff = roadHeight[(playerSegment + 5) % roadPoints] - roadHeight[playerSegment];
-    playerCar.speed -= (heightDiff / 100.0f) * dt * 200.0f;
-
-    // Off-road penalty
-    if (abs(playerCar.x) > 1.0f) {
-        playerCar.speed *= (1.0f - (abs(playerCar.x) - 1.0f) * 0.5f * dt);
+    // --- Track Length Calculation ---
+    int totalTrackLength = 0;
+    for(int i = 0; i < totalSegments; i++) {
+        totalTrackLength += track[i].length * SEGMENT_STEP_LENGTH;
     }
 
-    playerCar.z += playerCar.speed * dt * 2.0f;
-    if (playerCar.z >= roadPoints * 100.0f) playerCar.z -= roadPoints * 100.0f;
+    // --- Physics ---
+    playerCar.z += playerCar.speed * dt * 5.0f; // Scale speed to Z movement
+    if (playerCar.z >= totalTrackLength) {
+        playerCar.z -= totalTrackLength;
+    }
+    if (playerCar.z < 0) { // In case of reversing past the start line
+        playerCar.z += totalTrackLength;
+    }
+
+
+    // Find player's current segment
+    int playerSegmentIndex = 0;
+    float trackZ = 0;
+    while(trackZ + (track[playerSegmentIndex].length * SEGMENT_STEP_LENGTH) < playerCar.z) {
+        trackZ += track[playerSegmentIndex].length * SEGMENT_STEP_LENGTH;
+        playerSegmentIndex++;
+    }
+    RoadSegment playerSegment = track[playerSegmentIndex];
+
+    // Apply curvature force (centrifugal)
+    float speedPercent = playerCar.speed / 250.0f;
+    float centrifugal = playerSegment.curvature * speedPercent * speedPercent * 1.5f;
+    playerCar.x -= centrifugal * dt * 10.0f;
+
+    // Player steering input
+    float steerForce = 0;
+    if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -3.0f;
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = 3.0f;
+    playerCar.x += steerForce * dt;
+
+
+    // Apply hill force
+    playerCar.speed -= playerSegment.hill * 50.0f * dt;
+
+    // Off-road penalty & Collision Detection
+    if (abs(playerCar.x) > 1.0f) {
+        playerCar.speed *= 0.98; // More gradual slowdown
+
+        // Check for collision with scenery
+        for (int i = 0; i < sceneryCount; i++) {
+            float dz = scenery[i].z - playerCar.z;
+            if (dz > 0 && dz < 200) { // Check only objects in front
+                if (abs(scenery[i].x - playerCar.x) < 0.5f) {
+                    playerCar.speed = 0; // CRASH! Full stop.
+                }
+            }
+        }
+    }
+
+    playerCar.x = constrain(playerCar.x, -2.5, 2.5); // Wider track limits
+
 
     // --- AI Logic ---
-    int aiSegment = (int)(aiCar.z / 100.0f) % roadPoints;
-    float targetX = roadCurvature[aiSegment] * -0.5f; // AI tries to stay in the middle
-    aiCar.x += (targetX - aiCar.x) * 0.1f;
-    aiCar.z += aiCar.speed * dt * 2.0f;
-    if (aiCar.z >= roadPoints * 100.0f) aiCar.z -= roadPoints * 100.0f;
+    aiCar.z += aiCar.speed * dt * 5.0f;
+    if (aiCar.z >= totalTrackLength) {
+        aiCar.z -= totalTrackLength;
+    }
+
+    // Find AI's current segment
+    int aiSegmentIndex = 0;
+    trackZ = 0;
+    while(trackZ + (track[aiSegmentIndex].length * SEGMENT_STEP_LENGTH) < aiCar.z) {
+        trackZ += track[aiSegmentIndex].length * SEGMENT_STEP_LENGTH;
+        aiSegmentIndex++;
+    }
+    RoadSegment aiSegment = track[aiSegmentIndex];
+
+    // Simple AI: try to stay in the middle, counteracting curvature
+    float targetX = -aiSegment.curvature * 0.4;
+    aiCar.x += (targetX - aiCar.x) * 1.5f * dt;
+    aiCar.x = constrain(aiCar.x, -1.0, 1.0);
+    aiCar.speed = 100 - abs(aiSegment.curvature) * 30; // Slow down on curves
 
     // --- Multiplayer ---
     if (raceGameMode == RACE_MODE_MULTI) {
@@ -2154,7 +2314,8 @@ void updateRacingLogic() {
     // --- Camera ---
     camera.x = -playerCar.x * 2000.0f;
     camera.z = playerCar.z;
-    camera.y = 500 + roadHeight[playerSegment];
+    // Simple camera height adjustment for hills
+    camera.y = 1500 + playerSegment.hill * 400;
 }
 
 void drawRacingGame() {
@@ -2167,80 +2328,103 @@ void drawRacingGame() {
     }
 
     // --- Draw Road ---
-    float camX = camera.x, camY = camera.y, camZ = camera.z;
+    float camX = camera.x;
+    float camY = camera.y;
+    float camZ = camera.z;
+
+    float roadX = 0;
+    float roadY = 0;
+    float roadZ = 0;
+
+    int currentSegment = 0;
+    int segmentBaseZ = 0;
+
     for (int n = 0; n < SCREEN_HEIGHT / 2; n++) {
         int y = n + SCREEN_HEIGHT / 2;
-        int segmentIndex = ((int)((camZ + n*20) / 100.0f)) % roadPoints;
-        float segmentPercent = fmod((camZ + n*20) / 100.0f, 1.0f);
-
-        float currentCurvature = custom_lerp(roadCurvature[segmentIndex], roadCurvature[(segmentIndex + 1) % roadPoints], segmentPercent);
-        float currentHeight = custom_lerp(roadHeight[segmentIndex], roadHeight[(segmentIndex+1)%roadPoints], segmentPercent);
-
-        float roadX = 0;
-        for (int i = 0; i < n; i++) {
-            int prevSeg = ((int)((camZ + i*20) / 100.0f)) % roadPoints;
-            roadX += roadCurvature[prevSeg] * (20.0f / 100.0f);
-        }
 
         float perspective = (float)n / (SCREEN_HEIGHT / 2.0f);
         float roadWidth = 30 + perspective * 800;
 
-        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * 200.0f / (n*20 + 1) ;
-        float screenY = y;
+        // Find which segment we are in
+        while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < camZ + n * 20) {
+            segmentBaseZ += track[currentSegment].length * SEGMENT_STEP_LENGTH;
+            currentSegment = (currentSegment + 1) % totalSegments;
+        }
 
-        uint16_t grassColor = (segmentIndex % 20 > 10) ? 0x04E0 : 0x0540;
+        RoadSegment segment = track[currentSegment];
+        roadX += segment.curvature;
+        roadY += segment.hill;
+
+        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * 200.0f / (n*20 + 1);
+
+        uint16_t grassColor = ( (int)((camZ + n*20) / 400) % 2 == 0) ? C_DGREEN : C_GREEN;
         canvas.drawFastHLine(0, y, SCREEN_WIDTH, grassColor);
 
         // Road
-        canvas.fillRect(screenX - roadWidth/2, y, roadWidth, 1, COLOR_SECONDARY);
+        canvas.fillRect(screenX - roadWidth/2, y, roadWidth, 1, C_DGREY);
 
-        // Rumble Strips
-        if ((segmentIndex % 20) < 2) {
-            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, 0xF800);
-            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, 0xF800);
+        // Rumble Strips (kerbs)
+        if (( (int)((camZ + n*20) / 200) % 2) == 0) {
+            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, C_RED);
+            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, C_RED);
+        } else {
+            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, C_WHITE);
+            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, C_WHITE);
+        }
+
+        // Dashed center line
+        if (( (int)((camZ + n*20) / 100) % 2) == 0) {
+            canvas.fillRect(screenX - roadWidth*0.01, y, roadWidth*0.02, 1, C_YELLOW);
         }
     }
 
-    // --- Draw Scenery (Trees) ---
-    for(int i=10; i<100; i+=5) {
-        int segment = ((int)(camera.z / 100.0f) + i) % roadPoints;
-        float dz = (segment * 100.0f) - camera.z;
+    // --- Draw Scenery ---
+    for(int i = 0; i < sceneryCount; i++) {
+        float dz = scenery[i].z - camZ;
         if (dz < 100) continue;
 
-        float objX = -2.5f; // Tree on the left
-        float worldX = objX * 2000.0f;
-
         float scale = 500.0f / dz;
-        float screenX = SCREEN_WIDTH/2 + scale * (worldX - camera.x);
-        float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[segment] - camera.y) + SCREEN_HEIGHT/2;
+        float screenX = SCREEN_WIDTH/2 + scale * (scenery[i].x * 2000.0f - camX);
+        float screenY = SCREEN_HEIGHT/2 + scale * ( -camY) + SCREEN_HEIGHT/2; // Simplified height
 
         if (screenX > 0 && screenX < SCREEN_WIDTH) {
-            drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_tree, 16, 16, scale, 0xFFFF);
+            switch(scenery[i].type) {
+                case TREE:
+                    drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_tree, 16, 16, scale);
+                    break;
+                case BUSH:
+                    drawScaledColorBitmap(screenX - 8*scale, screenY - 8*scale, sprite_bush, 16, 8, scale);
+                    break;
+                case SIGN:
+                    drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_sign_left, 16, 16, scale);
+                    break;
+            }
         }
     }
 
     // --- Draw Cars ---
     // Player Car
-    drawScaledBitmap(SCREEN_WIDTH/2 - 32, SCREEN_HEIGHT - 64, sprite_car_player, 16, 16, 4.0, 0xFFFF);
+    drawScaledColorBitmap(SCREEN_WIDTH/2 - 32, SCREEN_HEIGHT - 64, sprite_car_player, 32, 16, 2.0);
 
     // AI Car
-    float dx_ai = aiCar.x * 2000.0f - camera.x;
-    float dz_ai = aiCar.z - camera.z;
-    if (dz_ai > 100) {
-        float scale = 500.0f / dz_ai;
+    float dx_ai = aiCar.x * 2000.0f - camX;
+    float dz_ai = aiCar.z - camZ;
+    if (dz_ai > 0) { // Only draw if in front of camera
+        float scale = 1500.0f / dz_ai;
         float screenX = SCREEN_WIDTH/2 + scale * dx_ai;
-        float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[(int)(aiCar.z/100)%roadPoints] - camera.y) + SCREEN_HEIGHT/2;
-        drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_car_opponent, 16, 16, scale, 0xFFFF);
+        float screenY = SCREEN_HEIGHT + scale * 200; // Simplified Y projection
+        drawScaledColorBitmap(screenX - 16*scale, screenY - 16*scale, sprite_car_opponent, 32, 16, scale);
     }
-    // Opponent Car
+
+    // Opponent Car (Multiplayer)
     if (opponentPresent) {
-        float dx_op = opponentCar.x * 2000.0f - camera.x;
-        float dz_op = opponentCar.z - camera.z;
-        if (dz_op > 100) {
-            float scale = 500.0f / dz_op;
+        float dx_op = opponentCar.x * 2000.0f - camX;
+        float dz_op = opponentCar.z - camZ;
+        if (dz_op > 0) {
+            float scale = 1500.0f / dz_op;
             float screenX = SCREEN_WIDTH/2 + scale * dx_op;
-            float screenY = SCREEN_HEIGHT/2 + scale * (roadHeight[(int)(opponentCar.z/100)%roadPoints] - camera.y) + SCREEN_HEIGHT/2;
-            drawScaledBitmap(screenX - 8*scale, screenY - 16*scale, sprite_car_opponent, 16, 16, scale, 0xFFFF);
+            float screenY = SCREEN_HEIGHT + scale * 200;
+            drawScaledColorBitmap(screenX - 16*scale, screenY - 16*scale, sprite_car_opponent, 32, 16, scale);
         }
     }
 
@@ -4848,9 +5032,10 @@ void handleHackerToolsMenuSelect() {
   }
 }
 
-void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, float scale, uint16_t color);
 void drawRacingModeSelect();
 void handleRacingModeSelect();
+void drawScaledColorBitmap(int16_t x, int16_t y, const uint16_t *bitmap, int16_t w, int16_t h, float scale);
+void generateTrack();
 
 void handleRacingModeSelect() {
   switch(menuSelection) {
