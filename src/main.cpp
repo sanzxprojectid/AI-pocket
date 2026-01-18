@@ -124,6 +124,7 @@ enum AppState {
   STATE_GAME_PONG,
   STATE_GAME_SNAKE,
   STATE_GAME_RACING,
+  STATE_GAME_PLATFORMER,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_RACING_MODE_SELECT,
@@ -406,6 +407,77 @@ const uint16_t sprite_sign_left[] PROGMEM = {
     0, 0, C_DGREY, C_DGREY, 0, 0,
     0, 0, C_DGREY, C_DGREY, 0, 0
 };
+
+// ============ GAME: JUMPER (PLATFORMER) ============
+struct JumperPlayer {
+  float x, y;
+  float vy; // Vertical velocity
+};
+
+enum JumperPlatformType {
+  PLATFORM_STATIC,
+  PLATFORM_MOVING,
+  PLATFORM_BREAKABLE
+};
+
+struct JumperPlatform {
+  float x, y;
+  int width;
+  JumperPlatformType type;
+  bool active;
+  float speed; // For moving platforms
+};
+
+struct JumperParticle {
+  float x, y;
+  float vx, vy;
+  int life;
+  uint16_t color;
+};
+
+#define JUMPER_MAX_PLATFORMS 15
+#define JUMPER_MAX_PARTICLES 40
+
+JumperPlayer jumperPlayer;
+JumperPlatform jumperPlatforms[JUMPER_MAX_PLATFORMS];
+JumperParticle jumperParticles[JUMPER_MAX_PARTICLES];
+
+bool jumperGameActive = false;
+int jumperScore = 0;
+float jumperCameraY = 0;
+const float JUMPER_GRAVITY = 0.45f;
+const float JUMPER_LIFT = -11.0f;
+
+// --- Jumper Assets ---
+#define C_JUMPER_BODY  0x07FF  // Cyan
+#define C_JUMPER_EYE   0xFFFF  // White
+#define C_JUMPER_PUPIL 0x0000  // Black
+#define C_JUMPER_FEET  0x7BEF  // Gray
+
+const uint16_t sprite_jumper_char[] PROGMEM = {
+    0, 0, 0, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, 0, 0, 0,
+    0, 0, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, 0, 0,
+    0, C_JUMPER_BODY, C_JUMPER_EYE, C_JUMPER_PUPIL, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_EYE, C_JUMPER_PUPIL, C_JUMPER_BODY, C_JUMPER_BODY, 0,
+    C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_EYE, C_JUMPER_EYE, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_EYE, C_JUMPER_EYE, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY,
+    C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY,
+    C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY,
+    0, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, 0,
+    0, 0, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, C_JUMPER_BODY, 0, 0,
+    0, 0, C_JUMPER_BODY, C_JUMPER_BODY, 0, 0, 0, 0, 0, C_JUMPER_BODY, C_JUMPER_BODY, 0, 0, 0,
+    0, C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, 0, 0, 0, 0, 0, C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, 0, 0,
+    C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, 0, 0, 0, 0, 0, C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, C_JUMPER_FEET, 0
+};
+
+struct ParallaxLayer {
+  float x, y;
+  float speed;
+  int size;
+  uint16_t color;
+};
+
+#define JUMPER_MAX_STARS 50
+ParallaxLayer jumperStars[JUMPER_MAX_STARS];
+
 
 // ============ ICONS (32x32) ============
 const unsigned char icon_chat[] PROGMEM = {
@@ -945,6 +1017,9 @@ void updateAndDrawPongParticles();
 void triggerPongParticles(float x, float y);
 void drawSnakeGame();
 void updateSnakeLogic();
+void initPlatformerGame();
+void updatePlatformerLogic();
+void drawPlatformerGame();
 bool beginSD();
 void endSD();
 void loadMusicMetadata();
@@ -2016,8 +2091,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Racing", "Pong", "Snake", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 7, 45, 24, 3);
+  const char* items[] = {"Racing", "Pong", "Snake", "Jumper", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 8, 45, 22, 2);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2317,6 +2392,245 @@ void updateRacingLogic() {
     // Simple camera height adjustment for hills
     camera.y = 1500 + playerSegment.hill * 400;
 }
+
+// ============ JUMPER (PLATFORMER) GAME LOGIC & DRAWING ============
+void triggerJumperParticles(float x, float y) {
+  int particlesToSpawn = 5;
+  for (int i = 0; i < JUMPER_MAX_PARTICLES && particlesToSpawn > 0; i++) {
+    if (jumperParticles[i].life <= 0) {
+      jumperParticles[i].x = x + random(0, 20);
+      jumperParticles[i].y = y;
+      jumperParticles[i].vx = random(-15, 15) / 10.0f;
+      jumperParticles[i].vy = random(0, 20) / 10.0f;
+      jumperParticles[i].life = 30; // Lifetime in frames
+      jumperParticles[i].color = C_WHITE;
+      particlesToSpawn--;
+    }
+  }
+}
+
+void initPlatformerGame() {
+  jumperGameActive = true;
+  jumperScore = 0;
+  jumperCameraY = 0;
+
+  jumperPlayer.x = SCREEN_WIDTH / 2;
+  jumperPlayer.y = SCREEN_HEIGHT - 50;
+  jumperPlayer.vy = JUMPER_LIFT;
+
+  // Initial platforms
+  jumperPlatforms[0] = {SCREEN_WIDTH / 2 - 30, SCREEN_HEIGHT - 30, 60, PLATFORM_STATIC, true, 0};
+  for (int i = 1; i < JUMPER_MAX_PLATFORMS; i++) {
+    jumperPlatforms[i] = {
+      (float)random(0, SCREEN_WIDTH - 50),
+      (float)(SCREEN_HEIGHT - 100 - (i * 70)),
+      (float)random(40, 70),
+      PLATFORM_STATIC,
+      true,
+      0
+    };
+  }
+
+  // Clear particles
+  for(int i=0; i<JUMPER_MAX_PARTICLES; i++) jumperParticles[i].life = 0;
+
+  // Init parallax stars
+  for (int i = 0; i < JUMPER_MAX_STARS; i++) {
+    jumperStars[i] = {
+      (float)random(0, SCREEN_WIDTH),
+      (float)random(0, SCREEN_HEIGHT),
+      (float)random(10, 50) / 100.0f, // Slower speeds for distant stars
+      (float)random(1, 3),
+      (uint16_t)random(0x39E7, 0x7BEF) // Shades of gray
+    };
+  }
+}
+
+void updatePlatformerLogic() {
+  if (!jumperGameActive) {
+    if (digitalRead(BTN_SELECT) == BTN_ACT) {
+      initPlatformerGame();
+    }
+    return;
+  }
+
+  // --- Player Input ---
+  float playerSpeed = 4.0f;
+  if (digitalRead(BTN_LEFT) == BTN_ACT) jumperPlayer.x -= playerSpeed;
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) jumperPlayer.x += playerSpeed;
+
+  // Screen wrap
+  if (jumperPlayer.x < -10) jumperPlayer.x = SCREEN_WIDTH;
+  if (jumperPlayer.x > SCREEN_WIDTH) jumperPlayer.x = -10;
+
+  // --- Physics ---
+  jumperPlayer.vy += JUMPER_GRAVITY;
+  jumperPlayer.y += jumperPlayer.vy;
+
+  // --- Camera Control ---
+  if (jumperPlayer.y < jumperCameraY + SCREEN_HEIGHT / 2) {
+    jumperCameraY = jumperPlayer.y - SCREEN_HEIGHT / 2;
+  }
+
+  // Update score
+  jumperScore = max(jumperScore, (int)(-jumperCameraY / 10));
+
+  // --- Platform Interaction ---
+  if (jumperPlayer.vy > 0) { // Only check for collision when falling
+    for (int i = 0; i < JUMPER_MAX_PLATFORMS; i++) {
+      if (jumperPlatforms[i].active) {
+        float p_bottom = jumperPlayer.y + 10;
+        float p_prev_bottom = p_bottom - jumperPlayer.vy;
+        float plat_y = jumperPlatforms[i].y;
+
+        if ((jumperPlayer.x > jumperPlatforms[i].x - 10 && jumperPlayer.x < jumperPlatforms[i].x + jumperPlatforms[i].width) && // Horizontal check
+            (p_bottom > plat_y && p_prev_bottom < plat_y + 5) ) { // Vertical check
+
+          jumperPlayer.y = plat_y - 10;
+          jumperPlayer.vy = JUMPER_LIFT;
+          triggerJumperParticles(jumperPlayer.x, jumperPlayer.y + 10);
+
+          if (jumperPlatforms[i].type == PLATFORM_BREAKABLE) {
+            jumperPlatforms[i].active = false;
+          }
+        }
+      }
+    }
+  }
+
+  // --- Generate new platforms ---
+  for (int i = 0; i < JUMPER_MAX_PLATFORMS; i++) {
+    if (jumperPlatforms[i].y > jumperCameraY + SCREEN_HEIGHT) {
+      // This platform is below the screen, respawn it at the top
+      jumperPlatforms[i].active = true;
+      jumperPlatforms[i].y = jumperCameraY - random(50, 100);
+      jumperPlatforms[i].x = random(0, SCREEN_WIDTH - 50);
+
+      // Add different types of platforms
+      int randType = random(0, 10);
+      if (randType > 8) {
+        jumperPlatforms[i].type = PLATFORM_BREAKABLE;
+        jumperPlatforms[i].width = 50;
+      } else if (randType > 6) {
+        jumperPlatforms[i].type = PLATFORM_MOVING;
+        jumperPlatforms[i].width = 60;
+        jumperPlatforms[i].speed = random(0, 2) == 0 ? 1.5f : -1.5f;
+      } else {
+        jumperPlatforms[i].type = PLATFORM_STATIC;
+        jumperPlatforms[i].width = random(40, 70);
+      }
+    }
+  }
+
+  // --- Update Moving Platforms ---
+  for (int i = 0; i < JUMPER_MAX_PLATFORMS; i++) {
+    if (jumperPlatforms[i].active && jumperPlatforms[i].type == PLATFORM_MOVING) {
+      jumperPlatforms[i].x += jumperPlatforms[i].speed;
+      if (jumperPlatforms[i].x < 0 || jumperPlatforms[i].x + jumperPlatforms[i].width > SCREEN_WIDTH) {
+        jumperPlatforms[i].speed *= -1;
+      }
+    }
+  }
+
+  // --- Game Over Check ---
+  if (jumperPlayer.y > jumperCameraY + SCREEN_HEIGHT) {
+    jumperGameActive = false;
+  }
+
+  // --- Update Particles ---
+  for (int i = 0; i < JUMPER_MAX_PARTICLES; i++) {
+    if (jumperParticles[i].life > 0) {
+      jumperParticles[i].x += jumperParticles[i].vx;
+      jumperParticles[i].y += jumperParticles[i].vy;
+      jumperParticles[i].life--;
+    }
+  }
+}
+
+void drawPlatformerGame() {
+  canvas.fillScreen(COLOR_BG);
+
+  // --- Draw Parallax Background ---
+  for (int i = 0; i < JUMPER_MAX_STARS; i++) {
+    // Stars move down relative to camera, creating parallax
+    float starScreenY = jumperStars[i].y - (jumperCameraY * jumperStars[i].speed);
+
+    // Wrap stars around
+    while (starScreenY > SCREEN_HEIGHT) {
+      starScreenY -= SCREEN_HEIGHT;
+      jumperStars[i].x = random(0, SCREEN_WIDTH); // Reposition X when wrapping
+    }
+    while (starScreenY < 0) {
+      starScreenY += SCREEN_HEIGHT;
+      jumperStars[i].x = random(0, SCREEN_WIDTH);
+    }
+    jumperStars[i].y = starScreenY + (jumperCameraY * jumperStars[i].speed); // Update real Y
+
+    canvas.fillCircle(jumperStars[i].x, (int)starScreenY, jumperStars[i].size, jumperStars[i].color);
+  }
+
+  // --- Draw Platforms ---
+  for (int i = 0; i < JUMPER_MAX_PLATFORMS; i++) {
+    if (jumperPlatforms[i].active) {
+      uint16_t color;
+      switch(jumperPlatforms[i].type) {
+        case PLATFORM_MOVING:    color = 0xFFE0; break; // Yellow
+        case PLATFORM_BREAKABLE: color = 0xF800; break; // Red
+        default:                 color = 0x07E0; break; // Green
+      }
+      int screenY = jumperPlatforms[i].y - jumperCameraY;
+      canvas.fillRect(jumperPlatforms[i].x, screenY, jumperPlatforms[i].width, 8, color);
+      canvas.drawRect(jumperPlatforms[i].x, screenY, jumperPlatforms[i].width, 8, C_WHITE);
+    }
+  }
+
+  // --- Draw Player ---
+  int playerScreenY = jumperPlayer.y - jumperCameraY;
+  drawScaledColorBitmap(jumperPlayer.x - 7, playerScreenY - 11, sprite_jumper_char, 14, 11, 1.0);
+
+  // --- Draw Particles ---
+  for (int i = 0; i < JUMPER_MAX_PARTICLES; i++) {
+    if (jumperParticles[i].life > 0) {
+      int particleScreenY = jumperParticles[i].y - jumperCameraY;
+      int size = (jumperParticles[i].life > 15) ? 2 : 1;
+      canvas.fillCircle(jumperParticles[i].x, particleScreenY, size, jumperParticles[i].color);
+    }
+  }
+
+  // --- Draw Score ---
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 10);
+  canvas.print(jumperScore);
+
+  // --- Draw Game Over Screen ---
+  if (!jumperGameActive) {
+    canvas.fillRoundRect(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 40, 200, 80, 8, COLOR_PANEL);
+    canvas.drawRoundRect(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 40, 200, 80, 8, COLOR_BORDER);
+
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_ERROR);
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 - 20);
+    canvas.print("GAME OVER");
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_TEXT);
+    String finalScore = "Score: " + String(jumperScore);
+    canvas.getTextBounds(finalScore, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2);
+    canvas.print(finalScore);
+
+    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 + 20);
+    canvas.print("SELECT to Restart");
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 
 void drawRacingGame() {
     canvas.fillScreen(0x4A49); // Sky Blue
@@ -5131,15 +5445,19 @@ void handleGameHubMenuSelect() {
       changeState(STATE_GAME_SNAKE);
       break;
     case 3:
-      changeState(STATE_VIS_STARFIELD);
+      initPlatformerGame();
+      changeState(STATE_GAME_PLATFORMER);
       break;
     case 4:
-      changeState(STATE_VIS_LIFE);
+      changeState(STATE_VIS_STARFIELD);
       break;
     case 5:
-      changeState(STATE_VIS_FIRE);
+      changeState(STATE_VIS_LIFE);
       break;
     case 6:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 7:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -5414,6 +5732,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_GAME_SNAKE:
       drawSnakeGame();
+      break;
+    case STATE_GAME_PLATFORMER:
+      drawPlatformerGame();
       break;
     case STATE_GAME_RACING:
       drawRacingGame();
@@ -5800,6 +6121,10 @@ void loop() {
 
   if (currentState == STATE_GAME_SNAKE) {
     updateSnakeLogic();
+  }
+
+  if (currentState == STATE_GAME_PLATFORMER) {
+    updatePlatformerLogic();
   }
 
   if (transitionState == TRANSITION_NONE && currentMillis - lastDebounce > debounceDelay) {
