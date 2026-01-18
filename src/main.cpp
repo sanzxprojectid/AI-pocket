@@ -3841,7 +3841,7 @@ void drawStatusBar() {
     else if (cachedRSSI > -65) bars = 3;
     else if (cachedRSSI > -75) bars = 2;
     else if (cachedRSSI > -85) bars = 1;
-    int x = SCREEN_WIDTH - 60;
+    int x = SCREEN_WIDTH - 90;
     int y = 8;
     for (int i = 0; i < 4; i++) {
       int h = (i + 1) * 2;
