@@ -140,6 +140,7 @@ enum AppState {
   STATE_DEAUTH_DETECTOR,
   STATE_LOCAL_AI_CHAT,
   STATE_MUSIC_PLAYER,
+  STATE_POMODORO,
   STATE_SCREENSAVER
 };
 
@@ -622,7 +623,18 @@ const unsigned char icon_music[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music};
+const unsigned char icon_pomodoro[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x01, 0xFF, 0xFF, 0x80,
+0x03, 0xFF, 0xFF, 0xC0, 0x07, 0xC0, 0x03, 0xE0, 0x0F, 0x80, 0x01, 0xF0, 0x1F, 0x00, 0x00, 0xF8,
+0x1E, 0x00, 0x00, 0x78, 0x3C, 0x00, 0x00, 0x3C, 0x3C, 0x38, 0x1C, 0x3C, 0x78, 0x7C, 0x38, 0x1E,
+0x78, 0x7C, 0x38, 0x1E, 0x78, 0x7C, 0x38, 0x1E, 0x3C, 0x38, 0x1C, 0x3C, 0x3C, 0x00, 0x00, 0x3C,
+0x1E, 0x00, 0x00, 0x78, 0x1F, 0x00, 0x00, 0xF8, 0x0F, 0x80, 0x01, 0xF0, 0x07, 0xC0, 0x03, 0xE0,
+0x03, 0xFF, 0xFF, 0xC0, 0x01, 0xFF, 0xFF, 0x80, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
@@ -911,6 +923,17 @@ int fileListSelection = 0;
 String fileContentToView;
 int fileViewerScrollOffset = 0;
 
+// ============ POMODORO TIMER ============
+enum PomodoroState {
+  POMO_IDLE,
+  POMO_FOCUS,
+  POMO_REST
+};
+PomodoroState pomoState = POMO_IDLE;
+unsigned long pomoEndTime = 0;
+bool pomoIsPaused = false;
+unsigned long pomoPauseRemaining = 0;
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -1042,6 +1065,8 @@ float custom_lerp(float a, float b, float f);
 void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_t color2);
 void drawScreensaver();
 void updateMusicPlayerState();
+void drawPomodoroTimer();
+void updatePomodoroLogic();
 
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
@@ -4448,8 +4473,8 @@ void showMainMenu(int x_offset) {
 
   drawStatusBar();
 
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC"};
-  int numItems = 12;
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
+  int numItems = 13;
   
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 5;
@@ -5399,6 +5424,9 @@ void handleMainMenuSelect() {
     case 11: // MUSIC
       changeState(STATE_MUSIC_PLAYER);
       break;
+    case 12: // POMODORO
+      changeState(STATE_POMODORO);
+      break;
   }
 }
 
@@ -5861,6 +5889,9 @@ void refreshCurrentScreen() {
     case STATE_SCREENSAVER:
       drawScreensaver();
       break;
+    case STATE_POMODORO:
+      drawPomodoroTimer();
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -6239,6 +6270,11 @@ void loop() {
     }
   }
 
+  if (currentState == STATE_POMODORO) {
+    updatePomodoroLogic();
+    screenIsDirty = true; // Keep the timer updated
+  }
+
   // Screensaver check
   if (currentState != STATE_SCREENSAVER && currentState != STATE_BOOT && currentMillis - lastInputTime > SCREENSAVER_TIMEOUT) {
     changeState(STATE_SCREENSAVER);
@@ -6521,7 +6557,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 11) menuSelection++;
+          if (menuSelection < 12) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -6580,6 +6616,11 @@ void loop() {
     
     if (digitalRead(BTN_LEFT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_POMODORO:
+          pomoState = POMO_IDLE;
+          pomoIsPaused = false;
+          myDFPlayer.stop();
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
@@ -6621,7 +6662,7 @@ void loop() {
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 11) menuSelection++;
+          if (menuSelection < 12) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -6647,6 +6688,23 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_POMODORO:
+          if (pomoState == POMO_IDLE) {
+            pomoState = POMO_FOCUS;
+            pomoEndTime = millis() + (25 * 60 * 1000);
+            pomoIsPaused = false;
+            myDFPlayer.play(1);
+          } else {
+            pomoIsPaused = !pomoIsPaused;
+            if (pomoIsPaused) {
+              pomoPauseRemaining = pomoEndTime - millis();
+              myDFPlayer.pause();
+            } else {
+              pomoEndTime = millis() + pomoPauseRemaining;
+              myDFPlayer.start();
+            }
+          }
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
@@ -6785,6 +6843,11 @@ void loop() {
     if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
       if (currentState == STATE_PIN_LOCK) {
         // Do nothing to prevent bypassing PIN
+      } else if (currentState == STATE_POMODORO) {
+        pomoState = POMO_IDLE;
+        pomoIsPaused = false;
+        myDFPlayer.stop();
+        changeState(STATE_MAIN_MENU);
       } else {
         switch(currentState) {
           case STATE_TOOL_DEAUTH_ATTACK:
@@ -6866,6 +6929,115 @@ void loop() {
       lastDebounce = currentMillis;
       lastInputTime = currentMillis;
       ledQuickFlash();
+    }
+  }
+}
+
+void drawPomodoroTimer() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(50, 21);
+  canvas.print("POMODORO TIMER");
+
+  // Determine current status and time
+  String statusText;
+  unsigned long remainingSeconds = 0;
+  unsigned long totalDuration = 1; // Prevent division by zero
+
+  if (pomoIsPaused) {
+    statusText = "PAUSED";
+    remainingSeconds = pomoPauseRemaining / 1000;
+    if (pomoState == POMO_FOCUS) totalDuration = 25 * 60;
+    else if (pomoState == POMO_REST) totalDuration = 5 * 60;
+  } else {
+    if (pomoState == POMO_IDLE) {
+      statusText = "IDLE";
+      remainingSeconds = 25 * 60;
+      totalDuration = 25 * 60;
+    } else {
+      if (pomoEndTime > millis()) {
+        remainingSeconds = (pomoEndTime - millis()) / 1000;
+      }
+      if (pomoState == POMO_FOCUS) {
+        statusText = "FOCUS";
+        totalDuration = 25 * 60;
+      } else { // POMO_REST
+        statusText = "REST";
+        totalDuration = 5 * 60;
+      }
+    }
+  }
+
+  // Draw Progress Circle
+  int centerX = SCREEN_WIDTH / 2;
+  int centerY = SCREEN_HEIGHT / 2 + 10;
+  int radius = 40;
+  float progress = (float)(totalDuration - remainingSeconds) / totalDuration;
+
+  // Draw background circle
+  canvas.drawCircle(centerX, centerY, radius, COLOR_BORDER);
+
+  // Draw progress arc
+  for (int i = 0; i < 360 * progress; i++) {
+    float angle = radians(i - 90); // Start from top
+    int x = centerX + cos(angle) * radius;
+    int y = centerY + sin(angle) * radius;
+    canvas.drawPixel(x, y, (pomoState == POMO_FOCUS) ? COLOR_SUCCESS : COLOR_ACCENT);
+  }
+
+  // Draw Time Text
+  canvas.setTextSize(4);
+  canvas.setTextColor(COLOR_PRIMARY);
+  String timeString = formatTime(remainingSeconds);
+  int16_t x1, y1;
+  uint16_t w, h;
+  canvas.getTextBounds(timeString, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(centerX - w/2, centerY - h/2);
+  canvas.print(timeString);
+
+  // Draw Status Text
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.getTextBounds(statusText, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(centerX - w / 2, centerY + radius + 10);
+  canvas.print(statusText);
+
+
+  // Footer Hints
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("SELECT=Start/Pause | LEFT=Reset | L+R=Exit");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void updatePomodoroLogic() {
+  const unsigned long FOCUS_DURATION = 25 * 60 * 1000;
+  const unsigned long REST_DURATION = 5 * 60 * 1000;
+
+  if (pomoState != POMO_IDLE && !pomoIsPaused) {
+    if (millis() >= pomoEndTime) {
+      if (pomoState == POMO_FOCUS) {
+        // Switch to Rest
+        pomoState = POMO_REST;
+        pomoEndTime = millis() + REST_DURATION;
+        myDFPlayer.stop();
+        triggerNeoPixelEffect(pixels.Color(0, 255, 0), 2000); // Green for rest
+      } else { // Was POMO_REST
+        // Switch to Focus
+        pomoState = POMO_FOCUS;
+        pomoEndTime = millis() + FOCUS_DURATION;
+        myDFPlayer.play(1); // Play first song
+        triggerNeoPixelEffect(pixels.Color(255, 0, 0), 2000); // Red for focus
+      }
     }
   }
 }
