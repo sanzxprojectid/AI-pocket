@@ -1041,6 +1041,7 @@ void drawBootScreen(const char* lines[], int lineCount, int progress);
 float custom_lerp(float a, float b, float f);
 void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_t color2);
 void drawScreensaver();
+void updateMusicPlayerState();
 
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
@@ -1324,7 +1325,7 @@ void drawEnhancedMusicPlayer() {
     int folderNum = (currentTrackIdx - 1) / 100 + 1;
     int trackInFolder = (currentTrackIdx - 1) % 100 + 1;
     char trackInfoBuffer[50];
-    sprintf(trackInfoBuffer, "Folder: %02d | Track: %03d (%d/%d)", folderNum, trackInFolder, currentTrackIdx, totalTracks);
+    snprintf(trackInfoBuffer, sizeof(trackInfoBuffer), "Folder: %02d | Track: %03d (%d/%d)", folderNum, trackInFolder, currentTrackIdx, totalTracks);
     String trackInfo = String(trackInfoBuffer);
 
     int16_t x1, y1;
@@ -6097,6 +6098,21 @@ void setup() {
     refreshCurrentScreen();
 }
 
+void updateMusicPlayerState() {
+    // Check the hardware for the currently playing track to stay in sync
+    int fileNumber = myDFPlayer.readCurrentFileNumber(); // This can return -1 on error
+    if (fileNumber > 0 && fileNumber <= totalTracks) {
+        if (currentTrackIdx != fileNumber) {
+            currentTrackIdx = fileNumber;
+            // Only write to preferences if the track has actually changed & throttle writes
+            if (millis() - lastTrackSaveMillis > 2000) { // Throttle writes
+                preferences.putInt("musicTrack", currentTrackIdx);
+                lastTrackSaveMillis = millis();
+            }
+        }
+    }
+}
+
 // ============ LOOP ============
 void loop() {
   unsigned long currentMillis = millis();
@@ -6233,13 +6249,7 @@ void loop() {
     // Periodically check the hardware for the currently playing track to stay in sync
     if (currentMillis - lastTrackCheckMillis > 500) { // Check every 500ms
       lastTrackCheckMillis = currentMillis;
-      int fileNumber = myDFPlayer.readCurrentFileNumber(); // This can return -1 on error
-      if (fileNumber > 0 && fileNumber <= totalTracks) {
-        if (currentTrackIdx != fileNumber) {
-          currentTrackIdx = fileNumber;
-          preferences.putInt("musicTrack", currentTrackIdx);
-        }
-      }
+      updateMusicPlayerState();
     }
   }
 
@@ -6304,6 +6314,7 @@ void loop() {
             // SHORT PRESS ACTION: Previous Track
             myDFPlayer.previous();
             musicIsPlaying = true;
+            updateMusicPlayerState(); // Update track number immediately
             }
             btnLeftPressTime = 0;
             btnLeftLongPressTriggered = false;
@@ -6335,6 +6346,7 @@ void loop() {
             // SHORT PRESS ACTION: Next Track
             myDFPlayer.next();
             musicIsPlaying = true;
+            updateMusicPlayerState(); // Update track number immediately
             }
             btnRightPressTime = 0;
             btnRightLongPressTriggered = false;
