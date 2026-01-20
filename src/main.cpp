@@ -933,6 +933,8 @@ PomodoroState pomoState = POMO_IDLE;
 unsigned long pomoEndTime = 0;
 bool pomoIsPaused = false;
 unsigned long pomoPauseRemaining = 0;
+int pomoMusicVol = 15;
+bool pomoMusicShuffle = false;
 
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
@@ -6490,6 +6492,12 @@ void loop() {
     
     if (digitalRead(BTN_UP) == BTN_ACT) {
       switch(currentState) {
+        case STATE_POMODORO:
+          if (pomoMusicVol < 30) {
+            pomoMusicVol++;
+            myDFPlayer.volume(pomoMusicVol);
+          }
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY > 0) ? cursorY - 1 : 3;
@@ -6552,6 +6560,12 @@ void loop() {
     
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
+        case STATE_POMODORO:
+          if (pomoMusicVol > 0) {
+            pomoMusicVol--;
+            myDFPlayer.volume(pomoMusicVol);
+          }
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
@@ -6657,6 +6671,9 @@ void loop() {
     
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_POMODORO:
+          pomoMusicShuffle = !pomoMusicShuffle;
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
@@ -6694,7 +6711,12 @@ void loop() {
             pomoState = POMO_FOCUS;
             pomoEndTime = millis() + (25 * 60 * 1000);
             pomoIsPaused = false;
-            myDFPlayer.play(1);
+            myDFPlayer.volume(pomoMusicVol);
+            if (pomoMusicShuffle) {
+              myDFPlayer.play(random(1, totalTracks + 1));
+            } else {
+              myDFPlayer.play(1);
+            }
           } else {
             pomoIsPaused = !pomoIsPaused;
             if (pomoIsPaused) {
@@ -7010,11 +7032,31 @@ void drawPomodoroTimer() {
   canvas.print(statusText);
 
 
-  // Footer Hints
+  // --- Footer ---
+  int footerY = SCREEN_HEIGHT - 15;
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT=Start/Pause | LEFT=Reset | L+R=Exit");
+  canvas.setCursor(5, footerY + 2);
+  canvas.print("SEL:Start/Pause | L:Reset | R:Shuffle");
+
+  // Shuffle Icon
+  if (pomoMusicShuffle) {
+      int iconX = 175;
+      int iconY = footerY;
+      canvas.drawLine(iconX, iconY, iconX + 10, iconY + 7, COLOR_PRIMARY);
+      canvas.drawLine(iconX, iconY + 7, iconX + 10, iconY, COLOR_PRIMARY);
+      canvas.fillTriangle(iconX + 10, iconY + 7, iconX + 7, iconY + 7, iconX + 10, iconY+4, COLOR_PRIMARY);
+      canvas.fillTriangle(iconX + 10, iconY, iconX + 7, iconY, iconX + 10, iconY+3, COLOR_PRIMARY);
+  }
+
+  // Volume Bar
+  int volBarX = SCREEN_WIDTH - 85;
+  int volBarY = footerY;
+  canvas.drawRect(volBarX, volBarY, 70, 10, COLOR_BORDER);
+  int volFill = map(pomoMusicVol, 0, 30, 0, 68);
+  canvas.fillRect(volBarX + 1, volBarY + 1, volFill, 8, COLOR_PRIMARY);
+  canvas.setCursor(volBarX - 23, volBarY + 2);
+  canvas.print("VOL");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
