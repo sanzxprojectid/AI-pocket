@@ -940,6 +940,12 @@ unsigned long pomoPauseRemaining = 0;
 int pomoMusicVol = 15;
 bool pomoMusicShuffle = false;
 
+// Long press state variables for pomodoro player
+unsigned long pomoBtnLeftPressTime = 0;
+unsigned long pomoBtnRightPressTime = 0;
+bool pomoBtnLeftLongPressTriggered = false;
+bool pomoBtnRightLongPressTriggered = false;
+
 // ============ CONVERSATION CONTEXT STRUCTURE ============
 struct ConversationContext {
   String fullHistory;
@@ -6526,6 +6532,72 @@ void loop() {
             musicIsPlaying = false;
             changeState(STATE_MAIN_MENU);
         }
+    } else if (currentState == STATE_POMODORO) {
+        // --- POMODORO VIEW CONTROLS (with long press) ---
+
+        // BTN_LEFT
+        if (digitalRead(BTN_LEFT) == BTN_ACT) {
+            if (pomoBtnLeftPressTime == 0) {
+                pomoBtnLeftPressTime = currentMillis;
+            } else if (!pomoBtnLeftLongPressTriggered && (currentMillis - pomoBtnLeftPressTime > longPressDuration)) {
+                pomoBtnLeftLongPressTriggered = true;
+                // LONG PRESS ACTION: Reset Timer
+                pomoState = POMO_IDLE;
+                pomoIsPaused = false;
+                myDFPlayer.stop();
+                showStatus("Timer Reset", 800);
+            }
+        } else {
+            if (pomoBtnLeftPressTime > 0 && !pomoBtnLeftLongPressTriggered) {
+                // SHORT PRESS ACTION: Previous Track
+                myDFPlayer.previous();
+            }
+            pomoBtnLeftPressTime = 0;
+            pomoBtnLeftLongPressTriggered = false;
+        }
+
+        // BTN_RIGHT
+        if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+            if (pomoBtnRightPressTime == 0) {
+                pomoBtnRightPressTime = currentMillis;
+            } else if (!pomoBtnRightLongPressTriggered && (currentMillis - pomoBtnRightPressTime > longPressDuration)) {
+                pomoBtnRightLongPressTriggered = true;
+                // LONG PRESS ACTION: Toggle Shuffle
+                pomoMusicShuffle = !pomoMusicShuffle;
+                if (pomoMusicShuffle) {
+                    myDFPlayer.randomAll();
+                    showStatus("Shuffle On", 800);
+                } else {
+                    myDFPlayer.enableLoopAll();
+                    showStatus("Shuffle Off", 800);
+                }
+            }
+        } else {
+            if (pomoBtnRightPressTime > 0 && !pomoBtnRightLongPressTriggered) {
+                // SHORT PRESS ACTION: Next Track
+                myDFPlayer.next();
+            }
+            pomoBtnRightPressTime = 0;
+            pomoBtnRightLongPressTriggered = false;
+        }
+
+        // Volume controls (non-blocking)
+        if (currentMillis - lastVolumeChangeMillis > 80) {
+            if (digitalRead(BTN_UP) == BTN_ACT) {
+                if (pomoMusicVol < 30) {
+                    pomoMusicVol++;
+                    myDFPlayer.volume(pomoMusicVol);
+                    lastVolumeChangeMillis = currentMillis;
+                }
+            }
+            if (digitalRead(BTN_DOWN) == BTN_ACT) {
+                if (pomoMusicVol > 0) {
+                    pomoMusicVol--;
+                    myDFPlayer.volume(pomoMusicVol);
+                    lastVolumeChangeMillis = currentMillis;
+                }
+            }
+        }
     }
     
     if (isSelectingMode) {
@@ -6573,11 +6645,8 @@ void loop() {
     
     if (digitalRead(BTN_UP) == BTN_ACT) {
       switch(currentState) {
-        case STATE_POMODORO:
-          if (pomoMusicVol < 30) {
-            pomoMusicVol++;
-            myDFPlayer.volume(pomoMusicVol);
-          }
+        case STATE_MUSIC_PLAYER:
+          // Volume controls are handled in their own block below to be non-blocking
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
@@ -6641,12 +6710,6 @@ void loop() {
     
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
-        case STATE_POMODORO:
-          if (pomoMusicVol > 0) {
-            pomoMusicVol--;
-            myDFPlayer.volume(pomoMusicVol);
-          }
-          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
@@ -6711,11 +6774,6 @@ void loop() {
     
     if (digitalRead(BTN_LEFT) == BTN_ACT) {
       switch(currentState) {
-        case STATE_POMODORO:
-          pomoState = POMO_IDLE;
-          pomoIsPaused = false;
-          myDFPlayer.stop();
-          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
@@ -6756,9 +6814,6 @@ void loop() {
     
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
-        case STATE_POMODORO:
-          pomoMusicShuffle = !pomoMusicShuffle;
-          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
@@ -7053,6 +7108,8 @@ void loop() {
 
 void drawPomodoroTimer() {
   canvas.fillScreen(COLOR_BG);
+   // Draw visualizer as background
+  drawSpectrumVisualizer();
   drawStatusBar();
 
   // Header
@@ -7103,11 +7160,12 @@ void drawPomodoroTimer() {
   canvas.drawCircle(centerX, centerY, radius, COLOR_BORDER);
 
   // Draw progress arc
+  uint16_t progressColor = (pomoState == POMO_FOCUS) ? 0xF800 : 0x07FF; // Red for Focus, Cyan for Rest
   for (int i = 0; i < 360 * progress; i++) {
     float angle = radians(i - 90); // Start from top
     int x = centerX + cos(angle) * radius;
     int y = centerY + sin(angle) * radius;
-    canvas.drawPixel(x, y, (pomoState == POMO_FOCUS) ? COLOR_SUCCESS : COLOR_ACCENT);
+    canvas.drawPixel(x, y, progressColor);
   }
 
   // Draw Time Text
@@ -7129,11 +7187,11 @@ void drawPomodoroTimer() {
 
 
   // --- Footer ---
-  int footerY = SCREEN_HEIGHT - 15;
-  canvas.setTextColor(COLOR_DIM);
-  canvas.setTextSize(1);
-  canvas.setCursor(5, footerY + 2);
-  canvas.print("SEL:Start/Pause | L:Reset | R:Shuffle");
+    int footerY = SCREEN_HEIGHT - 15;
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setTextSize(1);
+    canvas.setCursor(5, footerY + 2);
+    canvas.print("SEL:Start/Pause | L/R:Track | HOLD L/R:Reset/Shuffle");
 
   // Shuffle Icon
   if (pomoMusicShuffle) {
