@@ -86,15 +86,15 @@ float deltaTime = 0.0;
 // ============ COLOR SCHEME (RGB565) - MODERN BLACK & WHITE ============
 #define COLOR_BG        0x0000  // Pure Black
 #define COLOR_PRIMARY   0xFFFF  // Pure White
-#define COLOR_SECONDARY 0xCE79  // Light Gray
+#define COLOR_SECONDARY 0xC618  // Light Gray (192, 192, 192)
 #define COLOR_ACCENT    0xFFFF  // White
 #define COLOR_TEXT      0xFFFF  // White
-#define COLOR_WARN      0xAD55  // Medium Gray
-#define COLOR_ERROR     0x7BEF  // Light Red Gray
-#define COLOR_DIM       0x7BEF  // Dim Gray
-#define COLOR_PANEL     0x18C3  // Very Dark Gray (subtle)
-#define COLOR_BORDER    0x39E7  // Border Gray
-#define COLOR_SUCCESS   0xE73C  // Light Green Gray
+#define COLOR_WARN      0x8410  // Medium Gray (128, 128, 128)
+#define COLOR_ERROR     0x8410  // Medium Gray (128, 128, 128)
+#define COLOR_DIM       0x8410  // Medium Gray (128, 128, 128)
+#define COLOR_PANEL     0x2104  // Very Dark Gray (32, 32, 32)
+#define COLOR_BORDER    0x4208  // Border Gray (64, 64, 64)
+#define COLOR_SUCCESS   0xC618  // Light Gray (192, 192, 192)
 
 // ============ VAPORWAVE PALETTE (for Music Player) ============
 #define COLOR_VAPOR_BG_START 0x10A6  // Dark Blue/Purple
@@ -1308,6 +1308,30 @@ float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
+void drawHorizontalSpectrumVisualizer() {
+    int numBars = 16; // Fewer bars for a cleaner look
+    int maxBarWidth = 120; // Max width extending from the center
+    int barHeight = SCREEN_HEIGHT / (numBars * 2);
+    int centerY = SCREEN_HEIGHT / 2;
+
+    for (int i = 0; i < numBars; i++) {
+        // Simulate spectrum data with a smoother, wave-like motion
+        float sineFactor = (sin(i * 0.5f + millis() * 0.005f) + 1.0f) / 2.0f;
+        int barWidth = map(musicVol, 0, 30, 5, maxBarWidth) * sineFactor;
+        barWidth += random(-10, 10);
+        barWidth = constrain(barWidth, 2, maxBarWidth);
+
+        int y_top = centerY - (i * (barHeight + 2)) - barHeight;
+        int y_bottom = centerY + (i * (barHeight + 2));
+
+        // Draw bars symmetrically from the center
+        canvas.fillRect((SCREEN_WIDTH / 2) - barWidth, y_top, barWidth, barHeight, COLOR_PRIMARY);
+        canvas.fillRect(SCREEN_WIDTH / 2, y_top, barWidth, barHeight, COLOR_PRIMARY);
+        canvas.fillRect((SCREEN_WIDTH / 2) - barWidth, y_bottom, barWidth, barHeight, COLOR_PRIMARY);
+        canvas.fillRect(SCREEN_WIDTH / 2, y_bottom, barWidth, barHeight, COLOR_PRIMARY);
+    }
+}
+
 void drawBarSpectrumVisualizer() {
     int numBars = 32;
     int barWidth = SCREEN_WIDTH / numBars;
@@ -1333,29 +1357,7 @@ void drawEnhancedMusicPlayer() {
 
     drawStatusBar();
 
-    // --- Bar Spectrum Visualizer ---
-    drawBarSpectrumVisualizer();
-
-    // --- Album Art ---
-    int artSize = 120;
-    int artX = (SCREEN_WIDTH - artSize) / 2;
-    int artY = 25;
-    drawAlbumArt(artX, artY, artSize, currentTrackIdx);
-
-    // --- Progress Bar ---
-    int progress = 0;
-    if (trackStartTime > 0) {
-        unsigned long elapsedTime = musicIsPlaying ? (millis() - trackStartTime) : (musicPauseTime - trackStartTime);
-        progress = (elapsedTime * 100) / (assumedTrackDuration * 1000);
-    }
-    progress = constrain(progress, 0, 100);
-
-    int progBarY = artY + artSize + 15; // Reposition progress bar
-    canvas.drawFastHLine(20, progBarY, SCREEN_WIDTH - 40, COLOR_SECONDARY);
-    canvas.drawFastHLine(20, progBarY, (SCREEN_WIDTH - 40) * progress / 100, COLOR_PRIMARY);
-
-
-    // --- Track Info ---
+    // --- Track Info (Top) ---
     String title = "Unknown Title";
     String artist = "Unknown Artist";
     if (currentTrackIdx < musicPlaylist.size()) {
@@ -1368,16 +1370,31 @@ void drawEnhancedMusicPlayer() {
     int16_t x1, y1;
     uint16_t w, h;
     canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, artY + artSize - 15);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 25);
     canvas.print(title);
 
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_SECONDARY);
     canvas.getTextBounds(artist, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, artY + artSize + 5);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 45);
     canvas.print(artist);
 
-    // --- Status Icons ---
+    // --- Horizontal Spectrum Visualizer (Center) ---
+    drawHorizontalSpectrumVisualizer();
+
+    // --- Progress Bar (Bottom) ---
+    int progress = 0;
+    if (trackStartTime > 0) {
+        unsigned long elapsedTime = musicIsPlaying ? (millis() - trackStartTime) : (musicPauseTime - trackStartTime);
+        progress = (elapsedTime * 100) / (assumedTrackDuration * 1000);
+    }
+    progress = constrain(progress, 0, 100);
+
+    int progBarY = SCREEN_HEIGHT - 40;
+    canvas.drawFastHLine(20, progBarY, SCREEN_WIDTH - 40, COLOR_SECONDARY);
+    canvas.drawFastHLine(20, progBarY, (SCREEN_WIDTH - 40) * progress / 100, COLOR_PRIMARY);
+
+    // --- Status Icons (Bottom) ---
     int statusY = progBarY + 10;
 
     // Volume
