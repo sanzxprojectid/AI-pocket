@@ -141,7 +141,8 @@ enum AppState {
   STATE_LOCAL_AI_CHAT,
   STATE_MUSIC_PLAYER,
   STATE_POMODORO,
-  STATE_SCREENSAVER
+  STATE_SCREENSAVER,
+  STATE_BRIGHTNESS_ADJUST
 };
 
 AppState currentState = STATE_BOOT;
@@ -173,12 +174,15 @@ struct SystemConfig {
   float petHappiness;
   float petEnergy;
   bool petSleep;
+  int screenBrightness;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
+float currentBrightness = 255.0;
+float targetBrightness = 255.0;
 int cursorX = 0, cursorY = 0;
 String userInput = "";
 String passwordInput = "";
@@ -990,6 +994,7 @@ void drawDeauthAttack();
 void drawHackerToolsMenu();
 void handleHackerToolsMenuSelect();
 void drawSystemMenu();
+void drawBrightnessMenu();
 void handleSystemMenuSelect();
 void updateDeauthAttack();
 void changeState(AppState newState);
@@ -1859,6 +1864,51 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawBrightnessMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_system, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("Brightness");
+
+  // Brightness Bar
+  int barX = 30;
+  int barY = SCREEN_HEIGHT / 2;
+  int barW = SCREEN_WIDTH - 60;
+  int barH = 20;
+
+  canvas.drawRoundRect(barX, barY, barW, barH, 5, COLOR_BORDER);
+  int fillW = map(screenBrightness, 0, 255, 0, barW - 4);
+  if (fillW > 0) {
+    canvas.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 3, COLOR_PRIMARY);
+  }
+
+  // Percentage Text
+  String brightness_text = String(map(screenBrightness, 0, 255, 0, 100)) + "%";
+  int16_t x1, y1;
+  uint16_t w, h;
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.getTextBounds(brightness_text, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor((SCREEN_WIDTH - w) / 2, barY + barH + 15);
+  canvas.print(brightness_text);
+
+
+  // Footer
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("LEFT/RIGHT = Adjust | L+R = Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -3989,6 +4039,7 @@ void loadConfig() {
         sysConfig.petHappiness = doc["pet"]["hap"] | 80.0f;
         sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
         sysConfig.petSleep = doc["pet"]["slp"] | false;
+        sysConfig.screenBrightness = doc["sys"]["brightness"] | 255;
 
         // Sync to legacy globals if needed
         myNickname = sysConfig.espnowNick;
@@ -3997,6 +4048,9 @@ void loadConfig() {
         myPet.happiness = sysConfig.petHappiness;
         myPet.energy = sysConfig.petEnergy;
         myPet.isSleeping = sysConfig.petSleep;
+        screenBrightness = sysConfig.screenBrightness;
+        currentBrightness = sysConfig.screenBrightness;
+        targetBrightness = sysConfig.screenBrightness;
 
         Serial.println("Config loaded from SD (.aip)");
         file.close();
@@ -4043,6 +4097,7 @@ void saveConfig() {
   sysConfig.petHappiness = myPet.happiness;
   sysConfig.petEnergy = myPet.energy;
   sysConfig.petSleep = myPet.isSleeping;
+  sysConfig.screenBrightness = screenBrightness;
   // ssid/pass are updated directly
 
   if (sdCardMounted && beginSD()) {
@@ -4055,6 +4110,7 @@ void saveConfig() {
     doc["pet"]["hap"] = sysConfig.petHappiness;
     doc["pet"]["eng"] = sysConfig.petEnergy;
     doc["pet"]["slp"] = sysConfig.petSleep;
+    doc["sys"]["brightness"] = sysConfig.screenBrightness;
 
     File file = SD.open(CONFIG_FILE, FILE_WRITE);
     if (file) {
@@ -5160,8 +5216,8 @@ void drawSystemMenu() {
   canvas.setCursor(45, 7);
   canvas.print("System Settings");
 
-  const char* items[] = {"Device Info", "Security", "Back"};
-  drawScrollableMenu(items, 3, 45, 30, 5);
+  const char* items[] = {"Device Info", "Security", "Brightness", "Back"};
+  drawScrollableMenu(items, 4, 45, 30, 5);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5505,7 +5561,10 @@ void handleSystemMenuSelect() {
         changeState(STATE_CHANGE_PIN);
       }
       break;
-    case 2: // Back
+    case 2: // Brightness
+      changeState(STATE_BRIGHTNESS_ADJUST);
+      break;
+    case 3: // Back
       changeState(STATE_MAIN_MENU);
       break;
   }
@@ -5894,6 +5953,9 @@ void refreshCurrentScreen() {
     case STATE_POMODORO:
       drawPomodoroTimer();
       break;
+    case STATE_BRIGHTNESS_ADJUST:
+      drawBrightnessMenu();
+      break;
     default:
       showMainMenu(x_offset);
       break;
@@ -6009,6 +6071,11 @@ void setup() {
     // Init Pins
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, LOW); // Backlight off
+
+    // Konfigurasi PWM untuk lampu latar
+    ledcSetup(0, 5000, 8); // Channel 0, 5kHz, 8-bit resolution
+    ledcAttachPin(TFT_BL, 0); // Attach TFT_BL pin to channel 0
+
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(BTN_SELECT, INPUT);
     pinMode(BTN_UP, INPUT);
@@ -6028,7 +6095,7 @@ void setup() {
     bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
     drawBootScreen(bootStatusLines, ++currentLine, 15);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    digitalWrite(TFT_BL, HIGH); // Backlight on right away
+    ledcWrite(0, screenBrightness); // Set initial brightness
 
     // --- Init other peripherals ---
     pixels.begin();
@@ -6263,6 +6330,15 @@ void loop() {
 
   if (currentState == STATE_GAME_PLATFORMER) {
     updatePlatformerLogic();
+  }
+
+  // Backlight smoothing logic
+  if (abs(targetBrightness - currentBrightness) > 0.5) {
+    currentBrightness = custom_lerp(currentBrightness, targetBrightness, 0.1);
+    ledcWrite(0, (int)currentBrightness);
+  } else if (currentBrightness != targetBrightness) {
+    currentBrightness = targetBrightness;
+    ledcWrite(0, (int)currentBrightness);
   }
 
   if (currentState == STATE_SCREENSAVER) {
@@ -6654,6 +6730,10 @@ void loop() {
         case STATE_VPET:
           if (petMenuSelection > 0) petMenuSelection--;
           break;
+        case STATE_BRIGHTNESS_ADJUST:
+          if (screenBrightness > 0) screenBrightness -= 5;
+          targetBrightness = screenBrightness;
+          break;
         case STATE_ESPNOW_PEER_SCAN:
           if (espnowPeerCount > 0) {
              userInput = espnowPeers[selectedPeer].nickname;
@@ -6692,6 +6772,10 @@ void loop() {
           break;
         case STATE_VPET:
           if (petMenuSelection < 4) petMenuSelection++;
+          break;
+        case STATE_BRIGHTNESS_ADJUST:
+          if (screenBrightness < 255) screenBrightness += 5;
+          targetBrightness = screenBrightness;
           break;
         case STATE_TOOL_FILE_MANAGER:
            // Removed horizontal scroll for file manager, moved to vertical
@@ -6837,6 +6921,9 @@ void loop() {
             changeState(STATE_ESPNOW_CHAT);
           }
           break;
+        case STATE_BRIGHTNESS_ADJUST:
+          // Tidak ada tindakan SELECT, hanya kembali
+          break;
         case STATE_ESPNOW_CHAT:
           userInput = "";
           keyboardContext = CONTEXT_ESPNOW_CHAT;
@@ -6904,6 +6991,10 @@ void loop() {
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
           changeState(STATE_GAME_HUB);
+          break;
+        case STATE_BRIGHTNESS_ADJUST:
+          saveConfig();
+          changeState(STATE_SYSTEM_MENU);
           break;
         case STATE_ABOUT:
         case STATE_TOOL_WIFI_SONAR:
