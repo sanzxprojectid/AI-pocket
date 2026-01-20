@@ -6073,8 +6073,13 @@ void setup() {
     digitalWrite(TFT_BL, LOW); // Backlight off
 
     // Konfigurasi PWM untuk lampu latar
+    #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    // ledcSetup(0, 5000, 8); // ledcSetup is deprecated in ESP32 Arduino Core 3.x
+    ledcAttach(TFT_BL, 5000, 8); // Attach TFT_BL pin to a new channel with frequency and resolution
+    #else
     ledcSetup(0, 5000, 8); // Channel 0, 5kHz, 8-bit resolution
     ledcAttachPin(TFT_BL, 0); // Attach TFT_BL pin to channel 0
+    #endif
 
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(BTN_SELECT, INPUT);
