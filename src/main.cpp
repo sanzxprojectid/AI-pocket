@@ -1082,7 +1082,7 @@ void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
 void drawEQIcon(int x, int y, uint8_t eqMode);
-void drawCircularVisualizer();
+void drawVerticalVisualizer();
 String formatTime(int seconds);
 void updateBatteryLevel();
 void drawBatteryIcon();
@@ -1321,8 +1321,8 @@ void drawEnhancedMusicPlayer() {
     canvas.setCursor(SCREEN_WIDTH - 20 - w, progBarY + 10);
     canvas.print(trackCountStr);
 
-    // --- Circular Visualizer ---
-    drawCircularVisualizer();
+    // --- Vertical Visualizer ---
+    drawVerticalVisualizer();
 
     // --- Status Icons (Bottom) ---
     int statusY = SCREEN_HEIGHT - 20;
@@ -1356,30 +1356,29 @@ void drawEnhancedMusicPlayer() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-void drawCircularVisualizer() {
-    int centerX = SCREEN_WIDTH / 2;
-    int centerY = 125;
-    int numBars = 40;
-    int minRadius = 25;
-    int maxRadius = 45;
+
+void drawVerticalVisualizer() {
+    int numBars = 32; // Number of bars to draw
+    int barWidth = SCREEN_WIDTH / numBars;
+    int maxBarHeight = 50; // Max height of the bars
 
     for (int i = 0; i < numBars; i++) {
-        float angle = (i / (float)numBars) * 2.0 * PI;
+        // Simulate spectrum data with more variation, similar to the old visualizer
+        float sineFactor1 = (sin(i * 0.4f + millis() * 0.006f) + 1.0f) / 2.0f;
+        float sineFactor2 = (cos(i * 0.1f + millis() * 0.002f) + 1.0f) / 2.0f;
+        float combinedFactor = (sineFactor1 * 0.6f + sineFactor2 * 0.4f);
 
-        // Simulate spectrum data with more variation
-        float sineFactor1 = (sin(i * 0.5f + millis() * 0.008f) + 1.0f) / 2.0f;
-        float sineFactor2 = (cos(i * 0.2f + millis() * 0.003f) + 1.0f) / 2.0f;
-        float combinedFactor = (sineFactor1 + sineFactor2) / 2.0f;
+        // Calculate bar height based on music volume and the sine wave factors
+        int barHeight = map(musicVol, 0, 30, 2, maxBarHeight) * combinedFactor;
+        barHeight = constrain(barHeight, 2, maxBarHeight);
 
-        int barHeight = map(musicVol, 0, 30, 2, maxRadius - minRadius) * combinedFactor;
-        barHeight = constrain(barHeight, 2, maxRadius - minRadius);
+        // Position the bars at the bottom of the screen
+        int x = i * barWidth;
+        int y = SCREEN_HEIGHT - barHeight;
 
-        int x1 = centerX + cos(angle) * minRadius;
-        int y1 = centerY + sin(angle) * minRadius;
-        int x2 = centerX + cos(angle) * (minRadius + barHeight);
-        int y2 = centerY + sin(angle) * (minRadius + barHeight);
-
-        canvas.drawLine(x1, y1, x2, y2, COLOR_PRIMARY);
+        // Draw the bar. We can use a simple line or a gradient line.
+        // Let's use a gradient for a nicer look.
+        drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
     }
 }
 
