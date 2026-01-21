@@ -1081,6 +1081,7 @@ void endSD();
 void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
+void drawEQIcon(int x, int y, uint8_t eqMode);
 void drawCircularVisualizer();
 String formatTime(int seconds);
 void updateBatteryLevel();
@@ -1253,6 +1254,8 @@ void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_
         uint8_t g = g1 + (g2 - g1) * i / (h - 1);
         uint8_t b = b1 + (b2 - b1) * i / (h - 1);
         canvas.drawPixel(x, y + i, (r << 11) | (g << 5) | b);
+    }
+}
 float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
