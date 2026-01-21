@@ -1308,47 +1308,25 @@ float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
-void drawHorizontalSpectrumVisualizer() {
-    int numBars = 16; // Fewer bars for a cleaner look
-    int maxBarWidth = 120; // Max width extending from the center
-    int barHeight = SCREEN_HEIGHT / (numBars * 2);
-    int centerY = SCREEN_HEIGHT / 2;
-
-    for (int i = 0; i < numBars; i++) {
-        // Simulate spectrum data with a smoother, wave-like motion
-        float sineFactor = (sin(i * 0.5f + millis() * 0.005f) + 1.0f) / 2.0f;
-        int barWidth = map(musicVol, 0, 30, 5, maxBarWidth) * sineFactor;
-        barWidth += random(-10, 10);
-        barWidth = constrain(barWidth, 2, maxBarWidth);
-
-        int y_top = centerY - (i * (barHeight + 2)) - barHeight;
-        int y_bottom = centerY + (i * (barHeight + 2));
-
-        // Draw bars symmetrically from the center
-        canvas.fillRect((SCREEN_WIDTH / 2) - barWidth, y_top, barWidth, barHeight, COLOR_PRIMARY);
-        canvas.fillRect(SCREEN_WIDTH / 2, y_top, barWidth, barHeight, COLOR_PRIMARY);
-        canvas.fillRect((SCREEN_WIDTH / 2) - barWidth, y_bottom, barWidth, barHeight, COLOR_PRIMARY);
-        canvas.fillRect(SCREEN_WIDTH / 2, y_bottom, barWidth, barHeight, COLOR_PRIMARY);
-    }
-}
 
 void drawBarSpectrumVisualizer() {
     int numBars = 32;
     int barWidth = SCREEN_WIDTH / numBars;
-    int maxBarHeight = 60; // Max height for the bars
+    int maxBarHeight = 70;
+    int centerY = 95;
 
     for (int i = 0; i < numBars; i++) {
         // Simulate spectrum data
         float sineFactor = (sin(i * 0.4f + millis() * 0.01f) + 1.0f) / 2.0f;
-        int barHeight = map(musicVol, 0, 30, 5, maxBarHeight) * sineFactor;
+        int barHeight = map(musicVol, 0, 30, 2, maxBarHeight) * sineFactor;
         barHeight += random(-5, 5);
         barHeight = constrain(barHeight, 2, maxBarHeight);
 
         int x = i * barWidth;
-        int y = SCREEN_HEIGHT - barHeight;
+        int y = centerY - barHeight / 2;
 
         // Draw the bar
-        canvas.fillRect(x, y, barWidth - 1, barHeight, COLOR_PRIMARY);
+        canvas.fillRect(x, y, barWidth - 2, barHeight, COLOR_PRIMARY);
     }
 }
 
@@ -1379,8 +1357,8 @@ void drawEnhancedMusicPlayer() {
     canvas.setCursor((SCREEN_WIDTH - w) / 2, 45);
     canvas.print(artist);
 
-    // --- Horizontal Spectrum Visualizer (Center) ---
-    drawHorizontalSpectrumVisualizer();
+    // --- Bar Spectrum Visualizer (Center) ---
+    drawBarSpectrumVisualizer();
 
     // --- Progress Bar (Bottom) ---
     int progress = 0;
