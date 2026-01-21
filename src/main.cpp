@@ -1080,11 +1080,7 @@ void endSD();
 void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
-void drawVUMeter(int x, int y, int value, const char* label);
-void drawSpectrumVisualizer();
 void drawCircularVisualizer();
-void drawAlbumArt(int x, int y, int size, int trackIndex);
-void drawEQIcon(int x, int y, uint8_t eqMode);
 String formatTime(int seconds);
 void updateBatteryLevel();
 void drawBatteryIcon();
@@ -1256,78 +1252,8 @@ void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_
         uint8_t g = g1 + (g2 - g1) * i / (h - 1);
         uint8_t b = b1 + (b2 - b1) * i / (h - 1);
         canvas.drawPixel(x, y + i, (r << 11) | (g << 5) | b);
-    }
-}
-
-void drawVUMeter(int x, int y, int value, const char* label) {
-    int radius = 40;
-    float startAngle = 135; // Corresponds to -10 on the meter
-    float endAngle = 45;   // Corresponds to +3 on the meter
-    float angleRange = startAngle - endAngle;
-
-    // Draw meter background (arc)
-    for (int i = 0; i <= angleRange; i += 5) {
-        float angle = radians(startAngle - i);
-        int x1 = x + cos(angle) * (radius - 10);
-        int y1 = y - sin(angle) * (radius - 10);
-        int x2 = x + cos(angle) * radius;
-        int y2 = y - sin(angle) * radius;
-        canvas.drawLine(x1, y1, x2, y2, COLOR_BORDER);
-    }
-
-    // Draw tick marks
-    for (int i = 0; i <= 10; i++) {
-        float percent = i / 10.0;
-        float angle = radians(startAngle - (angleRange * percent));
-        int r = (i % 5 == 0) ? 8 : 4;
-        int x1 = x + cos(angle) * (radius - r);
-        int y1 = y - sin(angle) * (radius - r);
-        int x2 = x + cos(angle) * radius;
-        int y2 = y - sin(angle) * radius;
-        canvas.drawLine(x1, y1, x2, y2, COLOR_DIM);
-    }
-
-    // Draw needle
-    float valuePercent = constrain(value / 100.0f, 0.0f, 1.0f);
-    float needleAngle = radians(startAngle - (angleRange * valuePercent));
-    int needleX = x + cos(needleAngle) * (radius - 5);
-    int needleY = y - sin(needleAngle) * (radius - 5);
-    canvas.drawLine(x, y, needleX, needleY, 0xF800); // Red needle
-
-    // Draw pivot
-    canvas.fillCircle(x, y, 3, COLOR_SECONDARY);
-
-    // Draw label
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setCursor(x - 4, y + 5);
-    canvas.print(label);
-}
-
 float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
-}
-
-
-void drawBarSpectrumVisualizer() {
-    int numBars = 32;
-    int barWidth = SCREEN_WIDTH / numBars;
-    int maxBarHeight = 70;
-    int centerY = 95;
-
-    for (int i = 0; i < numBars; i++) {
-        // Simulate spectrum data
-        float sineFactor = (sin(i * 0.4f + millis() * 0.01f) + 1.0f) / 2.0f;
-        int barHeight = map(musicVol, 0, 30, 2, maxBarHeight) * sineFactor;
-        barHeight += random(-5, 5);
-        barHeight = constrain(barHeight, 2, maxBarHeight);
-
-        int x = i * barWidth;
-        int y = centerY - barHeight / 2;
-
-        // Draw the bar
-        canvas.fillRect(x, y, barWidth - 2, barHeight, COLOR_PRIMARY);
-    }
 }
 
 void drawEnhancedMusicPlayer() {
@@ -1335,7 +1261,7 @@ void drawEnhancedMusicPlayer() {
 
     drawStatusBar();
 
-    // --- Track Info (Top) ---
+    // --- Track Info ---
     String title = "Unknown Title";
     String artist = "Unknown Artist";
     if (currentTrackIdx < musicPlaylist.size()) {
@@ -1343,24 +1269,35 @@ void drawEnhancedMusicPlayer() {
         artist = musicPlaylist[currentTrackIdx].artist;
     }
 
+    // Title
     canvas.setTextSize(2);
     canvas.setTextColor(COLOR_PRIMARY);
     int16_t x1, y1;
     uint16_t w, h;
     canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, 25);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 40);
     canvas.print(title);
 
+    // Artist
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_SECONDARY);
     canvas.getTextBounds(artist, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, 45);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 60);
     canvas.print(artist);
 
-    // --- Bar Spectrum Visualizer (Center) ---
-    drawBarSpectrumVisualizer();
+    // --- Play/Pause Indicator ---
+    int iconX = 20;
+    int iconY = 45;
+    if (musicIsPlaying) {
+        // Pause Icon
+        canvas.fillRect(iconX, iconY, 5, 15, COLOR_PRIMARY);
+        canvas.fillRect(iconX + 8, iconY, 5, 15, COLOR_PRIMARY);
+    } else {
+        // Play Icon
+        canvas.fillTriangle(iconX, iconY, iconX, iconY + 15, iconX + 12, iconY + 7, COLOR_PRIMARY);
+    }
 
-    // --- Progress Bar (Bottom) ---
+    // --- Progress Bar ---
     int progress = 0;
     if (trackStartTime > 0) {
         unsigned long elapsedTime = musicIsPlaying ? (millis() - trackStartTime) : (musicPauseTime - trackStartTime);
@@ -1368,97 +1305,78 @@ void drawEnhancedMusicPlayer() {
     }
     progress = constrain(progress, 0, 100);
 
-    int progBarY = SCREEN_HEIGHT - 40;
-    canvas.drawFastHLine(20, progBarY, SCREEN_WIDTH - 40, COLOR_SECONDARY);
-    canvas.drawFastHLine(20, progBarY, (SCREEN_WIDTH - 40) * progress / 100, COLOR_PRIMARY);
+    int progBarY = 90;
+    canvas.drawRect(20, progBarY, SCREEN_WIDTH - 40, 6, COLOR_BORDER);
+    canvas.fillRect(20, progBarY, (SCREEN_WIDTH - 40) * progress / 100, 6, COLOR_PRIMARY);
+
+    // --- Track Counter ---
+    String trackCountStr = String(currentTrackIdx) + " / " + String(totalTracks);
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.getTextBounds(trackCountStr, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH - 20 - w, progBarY + 10);
+    canvas.print(trackCountStr);
+
+    // --- Circular Visualizer ---
+    drawCircularVisualizer();
 
     // --- Status Icons (Bottom) ---
-    int statusY = progBarY + 10;
+    int statusY = SCREEN_HEIGHT - 20;
 
     // Volume
-    String volText = String(map(musicVol, 0, 30, 0, 100)) + "%";
+    String volText = "VOL: " + String(map(musicVol, 0, 30, 0, 100)) + "%";
     canvas.setTextColor(COLOR_SECONDARY);
-    canvas.getTextBounds(volText, 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor(20, statusY);
     canvas.print(volText);
 
-    // EQ
-    String eqText = eqModeNames[musicEQMode];
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.getTextBounds(eqText, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, statusY);
-    canvas.print(eqText);
+    // EQ Icon
+    drawEQIcon(SCREEN_WIDTH / 2 - 10, statusY + 5, musicEQMode);
 
     // Loop/Shuffle
-    int iconX = SCREEN_WIDTH - 45;
+    iconX = SCREEN_WIDTH - 45;
     if(musicIsShuffled) {
-        // Shuffle Icon (Crossed Arrows)
         canvas.drawLine(iconX, statusY - 2, iconX + 10, statusY + 8, COLOR_PRIMARY);
         canvas.drawLine(iconX, statusY + 8, iconX + 10, statusY - 2, COLOR_PRIMARY);
         canvas.drawPixel(iconX+11, statusY+8, COLOR_PRIMARY);
         canvas.drawPixel(iconX+11, statusY-2, COLOR_PRIMARY);
     } else if(musicLoopMode == LOOP_ALL) {
-        // Loop All Icon (Circle Arrow)
         canvas.drawCircle(iconX + 5, statusY + 3, 5, COLOR_PRIMARY);
         canvas.fillTriangle(iconX + 8, statusY - 2, iconX + 11, statusY, iconX + 8, statusY + 2, COLOR_PRIMARY);
     } else if(musicLoopMode == LOOP_ONE) {
-        // Loop One Icon
         canvas.drawCircle(iconX + 5, statusY + 3, 5, COLOR_PRIMARY);
         canvas.setTextColor(COLOR_PRIMARY);
         canvas.setCursor(iconX + 3, statusY);
         canvas.print("1");
     }
 
-
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// Helper function to convert 8-bit RGB to 16-bit RGB565 color
-uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
-    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
+void drawCircularVisualizer() {
+    int centerX = SCREEN_WIDTH / 2;
+    int centerY = 125;
+    int numBars = 40;
+    int minRadius = 25;
+    int maxRadius = 45;
 
-void drawAlbumArt(int x, int y, int size, int trackIndex) {
-    // Seed the random number generator with the track index for deterministic patterns
-    randomSeed(trackIndex * 6942);
+    for (int i = 0; i < numBars; i++) {
+        float angle = (i / (float)numBars) * 2.0 * PI;
 
-    int patternType = trackIndex % 4;
+        // Simulate spectrum data with more variation
+        float sineFactor1 = (sin(i * 0.5f + millis() * 0.008f) + 1.0f) / 2.0f;
+        float sineFactor2 = (cos(i * 0.2f + millis() * 0.003f) + 1.0f) / 2.0f;
+        float combinedFactor = (sineFactor1 + sineFactor2) / 2.0f;
 
-    if (patternType == 0) { // Sunset Lines
-        for(int i = 0; i < size; i++) {
-            uint16_t lineColor = (i < size / 2) ?
-                color565(255, map(i, 0, size/2, 100, 200), 0) :
-                color565(map(i, size/2, size, 255, 100), map(i, size/2, size, 200, 50), 0);
-            canvas.drawFastHLine(x, y + i, size, lineColor);
-        }
-        int sunY = y + size * 0.7;
-        canvas.fillCircle(x + size/2, sunY, 20, color565(255,255,0)); // Sun
-        canvas.drawFastHLine(x, sunY, size, 0); // Reflection
-    } else if (patternType == 1) { // Geometric Shapes
-        canvas.fillRoundRect(x, y, size, size, 8, 0x30A4);
-        for(int i = 0; i < 5; i++) {
-            switch(random(4)) {
-                case 0: canvas.fillTriangle(x+random(size), y+random(size), x+random(size), y+random(size), x+random(size), y+random(size), COLOR_VAPOR_PINK); break;
-                case 1: canvas.fillRect(x+random(size-20), y+random(size-20), random(10, 20), random(10, 20), COLOR_VAPOR_CYAN); break;
-                case 2: canvas.fillCircle(x+random(size), y+random(size), random(5, 15), COLOR_VAPOR_PURPLE); break;
-                case 3: canvas.drawLine(x+random(size), y+random(size), x+random(size), y+random(size), COLOR_VAPOR_PINK); break;
-            }
-        }
-    } else if (patternType == 2) { // Gradient Waves
-        for(int i = 0; i < size; i++) {
-            float sin1 = sin((float)(i + millis()/100) * 0.1) * 10;
-            float sin2 = cos((float)(i + millis()/100) * 0.05) * 8;
-            uint16_t color = color565(map(i, 0, size, 100, 255), 20, map(i, 0, size, 200, 255));
-            canvas.drawFastVLine(x + i, y + size/2 + sin1 + sin2 - 10, 20, color);
-        }
-    } else { // Grid
-        canvas.fillRoundRect(x, y, size, size, 8, COLOR_VAPOR_BG_END);
-        for(int i = 0; i < size; i += 10) {
-            canvas.drawFastHLine(x, y + i, size, COLOR_VAPOR_PINK);
-            canvas.drawFastVLine(x + i, y, size, COLOR_VAPOR_CYAN);
-        }
+        int barHeight = map(musicVol, 0, 30, 2, maxRadius - minRadius) * combinedFactor;
+        barHeight = constrain(barHeight, 2, maxRadius - minRadius);
+
+        int x1 = centerX + cos(angle) * minRadius;
+        int y1 = centerY + sin(angle) * minRadius;
+        int x2 = centerX + cos(angle) * (minRadius + barHeight);
+        int y2 = centerY + sin(angle) * (minRadius + barHeight);
+
+        canvas.drawLine(x1, y1, x2, y2, COLOR_PRIMARY);
     }
-
 }
 
 void drawEQIcon(int x, int y, uint8_t eqMode) {
@@ -1472,14 +1390,9 @@ void drawEQIcon(int x, int y, uint8_t eqMode) {
         default:                  { int b[] = {4, 4, 4, 4, 4}; memcpy(bars, b, sizeof(bars)); break; } // Normal
     }
 
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(x - 10, y + 12);
-    canvas.print(eqModeNames[eqMode]);
-
     for (int i = 0; i < 5; i++) {
-        int barHeight = bars[i];
-        canvas.fillRect(x + i * 4, y - barHeight, 3, barHeight, COLOR_DIM);
+        int barHeight = bars[i] + 2; // Make them slightly taller
+        canvas.fillRect(x + i * 4, y - barHeight, 3, barHeight, COLOR_SECONDARY);
     }
 }
 
