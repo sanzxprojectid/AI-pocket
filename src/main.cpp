@@ -764,6 +764,7 @@ int cachedRSSI = 0;
 String cachedTimeStr = "";
 unsigned long lastStatusBarUpdate = 0;
 int batteryPercentage = -1; // -1 indicates not yet read
+float batteryVoltage = 0.0;
 
 unsigned long lastInputTime = 0;
 String chatHistory = "";
@@ -4144,10 +4145,10 @@ void updateBatteryLevel() {
     // Jadi, Vin = Vout * 2
     // Vout maks dari ADC adalah ~3.3V (tergantung kalibrasi), jadi Vin maks adalah ~6.6V (aman)
     // Nilai ADC mentah (0-4095) -> Tegangan (0-3.3V). Kita asumsikan referensi ADC adalah 3.3V
-    float voltage = (rawValue / 4095.0) * 3.3 * 2.0;
+    batteryVoltage = (rawValue / 4095.0) * 3.3 * 2.0;
 
     // Mapping tegangan ke persentase (Contoh: 3.2V = 0%, 4.2V = 100%)
-    batteryPercentage = map(voltage * 100, 320, 420, 0, 100);
+    batteryPercentage = map(batteryVoltage * 100, 320, 420, 0, 100);
     batteryPercentage = constrain(batteryPercentage, 0, 100);
 }
 
@@ -4199,7 +4200,9 @@ void drawBatteryIcon() {
     // Draw percentage text to the left of the icon
     canvas.setTextSize(1);
     canvas.setTextColor(battColor);
-    String text = String(batteryPercentage) + "%";
+    char buf[10];
+    sprintf(buf, "%.2fV %d%%", batteryVoltage, batteryPercentage);
+    String text(buf);
     int16_t x1, y1;
     uint16_t textW, textH;
     canvas.getTextBounds(text, 0, 0, &x1, &y1, &textW, &textH);
@@ -6027,6 +6030,7 @@ void setup() {
     pinMode(BTN_RIGHT, INPUT);
     pinMode(BTN_BACK, INPUT);
     pinMode(BATTERY_PIN, INPUT);
+    analogSetPinAttenuation(BATTERY_PIN, ADC_11db); // Set attenuation for accurate battery reading
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
     bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
     currentLine++;
