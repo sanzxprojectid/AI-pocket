@@ -646,7 +646,6 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
@@ -1031,6 +1030,7 @@ void updateNeoPixel();
 void ledQuickFlash();
 void ledSuccess();
 void ledError();
+void drawMainMenu();
 void handleMainMenuSelect();
 void handleKeyPress();
 void handlePasswordKeyPress();
@@ -4443,95 +4443,64 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-// ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
-void updateParticles() {
-  if (!particlesInit) {
-    for (int i = 0; i < NUM_PARTICLES; i++) {
-      particles[i].x = random(0, SCREEN_WIDTH);
-      particles[i].y = random(0, SCREEN_HEIGHT);
-      particles[i].speed = random(10, 50) / 10.0f;
-      particles[i].size = random(1, 3);
-    }
-    particlesInit = true;
-  }
+// ============ MAIN MENU (MODERN & INFORMATIVE) ============
+const int MAIN_MENU_ITEM_HEIGHT = 35;
 
-  for (int i = 0; i < NUM_PARTICLES; i++) {
-    particles[i].x -= particles[i].speed;
-    if (particles[i].x < 0) {
-      particles[i].x = SCREEN_WIDTH;
-      particles[i].y = random(0, SCREEN_HEIGHT);
-    }
-  }
-}
+void drawMainMenu() {
+  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
+  const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
+  int numItems = 13;
 
-void showMainMenu(int x_offset) {
-  updateParticles();
   canvas.fillScreen(COLOR_BG);
-
-  // Draw Particles (Background)
-  for (int i = 0; i < NUM_PARTICLES; i++) {
-    // Dim stars
-    uint16_t color = (particles[i].size > 1) ? 0x8410 : 0x4208; // Dark Gray
-    canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, color);
-  }
-
-  // Scanline Effect (Horizontal lines)
-  for (int y = 0; y < SCREEN_HEIGHT; y += 4) {
-    canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x18E3); // Very subtle gray line
-  }
-
   drawStatusBar();
 
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
-  int numItems = 13;
-  
-  int centerX = SCREEN_WIDTH / 2;
-  int centerY = SCREEN_HEIGHT / 2 + 5;
-  int iconSpacing = 70;
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 7);
+  canvas.print("Main Menu");
+
+  int itemHeight = 35;
+  int startY = 35;
 
   for (int i = 0; i < numItems; i++) {
-    float offset = (i - menuScrollCurrent);
-    int x = centerX + (offset * iconSpacing);
-    int y = centerY;
+    int y = startY + (i * itemHeight) - menuScrollCurrent;
 
-    float dist = abs(offset);
-    float scale = 1.0f - min(dist * 0.5f, 0.7f); // Sharper falloff
-    if (scale < 0.1f) continue;
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
 
-    int boxSize = 48 * scale;
-
-    // Icon Logic
-    if (abs(offset) < 0.5f) {
-        // Active: "Glow" effect using concentric rects + Inverted Box
-        // Simulate glow with dithering or just multiple lines
-        for(int k=1; k<4; k++) {
-           canvas.drawRoundRect(x - 24 - k, y - 24 - k, 48 + 2*k, 48 + 2*k, 6, 0x4208); // Dark gray glow
-        }
-
-        // Main Box
-        canvas.fillRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_PRIMARY); // White box
-        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_BG); // Black Icon
-
-        // Label with background for readability
-        canvas.setTextSize(1);
-        int labelW = strlen(items[i]) * 6;
-        int labelX = centerX - labelW/2;
-        int labelY = SCREEN_HEIGHT - 25;
-
-        canvas.fillRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_BG);
-        canvas.drawRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_PRIMARY);
-        canvas.setTextColor(COLOR_PRIMARY);
-        canvas.setCursor(labelX, labelY);
-        canvas.print(items[i]);
+    if (i == menuSelection) {
+      canvas.fillRoundRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
     } else {
-        // Inactive: Just Outline and Dim Icon
-        canvas.drawRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_DIM);
-        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_DIM);
+      canvas.drawRoundRect(5, y, SCREEN_WIDTH - 10, itemHeight - 2, 8, COLOR_BORDER);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.drawBitmap(15, y + 3, menuIcons[i], 24, 24, i == menuSelection ? COLOR_BG : COLOR_PRIMARY);
+
+    canvas.setTextSize(2);
+    canvas.setCursor(50, y + 9);
+    canvas.print(items[i]);
+
+    // Informative sub-text
+    canvas.setTextSize(1);
+    canvas.setCursor(180, y + 13);
+    canvas.setTextColor(i == menuSelection ? COLOR_BG : COLOR_DIM);
+
+    switch(i) {
+      case 1: // WIFI
+        if(WiFi.status() == WL_CONNECTED) canvas.print(WiFi.SSID());
+        else canvas.print("Disconnected");
+        break;
+      case 2: // ESP-NOW
+        canvas.print(String(espnowPeerCount) + " peers");
+        break;
     }
   }
-  
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
+
 
 // ============ AI MODE SELECTION SCREEN ============
 void showAIModeSelection(int x_offset) {
@@ -5779,7 +5748,7 @@ void refreshCurrentScreen() {
   
   switch(currentState) {
     case STATE_MAIN_MENU:
-      showMainMenu(x_offset);
+      drawMainMenu();
       break;
     case STATE_WIFI_MENU:
       showWiFiMenu(x_offset);
@@ -6189,10 +6158,8 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      menuScrollTarget = (float)menuSelection;
+      menuScrollTarget = (float)menuSelection * MAIN_MENU_ITEM_HEIGHT;
 
-      // Lerp (Exponential Smoothing) - No bounce, stable
-      // "Tekan sekali langsung geser satu fitur dengan smooth"
       float smoothSpeed = 15.0f;
       float diff = menuScrollTarget - menuScrollCurrent;
 
@@ -6602,15 +6569,15 @@ void loop() {
     
     if (digitalRead(BTN_UP) == BTN_ACT) {
       switch(currentState) {
+        case STATE_MAIN_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
         case STATE_MUSIC_PLAYER:
           // Volume controls are handled in their own block below to be non-blocking
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY > 0) ? cursorY - 1 : 3;
-          break;
-        case STATE_MAIN_MENU:
-          if (menuSelection > 0) menuSelection--;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection > 0) menuSelection--;
@@ -6667,12 +6634,12 @@ void loop() {
     
     if (digitalRead(BTN_DOWN) == BTN_ACT) {
       switch(currentState) {
+        case STATE_MAIN_MENU:
+          if (menuSelection < 12) menuSelection++;
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
-          break;
-        case STATE_MAIN_MENU:
-          if (menuSelection < 12) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -6735,9 +6702,6 @@ void loop() {
         case STATE_CHANGE_PIN:
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
           break;
-        case STATE_MAIN_MENU:
-          if (menuSelection > 0) menuSelection--;
-          break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
           cursorX--;
@@ -6774,9 +6738,6 @@ void loop() {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
-          break;
-        case STATE_MAIN_MENU:
-          if (menuSelection < 12) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
