@@ -805,6 +805,10 @@ unsigned long visualizerMillis = 0;
 unsigned long lastVolumeChangeMillis = 0;
 unsigned long lastTrackCheckMillis = 0;
 
+#define VISUALIZER_BARS 32
+float visualizerHeights[VISUALIZER_BARS];
+float visualizerTargetHeights[VISUALIZER_BARS];
+
 // Time and session tracking
 uint16_t musicCurrentTime = 0;
 uint16_t musicTotalTime = 0;
@@ -1358,27 +1362,31 @@ void drawEnhancedMusicPlayer() {
 
 
 void drawVerticalVisualizer() {
-    int numBars = 32; // Number of bars to draw
-    int barWidth = SCREEN_WIDTH / numBars;
-    int maxBarHeight = 50; // Max height of the bars
+    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1; // Add a small gap
+    int maxBarHeight = 60;
 
-    for (int i = 0; i < numBars; i++) {
-        // Simulate spectrum data with more variation, similar to the old visualizer
-        float sineFactor1 = (sin(i * 0.4f + millis() * 0.006f) + 1.0f) / 2.0f;
-        float sineFactor2 = (cos(i * 0.1f + millis() * 0.002f) + 1.0f) / 2.0f;
-        float combinedFactor = (sineFactor1 * 0.6f + sineFactor2 * 0.4f);
+    if (millis() - visualizerMillis > 60) { // Update rate
+        visualizerMillis = millis();
+        for (int i = 0; i < VISUALIZER_BARS; i++) {
+            float newTarget = random(0, maxBarHeight);
+            if(i > 0) newTarget = (newTarget + visualizerTargetHeights[i-1]) * 0.5f;
+            visualizerTargetHeights[i] = newTarget * (musicVol / 30.0f);
+        }
+    }
 
-        // Calculate bar height based on music volume and the sine wave factors
-        int barHeight = map(musicVol, 0, 30, 2, maxBarHeight) * combinedFactor;
-        barHeight = constrain(barHeight, 2, maxBarHeight);
+    for (int i = 0; i < VISUALIZER_BARS; i++) {
+        if (visualizerHeights[i] < visualizerTargetHeights[i]) {
+            visualizerHeights[i] = visualizerTargetHeights[i];
+        } else {
+            visualizerHeights[i] = max(0.0f, visualizerHeights[i] - 2.0f); // Fall speed
+        }
 
-        // Position the bars at the bottom of the screen
-        int x = i * barWidth;
-        int y = SCREEN_HEIGHT - barHeight;
-
-        // Draw the bar. We can use a simple line or a gradient line.
-        // Let's use a gradient for a nicer look.
-        drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
+        if (visualizerHeights[i] > 0) {
+            int barHeight = (int)visualizerHeights[i];
+            int x = i * (barWidth + 1);
+            int y = SCREEN_HEIGHT - barHeight - 20; // Position from bottom
+            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_PINK, COLOR_VAPOR_PURPLE);
+        }
     }
 }
 
