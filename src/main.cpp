@@ -1365,43 +1365,33 @@ void drawEnhancedMusicPlayer() {
 void drawVerticalVisualizer() {
     int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1;
     int maxBarHeight = 60; // Max possible height
-    int centerBarHeight = 45; // Base height when music is playing
 
-    // Update target heights based on a symmetrical sine wave pattern
-    if (millis() - visualizerMillis > 30) { // Faster update rate for smoother animation
+    // Update target heights with a more "spectrum" like random feel
+    if (millis() - visualizerMillis > 50) { // Update rate
         visualizerMillis = millis();
         float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
 
         for (int i = 0; i < VISUALIZER_BARS / 2; i++) {
-            // Create a sine wave that flows from the center outwards
-            float sineValue = sin(i * 0.5f - (millis() / 200.0f)); // Flowing effect
-            float normalizedHeight = (sineValue + 1.0f) / 2.0f; // Normalize to 0-1
-
-            float targetHeight = 5 + (centerBarHeight * normalizedHeight * musicInfluence);
-            targetHeight = constrain(targetHeight, 0, maxBarHeight);
+            // Generate a new random height
+            float newTarget = random(5, maxBarHeight) * musicInfluence;
 
             // Apply to both sides symmetrically
-            visualizerTargetHeights[VISUALIZER_BARS/2 + i] = targetHeight;
-            visualizerTargetHeights[VISUALIZER_BARS/2 - 1 - i] = targetHeight;
+            visualizerTargetHeights[VISUALIZER_BARS/2 + i] = newTarget;
+            visualizerTargetHeights[VISUALIZER_BARS/2 - 1 - i] = newTarget;
         }
     }
 
     // Smoothly update and draw the bars
     for (int i = 0; i < VISUALIZER_BARS; i++) {
-        // Use lerp for a smoother rise
-        if (visualizerHeights[i] < visualizerTargetHeights[i]) {
-            visualizerHeights[i] = custom_lerp(visualizerHeights[i], visualizerTargetHeights[i], 0.4);
-        } else {
-            // Slower fall speed
-            visualizerHeights[i] = max(0.0f, visualizerHeights[i] - 1.5f);
-        }
+        // Use lerp for a smoother rise and fall
+        visualizerHeights[i] = custom_lerp(visualizerHeights[i], visualizerTargetHeights[i], 0.3);
 
         if (visualizerHeights[i] > 1) { // Only draw if height is significant
             int barHeight = (int)visualizerHeights[i];
             int x = i * (barWidth + 1);
             int y = SCREEN_HEIGHT - barHeight - 20; // Position from bottom
-            // New color scheme
-            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
+            // Modern color scheme
+            drawGradientVLine(x, y, barHeight, COLOR_PRIMARY, COLOR_SECONDARY);
         }
     }
 }
@@ -4481,72 +4471,54 @@ void updateParticles() {
 }
 
 void showMainMenu(int x_offset) {
-  updateParticles();
-  canvas.fillScreen(COLOR_BG);
+    canvas.fillScreen(COLOR_BG);
+    drawStatusBar();
 
-  // Draw Particles (Background)
-  for (int i = 0; i < NUM_PARTICLES; i++) {
-    // Dim stars
-    uint16_t color = (particles[i].size > 1) ? 0x8410 : 0x4208; // Dark Gray
-    canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, color);
-  }
+    // Header
+    canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+    canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+    canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(2);
+    canvas.setCursor(10, 21);
+    canvas.print("AI-POCKET S3");
 
-  // Scanline Effect (Horizontal lines)
-  for (int y = 0; y < SCREEN_HEIGHT; y += 4) {
-    canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x18E3); // Very subtle gray line
-  }
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
+    int numItems = 13;
+    int itemHeight = 28;
+    int itemGap = 4;
+    int startY = 45;
 
-  drawStatusBar();
+    for (int i = 0; i < numItems; i++) {
+        // Calculate the item's position based on the current scroll offset
+        int y = startY + (i * (itemHeight + itemGap)) - menuScrollCurrent;
 
-  const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
-  int numItems = 13;
-  
-  int centerX = SCREEN_WIDTH / 2;
-  int centerY = SCREEN_HEIGHT / 2 + 5;
-  int iconSpacing = 70;
-
-  for (int i = 0; i < numItems; i++) {
-    float offset = (i - menuScrollCurrent);
-    int x = centerX + (offset * iconSpacing);
-    int y = centerY;
-
-    float dist = abs(offset);
-    float scale = 1.0f - min(dist * 0.5f, 0.7f); // Sharper falloff
-    if (scale < 0.1f) continue;
-
-    int boxSize = 48 * scale;
-
-    // Icon Logic
-    if (abs(offset) < 0.5f) {
-        // Active: "Glow" effect using concentric rects + Inverted Box
-        // Simulate glow with dithering or just multiple lines
-        for(int k=1; k<4; k++) {
-           canvas.drawRoundRect(x - 24 - k, y - 24 - k, 48 + 2*k, 48 + 2*k, 6, 0x4208); // Dark gray glow
+        // Culling: Don't draw items that are off-screen
+        if (y < startY - itemHeight || y > SCREEN_HEIGHT) {
+            continue;
         }
 
-        // Main Box
-        canvas.fillRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_PRIMARY); // White box
-        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_BG); // Black Icon
+        uint16_t textColor = COLOR_PRIMARY;
+        if (i == menuSelection) {
+            // Draw the selected item with a filled background
+            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+            textColor = COLOR_BG;
+        } else {
+            // Draw other items with an outline
+            canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
+        }
 
-        // Label with background for readability
-        canvas.setTextSize(1);
-        int labelW = strlen(items[i]) * 6;
-        int labelX = centerX - labelW/2;
-        int labelY = SCREEN_HEIGHT - 25;
+        // Draw the icon, changing color based on selection
+        canvas.drawBitmap(25, y + (itemHeight / 2) - 12, menuIcons[i], 24, 24, textColor);
 
-        canvas.fillRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_BG);
-        canvas.drawRect(labelX - 4, labelY - 2, labelW + 8, 12, COLOR_PRIMARY);
-        canvas.setTextColor(COLOR_PRIMARY);
-        canvas.setCursor(labelX, labelY);
+        // Draw the text label
+        canvas.setTextSize(2);
+        canvas.setTextColor(textColor);
+        canvas.setCursor(70, y + (itemHeight / 2) - 7);
         canvas.print(items[i]);
-    } else {
-        // Inactive: Just Outline and Dim Icon
-        canvas.drawRoundRect(x - 24, y - 24, 48, 48, 6, COLOR_DIM);
-        canvas.drawBitmap(x - 16, y - 16, menuIcons[i], 32, 32, COLOR_DIM);
     }
-  }
-  
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 // ============ AI MODE SELECTION SCREEN ============
@@ -6205,14 +6177,23 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      menuScrollTarget = (float)menuSelection;
+      int itemHeight = 28;
+      int itemGap = 4;
+      int totalItemHeight = itemHeight + itemGap;
+      int startY = 45;
+      int visibleItems = (SCREEN_HEIGHT - startY) / totalItemHeight;
 
-      // Lerp (Exponential Smoothing) - No bounce, stable
-      // "Tekan sekali langsung geser satu fitur dengan smooth"
-      float smoothSpeed = 15.0f;
+      // Calculate the target scroll position
+      if (menuSelection >= visibleItems) {
+          menuScrollTarget = (menuSelection - visibleItems + 1) * totalItemHeight;
+      } else {
+          menuScrollTarget = 0;
+      }
+
+      // Smooth scrolling interpolation
+      float smoothSpeed = 12.0f;
       float diff = menuScrollTarget - menuScrollCurrent;
-
-      if (abs(diff) < 0.005f) {
+      if (abs(diff) < 0.5f) {
           menuScrollCurrent = menuScrollTarget;
       } else {
           menuScrollCurrent += diff * smoothSpeed * dt;
