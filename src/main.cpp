@@ -804,6 +804,7 @@ bool musicIsPlaying = false;
 unsigned long visualizerMillis = 0;
 unsigned long lastVolumeChangeMillis = 0;
 unsigned long lastTrackCheckMillis = 0;
+bool forceMusicStateUpdate = false;
 
 #define VISUALIZER_BARS 32
 float visualizerHeights[VISUALIZER_BARS];
@@ -6333,9 +6334,13 @@ void loop() {
   // --- Music Player State-Specific Updates ---
   if (currentState == STATE_MUSIC_PLAYER) {
     // Periodically check the hardware for the currently playing track to stay in sync
-    if (currentMillis - lastTrackCheckMillis > 500) { // Check every 500ms
+    if (forceMusicStateUpdate || (currentMillis - lastTrackCheckMillis > 500)) { // Check every 500ms or when forced
+      if (forceMusicStateUpdate) {
+        delay(50); // Give DFPlayer time to process the command
+      }
       lastTrackCheckMillis = currentMillis;
       updateMusicPlayerState();
+      forceMusicStateUpdate = false; // Reset the flag
     }
   }
 
@@ -6400,7 +6405,7 @@ void loop() {
             // SHORT PRESS ACTION: Previous Track
             myDFPlayer.previous();
             musicIsPlaying = true;
-            updateMusicPlayerState(); // Update track number immediately
+            forceMusicStateUpdate = true;
             trackStartTime = millis();
             }
             btnLeftPressTime = 0;
@@ -6433,7 +6438,7 @@ void loop() {
             // SHORT PRESS ACTION: Next Track
             myDFPlayer.next();
             musicIsPlaying = true;
-            updateMusicPlayerState(); // Update track number immediately
+            forceMusicStateUpdate = true;
             trackStartTime = millis();
             }
             btnRightPressTime = 0;
