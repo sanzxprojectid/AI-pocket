@@ -1099,6 +1099,11 @@ void updateMusicPlayerState();
 void drawPomodoroTimer();
 void updatePomodoroLogic();
 
+// Helper function to convert 8-8-8 RGB to 5-6-5 RGB
+uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
   canvas.fillScreen(ST77XX_BLACK);
@@ -1364,34 +1369,46 @@ void drawEnhancedMusicPlayer() {
 
 void drawVerticalVisualizer() {
     int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1;
-    int maxBarHeight = 60; // Max possible height
+    int maxBarHeight = 60;
 
-    // Update target heights with a more "spectrum" like random feel
-    if (millis() - visualizerMillis > 50) { // Update rate
+    if (millis() - visualizerMillis > 40) { // Faster update rate
         visualizerMillis = millis();
-        float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
+        float musicInfluence = musicIsPlaying ? (musicVol / 25.0f) : 0.0f; // Slightly more sensitive
 
-        for (int i = 0; i < VISUALIZER_BARS / 2; i++) {
-            // Generate a new random height
-            float newTarget = random(5, maxBarHeight) * musicInfluence;
+        for (int i = 0; i < VISUALIZER_BARS; i++) {
+            // Create a curve where center bars are higher (like bass frequencies)
+            float spectrumShape = sin((i / (float)VISUALIZER_BARS) * PI); // Sine curve for a natural shape
+            float randomFactor = random(70, 100) / 100.0f; // Add some variation
 
-            // Apply to both sides symmetrically
-            visualizerTargetHeights[VISUALIZER_BARS/2 + i] = newTarget;
-            visualizerTargetHeights[VISUALIZER_BARS/2 - 1 - i] = newTarget;
+            float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence;
+
+            // Set the new target height
+            visualizerTargetHeights[i] = newTarget;
         }
     }
 
-    // Smoothly update and draw the bars
+    // Smoothly update and draw the bars with different attack/decay
     for (int i = 0; i < VISUALIZER_BARS; i++) {
-        // Use lerp for a smoother rise and fall
-        visualizerHeights[i] = custom_lerp(visualizerHeights[i], visualizerTargetHeights[i], 0.3);
+        float current = visualizerHeights[i];
+        float target = visualizerTargetHeights[i];
+        float newHeight;
 
-        if (visualizerHeights[i] > 1) { // Only draw if height is significant
-            int barHeight = (int)visualizerHeights[i];
+        if (target > current) {
+            // Fast attack
+            newHeight = custom_lerp(current, target, 0.7);
+        } else {
+            // Slower decay
+            newHeight = custom_lerp(current, target, 0.15);
+        }
+        visualizerHeights[i] = newHeight;
+
+        if (newHeight > 1) {
+            int barHeight = (int)newHeight;
             int x = i * (barWidth + 1);
-            int y = SCREEN_HEIGHT - barHeight - 20; // Position from bottom
-            // Modern color scheme
-            drawGradientVLine(x, y, barHeight, COLOR_PRIMARY, COLOR_SECONDARY);
+            int y = SCREEN_HEIGHT - barHeight - 20;
+
+            // Use Vaporwave-inspired colors for a more stylish look
+            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PURPLE);
         }
     }
 }
@@ -4472,46 +4489,55 @@ void updateParticles() {
 
 void showMainMenu(int x_offset) {
     canvas.fillScreen(COLOR_BG);
+
+    // Draw and update particles for a dynamic background
+    updateParticles();
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+        canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, COLOR_PANEL);
+    }
+
     drawStatusBar();
 
     // Header
-    canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
-    canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
-    canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
     canvas.setTextColor(COLOR_PRIMARY);
     canvas.setTextSize(2);
-    canvas.setCursor(10, 21);
+    canvas.setCursor(10, 5);
     canvas.print("AI-POCKET S3");
+    canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+
 
     const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
     int numItems = 13;
-    int itemHeight = 28;
-    int itemGap = 4;
-    int startY = 45;
+    int itemHeight = 32;
+    int itemGap = 5;
+    int startY = 35;
 
     for (int i = 0; i < numItems; i++) {
-        // Calculate the item's position based on the current scroll offset
         int y = startY + (i * (itemHeight + itemGap)) - menuScrollCurrent;
 
-        // Culling: Don't draw items that are off-screen
         if (y < startY - itemHeight || y > SCREEN_HEIGHT) {
             continue;
         }
 
         uint16_t textColor = COLOR_PRIMARY;
         if (i == menuSelection) {
-            // Draw the selected item with a filled background
-            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-            textColor = COLOR_BG;
+            // Draw a thicker border and a subtle gradient for the selected item
+            canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+            canvas.drawRoundRect(9, y-1, SCREEN_WIDTH - 18, itemHeight+2, 9, COLOR_PRIMARY);
+            // Gradient fill for selected item
+            for(int j=0; j<itemHeight; j++) {
+                uint8_t ratio = (j * 255) / itemHeight;
+                uint16_t gradColor = color565(30 + ratio/10, 30 + ratio/10, 40 + ratio/8);
+                canvas.drawFastHLine(11, y + j, SCREEN_WIDTH - 22, gradColor);
+            }
         } else {
-            // Draw other items with an outline
+            // Dimmed, transparent panel for other items
+            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PANEL);
             canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
         }
 
-        // Draw the icon, changing color based on selection
         canvas.drawBitmap(25, y + (itemHeight / 2) - 12, menuIcons[i], 24, 24, textColor);
 
-        // Draw the text label
         canvas.setTextSize(2);
         canvas.setTextColor(textColor);
         canvas.setCursor(70, y + (itemHeight / 2) - 7);
