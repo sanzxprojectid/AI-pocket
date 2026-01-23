@@ -1362,30 +1362,45 @@ void drawEnhancedMusicPlayer() {
 
 
 void drawVerticalVisualizer() {
-    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1; // Add a small gap
-    int maxBarHeight = 60;
+    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1;
+    int maxBarHeight = 60; // Max possible height
+    int centerBarHeight = 45; // Base height when music is playing
 
-    if (millis() - visualizerMillis > 60) { // Update rate
+    // Update target heights based on a symmetrical sine wave pattern
+    if (millis() - visualizerMillis > 30) { // Faster update rate for smoother animation
         visualizerMillis = millis();
-        for (int i = 0; i < VISUALIZER_BARS; i++) {
-            float newTarget = random(0, maxBarHeight);
-            if(i > 0) newTarget = (newTarget + visualizerTargetHeights[i-1]) * 0.5f;
-            visualizerTargetHeights[i] = newTarget * (musicVol / 30.0f);
+        float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
+
+        for (int i = 0; i < VISUALIZER_BARS / 2; i++) {
+            // Create a sine wave that flows from the center outwards
+            float sineValue = sin(i * 0.5f - (millis() / 200.0f)); // Flowing effect
+            float normalizedHeight = (sineValue + 1.0f) / 2.0f; // Normalize to 0-1
+
+            float targetHeight = 5 + (centerBarHeight * normalizedHeight * musicInfluence);
+            targetHeight = constrain(targetHeight, 0, maxBarHeight);
+
+            // Apply to both sides symmetrically
+            visualizerTargetHeights[VISUALIZER_BARS/2 + i] = targetHeight;
+            visualizerTargetHeights[VISUALIZER_BARS/2 - 1 - i] = targetHeight;
         }
     }
 
+    // Smoothly update and draw the bars
     for (int i = 0; i < VISUALIZER_BARS; i++) {
+        // Use lerp for a smoother rise
         if (visualizerHeights[i] < visualizerTargetHeights[i]) {
-            visualizerHeights[i] = visualizerTargetHeights[i];
+            visualizerHeights[i] = custom_lerp(visualizerHeights[i], visualizerTargetHeights[i], 0.4);
         } else {
-            visualizerHeights[i] = max(0.0f, visualizerHeights[i] - 2.0f); // Fall speed
+            // Slower fall speed
+            visualizerHeights[i] = max(0.0f, visualizerHeights[i] - 1.5f);
         }
 
-        if (visualizerHeights[i] > 0) {
+        if (visualizerHeights[i] > 1) { // Only draw if height is significant
             int barHeight = (int)visualizerHeights[i];
             int x = i * (barWidth + 1);
             int y = SCREEN_HEIGHT - barHeight - 20; // Position from bottom
-            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_PINK, COLOR_VAPOR_PURPLE);
+            // New color scheme
+            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
         }
     }
 }
