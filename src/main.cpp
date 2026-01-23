@@ -2596,8 +2596,14 @@ void updatePlatformerLogic() {
         float p_prev_bottom = p_bottom - jumperPlayer.vy;
         float plat_y = jumperPlatforms[i].y;
 
-        if ((jumperPlayer.x > jumperPlatforms[i].x - 10 && jumperPlayer.x < jumperPlatforms[i].x + jumperPlatforms[i].width) && // Horizontal check
-            (p_bottom > plat_y && p_prev_bottom < plat_y + 5) ) { // Vertical check
+        // Perbaikan Deteksi Tumbukan: Gunakan deteksi Bounding Box yang tepat
+        float player_left = jumperPlayer.x - 7; // Lebar sprite pemain adalah 14px
+        float player_right = jumperPlayer.x + 7;
+        float platform_left = jumperPlatforms[i].x;
+        float platform_right = jumperPlatforms[i].x + jumperPlatforms[i].width;
+
+        if ((player_right > platform_left && player_left < platform_right) && // Pengecekan horizontal
+            (p_bottom > plat_y && p_prev_bottom < plat_y + 5) ) { // Pengecekan vertikal
 
           jumperPlayer.y = plat_y - 10;
           jumperPlayer.vy = JUMPER_LIFT;
