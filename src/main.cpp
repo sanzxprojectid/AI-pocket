@@ -1375,32 +1375,41 @@ void drawEnhancedMusicPlayer() {
 
 
 void drawVerticalVisualizer() {
-    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS);
-    int maxBarHeight = 120; // Taller for more impact
+    int barWidth = SCREEN_WIDTH / VISUALIZER_BARS;
+    int maxBarHeight = 130; // Increased max height for more dynamism
 
-    if (millis() - visualizerMillis > 30) { // Slightly faster update rate for smoothness
+    if (millis() - visualizerMillis > 20) { // Increased update rate for smoother animation
         visualizerMillis = millis();
         float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
 
+        // Sine wave modulation for a more organic feel
+        float timeWave = sin(millis() / 500.0f) * 0.1f + 0.9f;
+
         for (int i = 0; i < VISUALIZER_BARS; i++) {
-            float spectrumShape = 1.0 - abs( (i - (VISUALIZER_BARS / 2.0f)) / (VISUALIZER_BARS / 2.0f) ); // Triangle shape
-            spectrumShape = pow(spectrumShape, 2.5); // Curve it for better aesthetics
-            float randomFactor = random(85, 100) / 100.0f;
-            float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence;
+            // Smoother, curved shape for the spectrum
+            float spectrumShape = sin((float)i / VISUALIZER_BARS * PI);
+            spectrumShape = pow(spectrumShape, 2.0);
+
+            float randomFactor = random(90, 100) / 100.0f;
+            float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence * timeWave;
+
+            // Ensure a minimum height for active bars to avoid complete disappearance
+            if (newTarget > 1) newTarget = max(5.0f, newTarget);
+
             visualizerTargetHeights[i] = newTarget;
         }
     }
 
-    // Smoothly update and draw the bars
+    // Smoothly update and draw the bars with refined physics
     for (int i = 0; i < VISUALIZER_BARS; i++) {
         float current = visualizerHeights[i];
         float target = visualizerTargetHeights[i];
         float newHeight;
 
         if (target > current) {
-            newHeight = custom_lerp(current, target, 0.6); // Slower attack
+            newHeight = custom_lerp(current, target, 0.85); // Faster, more responsive attack
         } else {
-            newHeight = custom_lerp(current, target, 0.2); // Faster decay
+            newHeight = custom_lerp(current, target, 0.45); // Quicker decay for a snappier look
         }
         visualizerHeights[i] = newHeight;
 
@@ -1408,8 +1417,11 @@ void drawVerticalVisualizer() {
             int barHeight = (int)newHeight;
             int x = i * barWidth;
             int y = SCREEN_HEIGHT - barHeight;
-            // Simple white bars for a modern look
-            canvas.fillRect(x, y, barWidth - 1, barHeight, COLOR_PANEL);
+
+            // Draw gradient bars for a more polished look
+            for (int w = 0; w < barWidth -1; w++) {
+                drawGradientVLine(x + w, y, barHeight, COLOR_PRIMARY, COLOR_SECONDARY);
+            }
         }
     }
 }
