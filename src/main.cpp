@@ -217,6 +217,15 @@ struct Particle {
 Particle particles[NUM_PARTICLES];
 bool particlesInit = false;
 
+// Pulse String Visualizer Particles
+struct PulseParticle {
+  float x, y, vx, vy;
+  int life;
+};
+#define NUM_PULSE_PARTICLES 40
+PulseParticle pulseParticles[NUM_PULSE_PARTICLES];
+
+
 // ============ VISUALS GLOBALS ============
 // Starfield
 #define NUM_STARS 100
@@ -806,10 +815,6 @@ unsigned long lastVolumeChangeMillis = 0;
 unsigned long lastTrackCheckMillis = 0;
 bool forceMusicStateUpdate = false;
 
-#define VISUALIZER_BARS 32
-float visualizerHeights[VISUALIZER_BARS];
-float visualizerTargetHeights[VISUALIZER_BARS];
-
 // Time and session tracking
 uint16_t musicCurrentTime = 0;
 uint16_t musicTotalTime = 0;
@@ -1089,7 +1094,9 @@ void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
 void drawEQIcon(int x, int y, uint8_t eqMode);
+void drawPulseStringVisualizer();
 void drawVerticalVisualizer();
+void updatePulseParticles();
 String formatTime(int seconds);
 void updateBatteryLevel();
 void drawBatteryIcon();
@@ -1272,11 +1279,68 @@ float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
+void drawPulseStringVisualizer() {
+    int centerX = SCREEN_WIDTH / 2;
+    int lineLength = 100; // The vertical length of the line
+    int baseY = (SCREEN_HEIGHT - lineLength) / 2;
+
+    // Simulate bass vibration based on volume and a sine wave for smooth oscillation
+    float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
+    float vibration = sin(millis() / 50.0f) * 15.0f * musicInfluence; // Vibrate up to 15px left/right
+
+    // Draw the pulsating vertical line
+    drawGradientVLine(centerX + vibration, baseY, lineLength, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
+}
+
+void updatePulseParticles() {
+    int centerX = SCREEN_WIDTH / 2;
+
+    // Trigger new particles on a simulated "beat"
+    if (musicIsPlaying && random(0, 15) == 0) {
+        int particlesToSpawn = 2;
+        for (int i = 0; i < NUM_PULSE_PARTICLES && particlesToSpawn > 0; i++) {
+            if (pulseParticles[i].life <= 0) {
+                pulseParticles[i].x = centerX;
+                pulseParticles[i].y = random(SCREEN_HEIGHT / 2 - 50, SCREEN_HEIGHT / 2 + 50);
+                pulseParticles[i].vx = random(-30, 30) / 10.0f; // Horizontal velocity
+                pulseParticles[i].vy = random(-10, 10) / 10.0f; // Slight vertical velocity
+                pulseParticles[i].life = 60; // Lifetime in frames
+                particlesToSpawn--;
+            }
+        }
+    }
+
+    // Update and draw existing particles
+    for (int i = 0; i < NUM_PULSE_PARTICLES; i++) {
+        if (pulseParticles[i].life > 0) {
+            pulseParticles[i].x += pulseParticles[i].vx;
+            pulseParticles[i].y += pulseParticles[i].vy;
+
+            // Apply "drag" to slow them down
+            pulseParticles[i].vx *= 0.95f;
+            pulseParticles[i].vy *= 0.95f;
+
+            pulseParticles[i].life--;
+
+            // Fade out effect
+            if (pulseParticles[i].life < 40) {
+                uint8_t alpha = map(pulseParticles[i].life, 0, 40, 0, 255);
+                // Simple fade by reducing brightness - pick a gray color
+                uint16_t color = color565(alpha/2, alpha/2, alpha/2);
+                 canvas.drawPixel(pulseParticles[i].x, pulseParticles[i].y, color);
+            } else {
+                 canvas.drawPixel(pulseParticles[i].x, pulseParticles[i].y, COLOR_PRIMARY);
+            }
+        }
+    }
+}
+
 void drawEnhancedMusicPlayer() {
     canvas.fillScreen(COLOR_BG);
 
     // --- Visualizer as background ---
-    drawVerticalVisualizer();
+    drawPulseStringVisualizer();
+    updatePulseParticles();
 
     // --- Status Bar ---
     drawStatusBar();
@@ -1371,60 +1435,6 @@ void drawEnhancedMusicPlayer() {
 
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-}
-
-
-void drawVerticalVisualizer() {
-    int barWidth = SCREEN_WIDTH / VISUALIZER_BARS;
-    int maxBarHeight = 100; // Max height from the bottom
-    int baseY = SCREEN_HEIGHT; // Start drawing from the bottom
-
-    if (millis() - visualizerMillis > 20) {
-        visualizerMillis = millis();
-        float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
-        float timeWave = sin(millis() / 300.0f) * 0.2f + 0.8f; // Faster, more subtle pulse
-
-        for (int i = 0; i < VISUALIZER_BARS; i++) {
-            // A shape that's higher in the middle and lower on the sides
-            float spectrumShape = sin((float)i / VISUALIZER_BARS * PI); // Simple sine curve for a base
-            spectrumShape = pow(spectrumShape, 0.6); // Flatten the curve a bit
-
-            float randomFactor = random(80, 100) / 100.0f;
-            float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence * timeWave;
-
-            // Ensure a minimum height for a "breathing" effect even with no music
-            if (newTarget < 3) {
-              newTarget = 3 * spectrumShape * (0.5f + 0.5f * sin(millis()/400.0f + i/5.0f));
-            }
-
-            visualizerTargetHeights[i] = newTarget;
-        }
-    }
-
-    for (int i = 0; i < VISUALIZER_BARS; i++) {
-        float current = visualizerHeights[i];
-        float target = visualizerTargetHeights[i];
-        float newHeight;
-
-        // Faster attack, slower decay for a more punchy feel
-        if (target > current) {
-            newHeight = custom_lerp(current, target, 0.85); // Faster attack
-        } else {
-            newHeight = custom_lerp(current, target, 0.35); // Slower decay
-        }
-        visualizerHeights[i] = newHeight;
-
-        if (newHeight > 1) {
-            int barHeight = (int)newHeight;
-            int x = i * barWidth;
-
-            // Draw bar extending upwards from the bottom
-            for (int w = 0; w < barWidth - 1; w++) {
-                // Gradient from White/Gray at the tip to Black at the bottom
-                drawGradientVLine(x + w, baseY - barHeight, barHeight, COLOR_PRIMARY, COLOR_BG);
-            }
-        }
-    }
 }
 
 void drawEQIcon(int x, int y, uint8_t eqMode) {
