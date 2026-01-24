@@ -1376,22 +1376,27 @@ void drawEnhancedMusicPlayer() {
 
 void drawVerticalVisualizer() {
     int barWidth = SCREEN_WIDTH / VISUALIZER_BARS;
-    int maxBarHeight = 80; // Total height, will be halved for up/down
-    int centerY = SCREEN_HEIGHT / 2 + 10; // Center the visualizer vertically
+    int maxBarHeight = 100; // Max height from the bottom
+    int baseY = SCREEN_HEIGHT; // Start drawing from the bottom
 
     if (millis() - visualizerMillis > 20) {
         visualizerMillis = millis();
         float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
-        float timeWave = sin(millis() / 500.0f) * 0.1f + 0.9f;
+        float timeWave = sin(millis() / 300.0f) * 0.2f + 0.8f; // Faster, more subtle pulse
 
         for (int i = 0; i < VISUALIZER_BARS; i++) {
-            // Create a more dynamic, less predictable shape
-            float spectrumShape = 0.5f + 0.5f * sin((float)i / (VISUALIZER_BARS / 2.0f) * PI);
-            spectrumShape *= pow(sin((float)i / VISUALIZER_BARS * PI), 0.5); // Curve the ends down
+            // A shape that's higher in the middle and lower on the sides
+            float spectrumShape = sin((float)i / VISUALIZER_BARS * PI); // Simple sine curve for a base
+            spectrumShape = pow(spectrumShape, 0.6); // Flatten the curve a bit
 
-            float randomFactor = random(85, 100) / 100.0f;
+            float randomFactor = random(80, 100) / 100.0f;
             float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence * timeWave;
-            if (newTarget > 1) newTarget = max(5.0f, newTarget);
+
+            // Ensure a minimum height for a "breathing" effect even with no music
+            if (newTarget < 3) {
+              newTarget = 3 * spectrumShape * (0.5f + 0.5f * sin(millis()/400.0f + i/5.0f));
+            }
+
             visualizerTargetHeights[i] = newTarget;
         }
     }
@@ -1401,26 +1406,22 @@ void drawVerticalVisualizer() {
         float target = visualizerTargetHeights[i];
         float newHeight;
 
-        // Smoother attack, slightly faster decay
+        // Faster attack, slower decay for a more punchy feel
         if (target > current) {
-            newHeight = custom_lerp(current, target, 0.75);
+            newHeight = custom_lerp(current, target, 0.85); // Faster attack
         } else {
-            newHeight = custom_lerp(current, target, 0.5);
+            newHeight = custom_lerp(current, target, 0.35); // Slower decay
         }
         visualizerHeights[i] = newHeight;
 
         if (newHeight > 1) {
-            int barHeight = (int)newHeight / 2; // Half height for each direction
+            int barHeight = (int)newHeight;
             int x = i * barWidth;
 
-            // Draw bar extending upwards from center
+            // Draw bar extending upwards from the bottom
             for (int w = 0; w < barWidth - 1; w++) {
-                // Gradient from White/Gray at the tip to Black at the center
-                drawGradientVLine(x + w, centerY - barHeight, barHeight, COLOR_SECONDARY, COLOR_BG);
-            }
-            // Draw bar extending downwards from center
-            for (int w = 0; w < barWidth - 1; w++) {
-                drawGradientVLine(x + w, centerY, barHeight, COLOR_BG, COLOR_SECONDARY);
+                // Gradient from White/Gray at the tip to Black at the bottom
+                drawGradientVLine(x + w, baseY - barHeight, barHeight, COLOR_PRIMARY, COLOR_BG);
             }
         }
     }
