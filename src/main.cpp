@@ -1273,6 +1273,10 @@ float custom_lerp(float a, float b, float f) {
 void drawEnhancedMusicPlayer() {
     canvas.fillScreen(COLOR_BG);
 
+    // --- Visualizer as background ---
+    drawVerticalVisualizer();
+
+    // --- Status Bar ---
     drawStatusBar();
 
     // --- Track Info ---
@@ -1289,27 +1293,16 @@ void drawEnhancedMusicPlayer() {
     int16_t x1, y1;
     uint16_t w, h;
     canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 40);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 35);
     canvas.print(title);
 
     // Artist
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_SECONDARY);
     canvas.getTextBounds(artist, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 60);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 55);
     canvas.print(artist);
 
-    // --- Play/Pause Indicator ---
-    int iconX = 20;
-    int iconY = 45;
-    if (musicIsPlaying) {
-        // Pause Icon
-        canvas.fillRect(iconX, iconY, 5, 15, COLOR_PRIMARY);
-        canvas.fillRect(iconX + 8, iconY, 5, 15, COLOR_PRIMARY);
-    } else {
-        // Play Icon
-        canvas.fillTriangle(iconX, iconY, iconX, iconY + 15, iconX + 12, iconY + 7, COLOR_PRIMARY);
-    }
 
     // --- Progress Bar ---
     int progress = 0;
@@ -1319,96 +1312,102 @@ void drawEnhancedMusicPlayer() {
     }
     progress = constrain(progress, 0, 100);
 
-    int progBarY = 90;
+    int progBarY = SCREEN_HEIGHT - 60;
     canvas.drawRect(20, progBarY, SCREEN_WIDTH - 40, 6, COLOR_BORDER);
     canvas.fillRect(20, progBarY, (SCREEN_WIDTH - 40) * progress / 100, 6, COLOR_PRIMARY);
+
 
     // --- Track Counter ---
     String trackCountStr = String(currentTrackIdx) + " / " + String(totalTracks);
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_DIM);
     canvas.getTextBounds(trackCountStr, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(SCREEN_WIDTH - 20 - w, progBarY + 10);
+    canvas.setCursor(SCREEN_WIDTH - 20 - w, progBarY + 12);
     canvas.print(trackCountStr);
-
-    // --- Vertical Visualizer ---
-    drawVerticalVisualizer();
-
-    // --- Status Icons (Bottom) ---
-    int statusY = SCREEN_HEIGHT - 20;
 
     // Volume
     String volText = "VOL: " + String(map(musicVol, 0, 30, 0, 100)) + "%";
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.setCursor(20, statusY);
+    canvas.setCursor(20, progBarY + 12);
     canvas.print(volText);
 
-    // EQ Icon
-    drawEQIcon(SCREEN_WIDTH / 2 - 10, statusY + 5, musicEQMode);
+    // --- Play/Pause & Status Icons (Centered) ---
+    int statusY = SCREEN_HEIGHT - 35;
+    int iconCenterX = SCREEN_WIDTH / 2;
 
-    // Loop/Shuffle
-    iconX = SCREEN_WIDTH - 45;
+    // Play/Pause button background
+    canvas.fillCircle(iconCenterX, statusY, 15, COLOR_PRIMARY);
+    // Play/Pause icon
+    if (musicIsPlaying) {
+        // Pause Icon
+        canvas.fillRect(iconCenterX - 5, statusY - 7, 4, 14, COLOR_BG);
+        canvas.fillRect(iconCenterX + 1, statusY - 7, 4, 14, COLOR_BG);
+    } else {
+        // Play Icon
+        canvas.fillTriangle(iconCenterX - 4, statusY - 7, iconCenterX - 4, statusY + 7, iconCenterX + 5, statusY, COLOR_BG);
+    }
+
+    // EQ Icon to the left
+    drawEQIcon(iconCenterX - 60, statusY + 5, musicEQMode);
+
+    // Loop/Shuffle Icon to the right
+    int iconX = iconCenterX + 50;
     if(musicIsShuffled) {
-        canvas.drawLine(iconX, statusY - 2, iconX + 10, statusY + 8, COLOR_PRIMARY);
-        canvas.drawLine(iconX, statusY + 8, iconX + 10, statusY - 2, COLOR_PRIMARY);
-        canvas.drawPixel(iconX+11, statusY+8, COLOR_PRIMARY);
-        canvas.drawPixel(iconX+11, statusY-2, COLOR_PRIMARY);
+        canvas.drawLine(iconX, statusY - 5, iconX + 10, statusY + 5, COLOR_PRIMARY);
+        canvas.drawLine(iconX, statusY + 5, iconX + 10, statusY - 5, COLOR_PRIMARY);
+        canvas.drawPixel(iconX+11, statusY+5, COLOR_PRIMARY);
+        canvas.drawPixel(iconX+11, statusY-5, COLOR_PRIMARY);
     } else if(musicLoopMode == LOOP_ALL) {
-        canvas.drawCircle(iconX + 5, statusY + 3, 5, COLOR_PRIMARY);
-        canvas.fillTriangle(iconX + 8, statusY - 2, iconX + 11, statusY, iconX + 8, statusY + 2, COLOR_PRIMARY);
+        canvas.drawCircle(iconX + 5, statusY, 6, COLOR_PRIMARY);
+        canvas.fillTriangle(iconX + 9, statusY - 5, iconX + 12, statusY - 3, iconX + 9, statusY - 1, COLOR_PRIMARY);
     } else if(musicLoopMode == LOOP_ONE) {
-        canvas.drawCircle(iconX + 5, statusY + 3, 5, COLOR_PRIMARY);
+        canvas.drawCircle(iconX + 5, statusY, 6, COLOR_PRIMARY);
         canvas.setTextColor(COLOR_PRIMARY);
-        canvas.setCursor(iconX + 3, statusY);
+        canvas.setTextSize(1);
+        canvas.setCursor(iconX + 3, statusY-3);
         canvas.print("1");
     }
+
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 
 void drawVerticalVisualizer() {
-    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS) - 1;
-    int maxBarHeight = 60;
+    int barWidth = (SCREEN_WIDTH / VISUALIZER_BARS);
+    int maxBarHeight = 120; // Taller for more impact
 
-    if (millis() - visualizerMillis > 40) { // Faster update rate
+    if (millis() - visualizerMillis > 30) { // Slightly faster update rate for smoothness
         visualizerMillis = millis();
-        float musicInfluence = musicIsPlaying ? (musicVol / 25.0f) : 0.0f; // Slightly more sensitive
+        float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
 
         for (int i = 0; i < VISUALIZER_BARS; i++) {
-            // Create a curve where center bars are higher (like bass frequencies)
-            float spectrumShape = sin((i / (float)VISUALIZER_BARS) * PI); // Sine curve for a natural shape
-            float randomFactor = random(70, 100) / 100.0f; // Add some variation
-
+            float spectrumShape = 1.0 - abs( (i - (VISUALIZER_BARS / 2.0f)) / (VISUALIZER_BARS / 2.0f) ); // Triangle shape
+            spectrumShape = pow(spectrumShape, 2.5); // Curve it for better aesthetics
+            float randomFactor = random(85, 100) / 100.0f;
             float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence;
-
-            // Set the new target height
             visualizerTargetHeights[i] = newTarget;
         }
     }
 
-    // Smoothly update and draw the bars with different attack/decay
+    // Smoothly update and draw the bars
     for (int i = 0; i < VISUALIZER_BARS; i++) {
         float current = visualizerHeights[i];
         float target = visualizerTargetHeights[i];
         float newHeight;
 
         if (target > current) {
-            // Fast attack
-            newHeight = custom_lerp(current, target, 0.7);
+            newHeight = custom_lerp(current, target, 0.6); // Slower attack
         } else {
-            // Slower decay
-            newHeight = custom_lerp(current, target, 0.15);
+            newHeight = custom_lerp(current, target, 0.2); // Faster decay
         }
         visualizerHeights[i] = newHeight;
 
         if (newHeight > 1) {
             int barHeight = (int)newHeight;
-            int x = i * (barWidth + 1);
-            int y = SCREEN_HEIGHT - barHeight - 20;
-
-            // Use Vaporwave-inspired colors for a more stylish look
-            drawGradientVLine(x, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PURPLE);
+            int x = i * barWidth;
+            int y = SCREEN_HEIGHT - barHeight;
+            // Simple white bars for a modern look
+            canvas.fillRect(x, y, barWidth - 1, barHeight, COLOR_PANEL);
         }
     }
 }
@@ -1425,7 +1424,7 @@ void drawEQIcon(int x, int y, uint8_t eqMode) {
     }
 
     for (int i = 0; i < 5; i++) {
-        int barHeight = bars[i] + 2; // Make them slightly taller
+        int barHeight = bars[i] + 2;
         canvas.fillRect(x + i * 4, y - barHeight, 3, barHeight, COLOR_SECONDARY);
     }
 }
@@ -4521,21 +4520,15 @@ void showMainMenu(int x_offset) {
 
         uint16_t textColor = COLOR_PRIMARY;
         if (i == menuSelection) {
-            // Draw a thicker border and a subtle gradient for the selected item
-            canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-            canvas.drawRoundRect(9, y-1, SCREEN_WIDTH - 18, itemHeight+2, 9, COLOR_PRIMARY);
-            // Gradient fill for selected item
-            for(int j=0; j<itemHeight; j++) {
-                uint8_t ratio = (j * 255) / itemHeight;
-                uint16_t gradColor = color565(30 + ratio/10, 30 + ratio/10, 40 + ratio/8);
-                canvas.drawFastHLine(11, y + j, SCREEN_WIDTH - 22, gradColor);
-            }
+            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
+            textColor = COLOR_BG;
         } else {
             // Dimmed, transparent panel for other items
             canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PANEL);
             canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
         }
 
+        // Use textColor for the icon to make it invert on selection too
         canvas.drawBitmap(25, y + (itemHeight / 2) - 12, menuIcons[i], 24, 24, textColor);
 
         canvas.setTextSize(2);
@@ -6203,10 +6196,10 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      int itemHeight = 28;
-      int itemGap = 4;
+      int itemHeight = 32;
+      int itemGap = 5;
       int totalItemHeight = itemHeight + itemGap;
-      int startY = 45;
+      int startY = 35;
       int visibleItems = (SCREEN_HEIGHT - startY) / totalItemHeight;
 
       // Calculate the target scroll position
