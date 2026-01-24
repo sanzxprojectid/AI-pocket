@@ -1295,14 +1295,14 @@ void drawEnhancedMusicPlayer() {
     int16_t x1, y1;
     uint16_t w, h;
     canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 35);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 25); // Moved up
     canvas.print(title);
 
     // Artist
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_SECONDARY);
     canvas.getTextBounds(artist, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 55);
+    canvas.setCursor(max(10, (SCREEN_WIDTH - w) / 2), 45); // Moved up
     canvas.print(artist);
 
 
@@ -1376,7 +1376,8 @@ void drawEnhancedMusicPlayer() {
 
 void drawVerticalVisualizer() {
     int barWidth = SCREEN_WIDTH / VISUALIZER_BARS;
-    int maxBarHeight = 130;
+    int maxBarHeight = 80; // Total height, will be halved for up/down
+    int centerY = SCREEN_HEIGHT / 2 + 10; // Center the visualizer vertically
 
     if (millis() - visualizerMillis > 20) {
         visualizerMillis = millis();
@@ -1384,9 +1385,11 @@ void drawVerticalVisualizer() {
         float timeWave = sin(millis() / 500.0f) * 0.1f + 0.9f;
 
         for (int i = 0; i < VISUALIZER_BARS; i++) {
-            float spectrumShape = sin((float)i / VISUALIZER_BARS * PI);
-            spectrumShape = pow(spectrumShape, 2.0);
-            float randomFactor = random(90, 100) / 100.0f;
+            // Create a more dynamic, less predictable shape
+            float spectrumShape = 0.5f + 0.5f * sin((float)i / (VISUALIZER_BARS / 2.0f) * PI);
+            spectrumShape *= pow(sin((float)i / VISUALIZER_BARS * PI), 0.5); // Curve the ends down
+
+            float randomFactor = random(85, 100) / 100.0f;
             float newTarget = maxBarHeight * spectrumShape * randomFactor * musicInfluence * timeWave;
             if (newTarget > 1) newTarget = max(5.0f, newTarget);
             visualizerTargetHeights[i] = newTarget;
@@ -1398,19 +1401,26 @@ void drawVerticalVisualizer() {
         float target = visualizerTargetHeights[i];
         float newHeight;
 
+        // Smoother attack, slightly faster decay
         if (target > current) {
-            newHeight = custom_lerp(current, target, 0.85);
+            newHeight = custom_lerp(current, target, 0.75);
         } else {
-            newHeight = custom_lerp(current, target, 0.45);
+            newHeight = custom_lerp(current, target, 0.5);
         }
         visualizerHeights[i] = newHeight;
 
         if (newHeight > 1) {
-            int barHeight = (int)newHeight;
+            int barHeight = (int)newHeight / 2; // Half height for each direction
             int x = i * barWidth;
-            int y = SCREEN_HEIGHT - barHeight;
+
+            // Draw bar extending upwards from center
             for (int w = 0; w < barWidth - 1; w++) {
-                drawGradientVLine(x + w, y, barHeight, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
+                // Gradient from White/Gray at the tip to Black at the center
+                drawGradientVLine(x + w, centerY - barHeight, barHeight, COLOR_SECONDARY, COLOR_BG);
+            }
+            // Draw bar extending downwards from center
+            for (int w = 0; w < barWidth - 1; w++) {
+                drawGradientVLine(x + w, centerY, barHeight, COLOR_BG, COLOR_SECONDARY);
             }
         }
     }
