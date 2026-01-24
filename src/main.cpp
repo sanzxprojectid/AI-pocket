@@ -1308,25 +1308,28 @@ float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
-
 void drawBarSpectrumVisualizer() {
-    int numBars = 32;
-    int barWidth = SCREEN_WIDTH / numBars;
-    int maxBarHeight = 70;
-    int centerY = 95;
+    int numPoints = 32; // Fewer points for a more spaced-out look
+    int maxAmplitude = 50;
+    int centerX = SCREEN_WIDTH / 2;
 
-    for (int i = 0; i < numBars; i++) {
-        // Simulate spectrum data
-        float sineFactor = (sin(i * 0.4f + millis() * 0.01f) + 1.0f) / 2.0f;
-        int barHeight = map(musicVol, 0, 30, 2, maxBarHeight) * sineFactor;
-        barHeight += random(-5, 5);
-        barHeight = constrain(barHeight, 2, maxBarHeight);
+    for (int i = 0; i < numPoints; i++) {
+        float t = millis() * 0.002f;
+        float wave1 = sin(i * 0.4f + t);
+        float wave2 = cos(i * 0.6f + t * 0.7f);
 
-        int x = i * barWidth;
-        int y = centerY - barHeight / 2;
+        int amplitude = map(musicVol, 0, 30, 5, maxAmplitude);
+        int x_offset = (wave1 + wave2) * amplitude / 2;
 
-        // Draw the bar
-        canvas.fillRect(x, y, barWidth - 2, barHeight, COLOR_PRIMARY);
+        int y = map(i, 0, numPoints - 1, 60, SCREEN_HEIGHT - 60);
+        int x = centerX + x_offset;
+
+        // Draw small circles or pixels for a more granular effect
+        canvas.fillCircle(x, y, 2, COLOR_PRIMARY);
+
+        // Add a secondary, dimmer wave for more visual interest
+        int x2 = centerX - x_offset;
+        canvas.fillCircle(x2, y, 1, COLOR_SECONDARY);
     }
 }
 
