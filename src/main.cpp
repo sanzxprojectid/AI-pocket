@@ -6755,9 +6755,6 @@ void loop() {
         case STATE_CHANGE_PIN:
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
           break;
-        case STATE_MAIN_MENU:
-          if (menuSelection > 0) menuSelection--;
-          break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
           cursorX--;
@@ -6794,9 +6791,6 @@ void loop() {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
-          break;
-        case STATE_MAIN_MENU:
-          if (menuSelection < 12) menuSelection++;
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
