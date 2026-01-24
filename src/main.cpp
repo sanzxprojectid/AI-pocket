@@ -207,7 +207,7 @@ const unsigned long debounceDelay = 150;
 bool screenIsDirty = true; // Flag to request a screen redraw
 float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
-// float menuVelocity = 0.0f; // Not used in Lerp
+float menuVelocity = 0.0f;
 
 struct Particle {
   float x, y, speed;
@@ -6204,13 +6204,20 @@ void loop() {
       int itemGap = 45; // Sesuaikan dengan celah menu baru
       menuScrollTarget = menuSelection * itemGap;
 
-      // Interpolasi scrolling yang mulus
-      float smoothSpeed = 12.0f;
+      // Fisika pegas untuk scrolling yang lebih alami
+      float spring = 0.4f; // Kekakuan pegas
+      float damp = 0.6f;  // Redaman
+
       float diff = menuScrollTarget - menuScrollCurrent;
-      if (abs(diff) < 0.5f) {
+      float force = diff * spring;
+      menuVelocity += force;
+      menuVelocity *= damp;
+
+      if (abs(diff) < 0.5f && abs(menuVelocity) < 0.5f) {
           menuScrollCurrent = menuScrollTarget;
+          menuVelocity = 0.0f;
       } else {
-          menuScrollCurrent += diff * smoothSpeed * dt;
+          menuScrollCurrent += menuVelocity * dt * 50.0f; // Kalikan dengan dt dan skalar
       }
   }
 
