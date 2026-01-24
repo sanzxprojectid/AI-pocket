@@ -1029,6 +1029,7 @@ void scanWiFiNetworks(bool switchToScanState = true);
 void sendToGemini();
 void triggerNeoPixelEffect(uint32_t color, int duration);
 void updateNeoPixel();
+void updateParticles();
 void ledQuickFlash();
 void ledSuccess();
 void ledError();
@@ -1061,6 +1062,7 @@ void drawNetScan();
 void drawFileManager();
 void drawFileViewer();
 void drawGameHubMenu();
+void drawMainMenuCool();
 void drawStarfield();
 void drawGameOfLife();
 void drawFireEffect();
@@ -4465,6 +4467,63 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+// ============ MAIN MENU (COOL VERTICAL) ============
+void drawMainMenuCool() {
+    canvas.fillScreen(COLOR_BG);
+
+    // Latar belakang partikel dinamis
+    updateParticles();
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+        canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, COLOR_PANEL);
+    }
+
+    drawStatusBar();
+
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
+    int numItems = 13;
+    int centerY = SCREEN_HEIGHT / 2 + 5;
+    int itemGap = 45; // Jarak antar item
+
+    // Gambar setiap item menu
+    for (int i = 0; i < numItems; i++) {
+        float distance = i - (menuScrollCurrent / (float)itemGap);
+        float scale = 1.0f - (abs(distance) * 0.25f);
+        scale = max(0.0f, scale);
+
+        int y = centerY + (distance * itemGap) - (32 / 2);
+
+        if (y < -40 || y > SCREEN_HEIGHT + 40) {
+            continue; // Lewati item di luar layar
+        }
+
+        uint16_t color = COLOR_PRIMARY;
+        if (abs(distance) > 0.5) {
+            color = COLOR_DIM; // Item yang lebih jauh lebih redup
+        }
+
+        // Gambar ikon dengan skala
+        int iconSize = 32 * scale;
+        int iconX = 40 - (iconSize / 2);
+        drawScaledBitmap(iconX, y, menuIcons[i], 32, 32, scale, color);
+
+        // Gambar teks dengan skala
+        canvas.setTextSize(2 * scale);
+        canvas.setTextColor(color);
+        canvas.setCursor(80, y + ( (itemGap - (16*scale)) / 2) );
+        canvas.print(items[i]);
+    }
+
+    // Indikator Pilihan
+    canvas.drawTriangle(
+        10, centerY - 8,
+        10, centerY + 8,
+        20, centerY,
+        COLOR_PRIMARY
+    );
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 // ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
 void updateParticles() {
   if (!particlesInit) {
@@ -4484,60 +4543,6 @@ void updateParticles() {
       particles[i].y = random(0, SCREEN_HEIGHT);
     }
   }
-}
-
-void showMainMenu(int x_offset) {
-    canvas.fillScreen(COLOR_BG);
-
-    // Draw and update particles for a dynamic background
-    updateParticles();
-    for (int i = 0; i < NUM_PARTICLES; i++) {
-        canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, COLOR_PANEL);
-    }
-
-    drawStatusBar();
-
-    // Header
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setTextSize(2);
-    canvas.setCursor(10, 5);
-    canvas.print("AI-POCKET S3");
-    canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
-
-
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
-    int numItems = 13;
-    int itemHeight = 32;
-    int itemGap = 5;
-    int startY = 35;
-
-    for (int i = 0; i < numItems; i++) {
-        int y = startY + (i * (itemHeight + itemGap)) - menuScrollCurrent;
-
-        if (y < startY - itemHeight || y > SCREEN_HEIGHT) {
-            continue;
-        }
-
-        uint16_t textColor = COLOR_PRIMARY;
-        if (i == menuSelection) {
-            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
-            textColor = COLOR_BG;
-        } else {
-            // Dimmed, transparent panel for other items
-            canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PANEL);
-            canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_BORDER);
-        }
-
-        // Use textColor for the icon to make it invert on selection too
-        canvas.drawBitmap(25, y + (itemHeight / 2) - 12, menuIcons[i], 24, 24, textColor);
-
-        canvas.setTextSize(2);
-        canvas.setTextColor(textColor);
-        canvas.setCursor(70, y + (itemHeight / 2) - 7);
-        canvas.print(items[i]);
-    }
-
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 // ============ AI MODE SELECTION SCREEN ============
@@ -5786,7 +5791,7 @@ void refreshCurrentScreen() {
   
   switch(currentState) {
     case STATE_MAIN_MENU:
-      showMainMenu(x_offset);
+      drawMainMenuCool();
       break;
     case STATE_WIFI_MENU:
       showWiFiMenu(x_offset);
@@ -5915,7 +5920,7 @@ void refreshCurrentScreen() {
       drawBrightnessMenu();
       break;
     default:
-      showMainMenu(x_offset);
+      drawMainMenuCool();
       break;
   }
 }
@@ -6196,20 +6201,10 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      int itemHeight = 32;
-      int itemGap = 5;
-      int totalItemHeight = itemHeight + itemGap;
-      int startY = 35;
-      int visibleItems = (SCREEN_HEIGHT - startY) / totalItemHeight;
+      int itemGap = 45; // Sesuaikan dengan celah menu baru
+      menuScrollTarget = menuSelection * itemGap;
 
-      // Calculate the target scroll position
-      if (menuSelection >= visibleItems) {
-          menuScrollTarget = (menuSelection - visibleItems + 1) * totalItemHeight;
-      } else {
-          menuScrollTarget = 0;
-      }
-
-      // Smooth scrolling interpolation
+      // Interpolasi scrolling yang mulus
       float smoothSpeed = 12.0f;
       float diff = menuScrollTarget - menuScrollCurrent;
       if (abs(diff) < 0.5f) {
