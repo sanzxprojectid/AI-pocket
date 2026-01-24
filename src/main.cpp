@@ -217,13 +217,17 @@ struct Particle {
 Particle particles[NUM_PARTICLES];
 bool particlesInit = false;
 
-// Pulse String Visualizer Particles
-struct PulseParticle {
-  float x, y, vx, vy;
+
+// Rising Smoke Visualizer Particles
+struct SmokeParticle {
+  float x, y;
+  float vx, vy;
   int life;
+  int maxLife;
+  uint8_t size;
 };
-#define NUM_PULSE_PARTICLES 40
-PulseParticle pulseParticles[NUM_PULSE_PARTICLES];
+#define NUM_SMOKE_PARTICLES 80
+SmokeParticle smokeParticles[NUM_SMOKE_PARTICLES];
 
 
 // ============ VISUALS GLOBALS ============
@@ -1094,9 +1098,7 @@ void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
 void drawEQIcon(int x, int y, uint8_t eqMode);
-void drawPulseStringVisualizer();
 void drawVerticalVisualizer();
-void updatePulseParticles();
 String formatTime(int seconds);
 void updateBatteryLevel();
 void drawBatteryIcon();
@@ -1107,6 +1109,7 @@ void drawScreensaver();
 void updateMusicPlayerState();
 void drawPomodoroTimer();
 void updatePomodoroLogic();
+void updateAndDrawSmokeVisualizer();
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
 uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
@@ -1255,6 +1258,53 @@ void initMusicPlayer() {
     }
 }
 
+void updateAndDrawSmokeVisualizer() {
+    // 1. Spawn new particles
+    int particlesToSpawn = 0;
+    if (musicIsPlaying) {
+        // Density based on volume (1 to 5 particles per frame)
+        particlesToSpawn = map(musicVol, 0, 30, 1, 5);
+    }
+
+    for (int i = 0; i < NUM_SMOKE_PARTICLES && particlesToSpawn > 0; i++) {
+        if (smokeParticles[i].life <= 0) {
+            smokeParticles[i].x = random(0, SCREEN_WIDTH);
+            smokeParticles[i].y = SCREEN_HEIGHT + 5; // Start just below the screen
+            smokeParticles[i].vx = random(-5, 5) / 10.0f; // Gentle horizontal drift
+
+            // Speed based on tempo (simulated with volume)
+            float speedFactor = map(musicVol, 0, 30, 10, 20) / 10.0f;
+            smokeParticles[i].vy = - (random(5, 12) / 10.0f) * speedFactor;
+
+            smokeParticles[i].maxLife = random(80, 150);
+            smokeParticles[i].life = smokeParticles[i].maxLife;
+            smokeParticles[i].size = random(1, 4);
+            particlesToSpawn--;
+        }
+    }
+
+    // 2. Update and draw existing particles
+    for (int i = 0; i < NUM_SMOKE_PARTICLES; i++) {
+        if (smokeParticles[i].life > 0) {
+            smokeParticles[i].x += smokeParticles[i].vx;
+            smokeParticles[i].y += smokeParticles[i].vy;
+            smokeParticles[i].life--;
+
+            // Reset if it goes off-screen
+            if (smokeParticles[i].y < 0) {
+                smokeParticles[i].life = 0;
+            }
+
+            // Fade out effect
+            float lifePercent = (float)smokeParticles[i].life / smokeParticles[i].maxLife;
+            uint8_t alpha = lifePercent * 100 + 20; // Fade from gray to darker gray
+            uint16_t color = color565(alpha, alpha, alpha);
+
+            canvas.fillCircle(smokeParticles[i].x, smokeParticles[i].y, smokeParticles[i].size, color);
+        }
+    }
+}
+
 void drawGradientVLine(int16_t x, int16_t y, int16_t h, uint16_t color1, uint16_t color2) {
     if (h <= 0) return;
     if (h == 1) {
@@ -1279,68 +1329,11 @@ float custom_lerp(float a, float b, float f) {
     return a + f * (b - a);
 }
 
-void drawPulseStringVisualizer() {
-    int centerX = SCREEN_WIDTH / 2;
-    int lineLength = 100; // The vertical length of the line
-    int baseY = (SCREEN_HEIGHT - lineLength) / 2;
-
-    // Simulate bass vibration based on volume and a sine wave for smooth oscillation
-    float musicInfluence = musicIsPlaying ? (musicVol / 30.0f) : 0.0f;
-    float vibration = sin(millis() / 50.0f) * 15.0f * musicInfluence; // Vibrate up to 15px left/right
-
-    // Draw the pulsating vertical line
-    drawGradientVLine(centerX + vibration, baseY, lineLength, COLOR_VAPOR_CYAN, COLOR_VAPOR_PINK);
-}
-
-void updatePulseParticles() {
-    int centerX = SCREEN_WIDTH / 2;
-
-    // Trigger new particles on a simulated "beat"
-    if (musicIsPlaying && random(0, 15) == 0) {
-        int particlesToSpawn = 2;
-        for (int i = 0; i < NUM_PULSE_PARTICLES && particlesToSpawn > 0; i++) {
-            if (pulseParticles[i].life <= 0) {
-                pulseParticles[i].x = centerX;
-                pulseParticles[i].y = random(SCREEN_HEIGHT / 2 - 50, SCREEN_HEIGHT / 2 + 50);
-                pulseParticles[i].vx = random(-30, 30) / 10.0f; // Horizontal velocity
-                pulseParticles[i].vy = random(-10, 10) / 10.0f; // Slight vertical velocity
-                pulseParticles[i].life = 60; // Lifetime in frames
-                particlesToSpawn--;
-            }
-        }
-    }
-
-    // Update and draw existing particles
-    for (int i = 0; i < NUM_PULSE_PARTICLES; i++) {
-        if (pulseParticles[i].life > 0) {
-            pulseParticles[i].x += pulseParticles[i].vx;
-            pulseParticles[i].y += pulseParticles[i].vy;
-
-            // Apply "drag" to slow them down
-            pulseParticles[i].vx *= 0.95f;
-            pulseParticles[i].vy *= 0.95f;
-
-            pulseParticles[i].life--;
-
-            // Fade out effect
-            if (pulseParticles[i].life < 40) {
-                uint8_t alpha = map(pulseParticles[i].life, 0, 40, 0, 255);
-                // Simple fade by reducing brightness - pick a gray color
-                uint16_t color = color565(alpha/2, alpha/2, alpha/2);
-                 canvas.drawPixel(pulseParticles[i].x, pulseParticles[i].y, color);
-            } else {
-                 canvas.drawPixel(pulseParticles[i].x, pulseParticles[i].y, COLOR_PRIMARY);
-            }
-        }
-    }
-}
-
 void drawEnhancedMusicPlayer() {
     canvas.fillScreen(COLOR_BG);
 
     // --- Visualizer as background ---
-    drawPulseStringVisualizer();
-    updatePulseParticles();
+    updateAndDrawSmokeVisualizer();
 
     // --- Status Bar ---
     drawStatusBar();
