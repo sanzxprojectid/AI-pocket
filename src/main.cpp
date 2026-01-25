@@ -115,7 +115,10 @@ enum AppState {
   STATE_CHAT_RESPONSE,
   STATE_LOADING,
   STATE_SYSTEM_MENU,
-  STATE_SYSTEM_PERF,
+  STATE_DEVICE_INFO,
+  STATE_SYSTEM_INFO_MENU,
+  STATE_WIFI_INFO,
+  STATE_STORAGE_INFO,
   STATE_TOOL_COURIER,
   STATE_ESPNOW_CHAT,
   STATE_ESPNOW_MENU,
@@ -1038,6 +1041,10 @@ void handleHackerToolsMenuSelect();
 void drawSystemMenu();
 void drawBrightnessMenu();
 void handleSystemMenuSelect();
+void drawSystemInfoMenu();
+void handleSystemInfoMenuInput();
+void drawWifiInfo();
+void drawStorageInfo();
 void updateDeauthAttack();
 void changeState(AppState newState);
 void drawStatusBar();
@@ -1861,6 +1868,86 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawWifiInfo() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_wifi, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("Wi-Fi Info");
+
+  int y = 40;
+  canvas.setTextSize(1);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 80, 8, COLOR_PANEL);
+    canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 80, 8, COLOR_BORDER);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(20, y + 10);
+    canvas.print("SSID: " + WiFi.SSID());
+    canvas.setCursor(20, y + 25);
+    canvas.print("IP Address: " + WiFi.localIP().toString());
+    canvas.setCursor(20, y + 40);
+    canvas.print("Gateway: " + WiFi.gatewayIP().toString());
+    canvas.setCursor(20, y + 55);
+    canvas.print("RSSI: " + String(WiFi.RSSI()) + " dBm");
+  } else {
+    canvas.setTextColor(COLOR_WARN);
+    canvas.setCursor(20, y + 10);
+    canvas.print("WiFi is not connected.");
+  }
+
+  // Footer
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R = Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawStorageInfo() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_files, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("Storage Info");
+
+  int y = 40;
+  canvas.setTextSize(1);
+
+  if (sdCardMounted) {
+    canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 55, 8, COLOR_PANEL);
+    canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 55, 8, COLOR_BORDER);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(20, y + 10);
+    canvas.print("SD Card Size: " + String((uint32_t)(SD.cardSize() / (1024 * 1024))) + " MB");
+    canvas.setCursor(20, y + 25);
+    canvas.print("Used Space: " + String((uint32_t)(SD.usedBytes() / (1024 * 1024))) + " MB");
+  } else {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.setCursor(20, y + 10);
+    canvas.print("SD Card not mounted.");
+  }
+
+  // Footer
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R = Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -4942,7 +5029,7 @@ void showLoadingAnimation(int x_offset) {
 }
 
 // ============ SYSTEM INFO ============
-void showSystemPerf(int x_offset) {
+void drawDeviceInfo(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
@@ -5475,6 +5562,43 @@ void handleMainMenuSelect() {
   }
 }
 
+void drawSystemInfoMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_system, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("System Information");
+
+  const char* items[] = {"Device Info", "Wi-Fi Info", "Storage Info", "Back"};
+  drawScrollableMenu(items, 4, 45, 30, 5);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handleSystemInfoMenuInput() {
+  switch (menuSelection) {
+    case 0:
+      changeState(STATE_DEVICE_INFO);
+      break;
+    case 1:
+      changeState(STATE_WIFI_INFO);
+      break;
+    case 2:
+      changeState(STATE_STORAGE_INFO);
+      break;
+    case 3:
+      menuSelection = 0;
+      changeState(STATE_SYSTEM_MENU);
+      break;
+  }
+}
+
 void handleHackerToolsMenuSelect() {
   switch(menuSelection) {
     case 0: // Deauther
@@ -5532,7 +5656,8 @@ void handleRacingModeSelect() {
 void handleSystemMenuSelect() {
   switch (menuSelection) {
     case 0: // Device Info
-      changeState(STATE_SYSTEM_PERF);
+      menuSelection = 0;
+      changeState(STATE_SYSTEM_INFO_MENU);
       break;
     case 1: // Security
       preferences.begin("app-config", false);
@@ -5838,8 +5963,17 @@ void refreshCurrentScreen() {
     case STATE_SYSTEM_MENU:
       drawSystemMenu();
       break;
-    case STATE_SYSTEM_PERF:
-      showSystemPerf(x_offset);
+    case STATE_SYSTEM_INFO_MENU:
+      drawSystemInfoMenu();
+      break;
+    case STATE_DEVICE_INFO:
+      drawDeviceInfo(x_offset);
+      break;
+    case STATE_WIFI_INFO:
+      drawWifiInfo();
+      break;
+    case STATE_STORAGE_INFO:
+      drawStorageInfo();
       break;
     case STATE_TOOL_COURIER:
       drawCourierTool();
@@ -6662,6 +6796,7 @@ void loop() {
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_SYSTEM_MENU:
+        case STATE_SYSTEM_INFO_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
         case STATE_WIFI_MENU:
@@ -6724,7 +6859,8 @@ void loop() {
           if (menuSelection < 6) menuSelection++;
           break;
         case STATE_SYSTEM_MENU:
-          if (menuSelection < 2) menuSelection++;
+        case STATE_SYSTEM_INFO_MENU:
+          if (menuSelection < 3) menuSelection++;
           break;
         case STATE_TOOL_DEAUTH_SELECT:
           if (selectedNetwork < networkCount - 1) selectedNetwork++;
@@ -6877,6 +7013,9 @@ void loop() {
         case STATE_SYSTEM_MENU:
           handleSystemMenuSelect();
           break;
+        case STATE_SYSTEM_INFO_MENU:
+          handleSystemInfoMenuInput();
+          break;
         case STATE_HACKER_TOOLS_MENU:
           handleHackerToolsMenuSelect();
           break;
@@ -6996,7 +7135,7 @@ void loop() {
         case STATE_PASSWORD_INPUT:
           handlePasswordKeyPress();
           break;
-        case STATE_SYSTEM_PERF:
+        case STATE_DEVICE_INFO:
           clearChatHistory();
           break;
         case STATE_TOOL_COURIER:
@@ -7034,7 +7173,6 @@ void loop() {
           changeState(STATE_WIFI_MENU);
           break;
         case STATE_WIFI_MENU:
-        case STATE_SYSTEM_PERF:
         case STATE_TOOL_COURIER:
         case STATE_HACKER_TOOLS_MENU:
         case STATE_TOOL_SNIFFER:
@@ -7043,6 +7181,11 @@ void loop() {
         case STATE_FILE_VIEWER:
         case STATE_GAME_HUB:
           changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_DEVICE_INFO:
+        case STATE_WIFI_INFO:
+        case STATE_STORAGE_INFO:
+          changeState(STATE_SYSTEM_INFO_MENU);
           break;
         case STATE_GAME_RACING:
         case STATE_VIS_STARFIELD:
