@@ -956,10 +956,16 @@ String fileContentToView;
 int fileViewerScrollOffset = 0;
 
 // ============ POMODORO TIMER ============
+const unsigned long POMO_WORK_DURATION = 25 * 60 * 1000;
+const unsigned long POMO_SHORT_BREAK_DURATION = 5 * 60 * 1000;
+const unsigned long POMO_LONG_BREAK_DURATION = 15 * 60 * 1000;
+const int POMO_SESSIONS_UNTIL_LONG_BREAK = 4;
+
 enum PomodoroState {
   POMO_IDLE,
-  POMO_FOCUS,
-  POMO_REST
+  POMO_WORK,
+  POMO_SHORT_BREAK,
+  POMO_LONG_BREAK
 };
 PomodoroState pomoState = POMO_IDLE;
 unsigned long pomoEndTime = 0;
@@ -967,6 +973,8 @@ bool pomoIsPaused = false;
 unsigned long pomoPauseRemaining = 0;
 int pomoMusicVol = 15;
 bool pomoMusicShuffle = false;
+int pomoSessionCount = 0;
+
 
 // Long press state variables for pomodoro player
 unsigned long pomoBtnLeftPressTime = 0;
@@ -6529,7 +6537,6 @@ void loop() {
         }
     } else if (currentState == STATE_POMODORO) {
         // --- POMODORO VIEW CONTROLS (with long press) ---
-
         // BTN_LEFT
         if (digitalRead(BTN_LEFT) == BTN_ACT) {
             if (pomoBtnLeftPressTime == 0) {
@@ -6539,13 +6546,14 @@ void loop() {
                 // LONG PRESS ACTION: Reset Timer
                 pomoState = POMO_IDLE;
                 pomoIsPaused = false;
+                pomoSessionCount = 0;
                 myDFPlayer.stop();
                 showStatus("Timer Reset", 800);
             }
         } else {
             if (pomoBtnLeftPressTime > 0 && !pomoBtnLeftLongPressTriggered) {
                 // SHORT PRESS ACTION: Previous Track
-                myDFPlayer.previous();
+                if (pomoState == POMO_WORK) myDFPlayer.previous();
             }
             pomoBtnLeftPressTime = 0;
             pomoBtnLeftLongPressTriggered = false;
@@ -6570,7 +6578,7 @@ void loop() {
         } else {
             if (pomoBtnRightPressTime > 0 && !pomoBtnRightLongPressTriggered) {
                 // SHORT PRESS ACTION: Next Track
-                myDFPlayer.next();
+                if (pomoState == POMO_WORK) myDFPlayer.next();
             }
             pomoBtnRightPressTime = 0;
             pomoBtnRightLongPressTriggered = false;
@@ -6841,9 +6849,10 @@ void loop() {
           break;
         case STATE_POMODORO:
           if (pomoState == POMO_IDLE) {
-            pomoState = POMO_FOCUS;
-            pomoEndTime = millis() + (25 * 60 * 1000);
+            pomoState = POMO_WORK;
+            pomoEndTime = millis() + POMO_WORK_DURATION;
             pomoIsPaused = false;
+            pomoSessionCount = 0;
             myDFPlayer.volume(pomoMusicVol);
             if (pomoMusicShuffle) {
               myDFPlayer.play(random(1, totalTracks + 1));
@@ -6854,10 +6863,10 @@ void loop() {
             pomoIsPaused = !pomoIsPaused;
             if (pomoIsPaused) {
               pomoPauseRemaining = pomoEndTime - millis();
-              myDFPlayer.pause();
+              if (pomoState == POMO_WORK) myDFPlayer.pause();
             } else {
               pomoEndTime = millis() + pomoPauseRemaining;
-              myDFPlayer.start();
+              if (pomoState == POMO_WORK) myDFPlayer.start();
             }
           }
           break;
@@ -7097,8 +7106,6 @@ void loop() {
 
 void drawPomodoroTimer() {
   canvas.fillScreen(COLOR_BG);
-   // Draw visualizer as background
-  // drawSpectrumVisualizer();
   drawStatusBar();
 
   // Header
@@ -7107,34 +7114,51 @@ void drawPomodoroTimer() {
   canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(50, 21);
+  canvas.drawBitmap(10, 18, icon_pomodoro, 24, 24, COLOR_PRIMARY);
+  canvas.setCursor(45, 21);
   canvas.print("POMODORO TIMER");
 
   // Determine current status and time
   String statusText;
   unsigned long remainingSeconds = 0;
   unsigned long totalDuration = 1; // Prevent division by zero
+  uint16_t progressColor = COLOR_PRIMARY;
 
-  if (pomoIsPaused) {
+  if (pomoIsPaused && pomoState != POMO_IDLE) {
     statusText = "PAUSED";
     remainingSeconds = pomoPauseRemaining / 1000;
-    if (pomoState == POMO_FOCUS) totalDuration = 25 * 60;
-    else if (pomoState == POMO_REST) totalDuration = 5 * 60;
+    if (pomoState == POMO_WORK) {
+        totalDuration = POMO_WORK_DURATION / 1000;
+        progressColor = 0xFBE0; // Orange
+    } else if (pomoState == POMO_SHORT_BREAK) {
+        totalDuration = POMO_SHORT_BREAK_DURATION / 1000;
+        progressColor = 0xAFE5; // Light Blue
+    } else { // LONG_BREAK
+        totalDuration = POMO_LONG_BREAK_DURATION / 1000;
+        progressColor = 0x57FF; // Cyan
+    }
   } else {
     if (pomoState == POMO_IDLE) {
-      statusText = "IDLE";
-      remainingSeconds = 25 * 60;
-      totalDuration = 25 * 60;
+      statusText = "Ready?";
+      remainingSeconds = POMO_WORK_DURATION / 1000;
+      totalDuration = POMO_WORK_DURATION / 1000;
+      progressColor = COLOR_DIM;
     } else {
       if (pomoEndTime > millis()) {
         remainingSeconds = (pomoEndTime - millis()) / 1000;
       }
-      if (pomoState == POMO_FOCUS) {
-        statusText = "FOCUS";
-        totalDuration = 25 * 60;
-      } else { // POMO_REST
-        statusText = "REST";
-        totalDuration = 5 * 60;
+      if (pomoState == POMO_WORK) {
+        statusText = "WORK";
+        totalDuration = POMO_WORK_DURATION / 1000;
+        progressColor = 0xF800; // Red
+      } else if (pomoState == POMO_SHORT_BREAK) {
+        statusText = "SHORT BREAK";
+        totalDuration = POMO_SHORT_BREAK_DURATION / 1000;
+        progressColor = 0x07E0; // Green
+      } else { // POMO_LONG_BREAK
+        statusText = "LONG BREAK";
+        totalDuration = POMO_LONG_BREAK_DURATION / 1000;
+        progressColor = 0x07FF; // Cyan
       }
     }
   }
@@ -7142,37 +7166,53 @@ void drawPomodoroTimer() {
   // Draw Progress Circle
   int centerX = SCREEN_WIDTH / 2;
   int centerY = SCREEN_HEIGHT / 2 + 10;
-  int radius = 40;
+  int radius = 55;
+  int thickness = 8;
   float progress = (float)(totalDuration - remainingSeconds) / totalDuration;
+  if (pomoState == POMO_IDLE) progress = 0;
 
   // Draw background circle
-  canvas.drawCircle(centerX, centerY, radius, COLOR_BORDER);
+  for(int i = 0; i < thickness; i++) {
+    canvas.drawCircle(centerX, centerY, radius - i, COLOR_PANEL);
+  }
 
   // Draw progress arc
-  uint16_t progressColor = (pomoState == POMO_FOCUS) ? 0xF800 : 0x07FF; // Red for Focus, Cyan for Rest
-  for (int i = 0; i < 360 * progress; i++) {
-    float angle = radians(i - 90); // Start from top
-    int x = centerX + cos(angle) * radius;
-    int y = centerY + sin(angle) * radius;
-    canvas.drawPixel(x, y, progressColor);
+  if (progress > 0) {
+    for (float i = 0; i < 360 * progress; i+=0.5) {
+      float angle = radians(i - 90); // Start from top
+      for(int j = 0; j < thickness; j++) {
+        int x = centerX + cos(angle) * (radius - j);
+        int y = centerY + sin(angle) * (radius - j);
+        canvas.drawPixel(x, y, progressColor);
+      }
+    }
   }
+
+  int16_t x1, y1;
+  uint16_t w, h;
+
+  // Draw Status Text (Inside, Top)
+  canvas.setTextSize(2);
+  canvas.setTextColor(progressColor);
+  canvas.getTextBounds(statusText, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(centerX - w / 2, centerY - 35);
+  canvas.print(statusText);
 
   // Draw Time Text
   canvas.setTextSize(4);
   canvas.setTextColor(COLOR_PRIMARY);
   String timeString = formatTime(remainingSeconds);
-  int16_t x1, y1;
-  uint16_t w, h;
   canvas.getTextBounds(timeString, 0, 0, &x1, &y1, &w, &h);
   canvas.setCursor(centerX - w/2, centerY - h/2);
   canvas.print(timeString);
 
-  // Draw Status Text
-  canvas.setTextSize(2);
+  // Draw Session Counter (Inside, Bottom)
+  String sessionString = String(pomoSessionCount) + " / " + String(POMO_SESSIONS_UNTIL_LONG_BREAK);
+  canvas.setTextSize(1);
   canvas.setTextColor(COLOR_SECONDARY);
-  canvas.getTextBounds(statusText, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(centerX - w / 2, centerY + radius + 10);
-  canvas.print(statusText);
+  canvas.getTextBounds(sessionString, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(centerX - w / 2, centerY + 30);
+  canvas.print(sessionString);
 
 
   // --- Footer ---
@@ -7205,23 +7245,35 @@ void drawPomodoroTimer() {
 }
 
 void updatePomodoroLogic() {
-  const unsigned long FOCUS_DURATION = 25 * 60 * 1000;
-  const unsigned long REST_DURATION = 5 * 60 * 1000;
-
   if (pomoState != POMO_IDLE && !pomoIsPaused) {
     if (millis() >= pomoEndTime) {
-      if (pomoState == POMO_FOCUS) {
-        // Switch to Rest
-        pomoState = POMO_REST;
-        pomoEndTime = millis() + REST_DURATION;
+      if (pomoState == POMO_WORK) {
+        pomoSessionCount++;
+        if (pomoSessionCount >= POMO_SESSIONS_UNTIL_LONG_BREAK) {
+          // Time for a long break
+          pomoState = POMO_LONG_BREAK;
+          pomoEndTime = millis() + POMO_LONG_BREAK_DURATION;
+          pomoSessionCount = 0; // Reset for the next cycle
+          triggerNeoPixelEffect(pixels.Color(0, 255, 255), 2000); // Cyan for long break
+        } else {
+          // Time for a short break
+          pomoState = POMO_SHORT_BREAK;
+          pomoEndTime = millis() + POMO_SHORT_BREAK_DURATION;
+          triggerNeoPixelEffect(pixels.Color(0, 255, 0), 2000); // Green for short break
+        }
         myDFPlayer.stop();
-        triggerNeoPixelEffect(pixels.Color(0, 255, 0), 2000); // Green for rest
-      } else { // Was POMO_REST
-        // Switch to Focus
-        pomoState = POMO_FOCUS;
-        pomoEndTime = millis() + FOCUS_DURATION;
-        myDFPlayer.play(1); // Play first song
-        triggerNeoPixelEffect(pixels.Color(255, 0, 0), 2000); // Red for focus
+      } else { // Was POMO_SHORT_BREAK or POMO_LONG_BREAK
+        // Switch back to Work
+        pomoState = POMO_WORK;
+        pomoEndTime = millis() + POMO_WORK_DURATION;
+        if (totalTracks > 0) {
+            if (pomoMusicShuffle) {
+              myDFPlayer.play(random(1, totalTracks + 1));
+            } else {
+              myDFPlayer.next();
+            }
+        }
+        triggerNeoPixelEffect(pixels.Color(255, 0, 0), 2000); // Red for work
       }
     }
   }
