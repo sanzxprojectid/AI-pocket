@@ -977,6 +977,8 @@ unsigned long pomoPauseRemaining = 0;
 int pomoMusicVol = 15;
 bool pomoMusicShuffle = false;
 int pomoSessionCount = 0;
+String pomoQuote = ""; // To store the AI-generated quote
+bool pomoQuoteLoading = false; // To indicate if a quote is being fetched
 
 
 // Long press state variables for pomodoro player
@@ -1124,6 +1126,7 @@ void drawScreensaver();
 void updateMusicPlayerState();
 void drawPomodoroTimer();
 void updatePomodoroLogic();
+void fetchPomodoroQuote();
 void updateAndDrawSmokeVisualizer();
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
@@ -5480,6 +5483,61 @@ void sendToGemini() {
   scrollOffset = 0;
 }
 
+void fetchPomodoroQuote() {
+  pomoQuote = "";
+  pomoQuoteLoading = true;
+  screenIsDirty = true; // Force a redraw to show "Generating..."
+  refreshCurrentScreen(); // Draw immediately
+
+  if (geminiApiKey.length() == 0 || geminiApiKey.startsWith("PASTE_")) {
+    pomoQuote = "Error: API Key not set.";
+    pomoQuoteLoading = false;
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    pomoQuote = "Error: No WiFi connection.";
+    pomoQuoteLoading = false;
+    return;
+  }
+
+  HTTPClient http;
+  String url = String(geminiEndpoint) + "?key=" + geminiApiKey;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(20000); // 20 second timeout
+
+  String prompt = "Berikan satu kutipan motivasi singkat (satu kalimat) dalam Bahasa Indonesia untuk menyemangati seseorang yang sedang istirahat dari belajar atau bekerja. Pastikan kutipan itu inspiratif dan tidak terlalu panjang.";
+  String escapedInput = prompt;
+  escapedInput.replace("\"", "\\\"");
+
+  String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedInput + "\"}]}]}";
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    JsonDocument responseDoc;
+    DeserializationError error = deserializeJson(responseDoc, response);
+
+    if (!error && !responseDoc["candidates"].isNull()) {
+      pomoQuote = responseDoc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
+      pomoQuote.trim();
+      // Clean up the quote if it has markdown or quotes
+      pomoQuote.replace("*", "");
+      pomoQuote.replace("\"", "");
+    } else {
+      pomoQuote = "Istirahat sejenak, pikiran segar kembali.";
+    }
+  } else {
+    pomoQuote = "Gagal mengambil kutipan. Coba lagi nanti.";
+  }
+
+  http.end();
+  pomoQuoteLoading = false;
+  screenIsDirty = true; // Force another redraw to show the new quote
+}
+
+
 // ============ TRANSITION SYSTEM ============
 void changeState(AppState newState) {
   if (transitionState == TRANSITION_NONE && currentState != newState) {
@@ -6487,7 +6545,7 @@ void loop() {
   }
 
   // Screensaver check
-  if (currentState != STATE_SCREENSAVER && currentState != STATE_BOOT && currentMillis - lastInputTime > SCREENSAVER_TIMEOUT) {
+  if (currentState != STATE_SCREENSAVER && currentState != STATE_BOOT && currentState != STATE_POMODORO && currentMillis - lastInputTime > SCREENSAVER_TIMEOUT) {
     changeState(STATE_SCREENSAVER);
   }
 
@@ -7357,6 +7415,47 @@ void drawPomodoroTimer() {
   canvas.setCursor(centerX - w / 2, centerY + 30);
   canvas.print(sessionString);
 
+  // Draw Quote Area
+  if (pomoState == POMO_SHORT_BREAK || pomoState == POMO_LONG_BREAK) {
+    canvas.setTextSize(1);
+    String textToDraw = "";
+    if (pomoQuoteLoading) {
+      textToDraw = "Generating quote...";
+      canvas.setTextColor(COLOR_WARN);
+    } else {
+      textToDraw = pomoQuote;
+      canvas.setTextColor(COLOR_SUCCESS);
+    }
+
+    // Simple text wrapping for the quote
+    int maxCharsPerLine = 45;
+    int currentLine = 0;
+    String line = "";
+    String word = "";
+
+    for (int i = 0; i < textToDraw.length(); i++) {
+        char c = textToDraw.charAt(i);
+        if (c == ' ' || i == textToDraw.length() - 1) {
+            if (i == textToDraw.length() - 1) word += c;
+            if ((line.length() + word.length()) > maxCharsPerLine) {
+                canvas.getTextBounds(line, 0, 0, &x1, &y1, &w, &h);
+                canvas.setCursor((SCREEN_WIDTH - w) / 2, centerY + 45 + (currentLine * 10));
+                canvas.print(line);
+                line = word;
+                currentLine++;
+            } else {
+                line += word;
+            }
+            word = "";
+        } else {
+            word += c;
+        }
+    }
+     canvas.getTextBounds(line, 0, 0, &x1, &y1, &w, &h);
+     canvas.setCursor((SCREEN_WIDTH - w) / 2, centerY + 45 + (currentLine * 10));
+     canvas.print(line);
+  }
+
 
   // --- Footer ---
     int footerY = SCREEN_HEIGHT - 15;
@@ -7398,15 +7497,18 @@ void updatePomodoroLogic() {
           pomoEndTime = millis() + POMO_LONG_BREAK_DURATION;
           pomoSessionCount = 0; // Reset for the next cycle
           triggerNeoPixelEffect(pixels.Color(0, 255, 255), 2000); // Cyan for long break
+          fetchPomodoroQuote(); // Fetch a quote for the break
         } else {
           // Time for a short break
           pomoState = POMO_SHORT_BREAK;
           pomoEndTime = millis() + POMO_SHORT_BREAK_DURATION;
           triggerNeoPixelEffect(pixels.Color(0, 255, 0), 2000); // Green for short break
+          fetchPomodoroQuote(); // Fetch a quote for the break
         }
         myDFPlayer.stop();
       } else { // Was POMO_SHORT_BREAK or POMO_LONG_BREAK
         // Switch back to Work
+        pomoQuote = ""; // Clear the quote when work starts
         pomoState = POMO_WORK;
         pomoEndTime = millis() + POMO_WORK_DURATION;
         if (totalTracks > 0) {
