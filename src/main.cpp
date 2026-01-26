@@ -3998,6 +3998,17 @@ void appendChatToSD(String userText, String aiText) {
     endSD();
     return;
   }
+
+  String chatLogFile;
+  String aiPersona;
+
+  if (currentAIMode == MODE_STANDARD) {
+    chatLogFile = "/standard AI .txt";
+    aiPersona = "STANDARD AI";
+  } else { // Default to Subaru
+    chatLogFile = CHAT_HISTORY_FILE;
+    aiPersona = "SUBARU";
+  }
   
   struct tm timeinfo;
   String timestamp = "[NO-TIME]";
@@ -4029,12 +4040,12 @@ void appendChatToSD(String userText, String aiText) {
   sdEntry += "========================================\n";
   sdEntry += "USER: " + userText + "\n";
   sdEntry += "----------------------------------------\n";
-  sdEntry += "SUBARU: " + aiText + "\n";
+  sdEntry += aiPersona + ": " + aiText + "\n";
   sdEntry += "========================================\n\n";
   
-  File file = SD.open(CHAT_HISTORY_FILE, FILE_APPEND);
+  File file = SD.open(chatLogFile, FILE_APPEND);
   if (!file) {
-    file = SD.open(CHAT_HISTORY_FILE, FILE_WRITE);
+    file = SD.open(chatLogFile, FILE_WRITE);
     if (!file) {
       endSD();
       return;
@@ -4045,17 +4056,21 @@ void appendChatToSD(String userText, String aiText) {
   file.flush();
   file.close();
   
-  String memoryEntry = timestamp + "\nUser: " + userText + "\nSubaru: " + aiText + "\n---\n";
+  // Only update the main chat history for Subaru mode to keep context
+  if (currentAIMode == MODE_SUBARU) {
+    String memoryEntry = timestamp + "\nUser: " + userText + "\nSubaru: " + aiText + "\n---\n";
   
-  if (chatHistory.length() + memoryEntry.length() >= MAX_HISTORY_SIZE) {
-    int trimPoint = chatHistory.length() * 0.3;
-    int separatorPos = chatHistory.indexOf("---\n", trimPoint);
-    if (separatorPos != -1) {
-      chatHistory = chatHistory.substring(separatorPos + 4);
+    if (chatHistory.length() + memoryEntry.length() >= MAX_HISTORY_SIZE) {
+      int trimPoint = chatHistory.length() * 0.3;
+      int separatorPos = chatHistory.indexOf("---\n", trimPoint);
+      if (separatorPos != -1) {
+        chatHistory = chatHistory.substring(separatorPos + 4);
+      }
     }
+
+    chatHistory += memoryEntry;
   }
-  
-  chatHistory += memoryEntry;
+
   chatMessageCount++;
 
   endSD();
@@ -5434,7 +5449,7 @@ void sendToGemini() {
           aiResponse = parts[0]["text"].as<String>();
           aiResponse.trim();
           
-          if (currentAIMode == MODE_SUBARU) {
+          if (currentAIMode == MODE_SUBARU || currentAIMode == MODE_STANDARD) {
             appendChatToSD(userInput, aiResponse);
           }
           
