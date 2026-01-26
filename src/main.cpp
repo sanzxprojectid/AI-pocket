@@ -152,6 +152,11 @@ enum AppState {
   STATE_LOCAL_AI_CHAT,
   STATE_MUSIC_PLAYER,
   STATE_POMODORO,
+  STATE_STRATEGIST_PIN,
+  STATE_STRATEGIST_MENU,
+  STATE_STRATEGIST_FALLACY,
+  STATE_STRATEGIST_PREDICTION,
+  STATE_STRATEGIST_SETUP_PIN,
   STATE_SCREENSAVER,
   STATE_BRIGHTNESS_ADJUST
 };
@@ -186,9 +191,10 @@ struct SystemConfig {
   float petEnergy;
   bool petSleep;
   int screenBrightness;
+  String strategistPin;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, "123456"};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -201,6 +207,9 @@ String geminiApiKey = "";
 String binderbyteApiKey = "";
 String selectedSSID = "";
 String aiResponse = "";
+String strategistLog = "";
+String strategistResult = "";
+int strategistScrollOffset = 0;
 int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
@@ -662,7 +671,18 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
+const unsigned char icon_strategist[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x00, 0xFF, 0xFF, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xF0, 0x0F, 0xC0, 0x03, 0xC0, 0x03, 0xC0,
+0x07, 0x80, 0x01, 0xE0, 0x07, 0x0F, 0xF0, 0xE0, 0x0E, 0x1F, 0xF8, 0x70, 0x0E, 0x3F, 0xFC, 0x70,
+0x0E, 0x3F, 0xFC, 0x70, 0x0E, 0x1F, 0xF8, 0x70, 0x0E, 0x0F, 0xF0, 0x70, 0x07, 0x00, 0x00, 0xE0,
+0x07, 0x80, 0x01, 0xE0, 0x03, 0xC0, 0x03, 0xC0, 0x03, 0xF0, 0x0F, 0xC0, 0x01, 0xFF, 0xFF, 0x80,
+0x00, 0xFF, 0xFF, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_strategist};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
@@ -743,7 +763,7 @@ const char* keyboardMac[3][10] = {
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER };
+enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER, CONTEXT_STRATEGIST_LOG, CONTEXT_STRATEGIST_FALLACY };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 // ============ CHAT THEME & ANIMATION ============
@@ -892,6 +912,7 @@ int petMenuSelection = 0; // 0:Feed, 1:Play, 2:Sleep, 3:Back
 bool pinLockEnabled = false;
 String currentPin = "1234";
 String pinInput = "";
+String stratPinInput = "";
 AppState stateAfterUnlock = STATE_MAIN_MENU;
 const char* keyboardPin[4][3] = {
   {"1", "2", "3"},
@@ -1098,6 +1119,14 @@ void drawRacingGame();
 void updateRacingLogic();
 void drawAboutScreen();
 void drawWiFiSonar();
+void drawPinKeyboard();
+void drawStrategistPin(bool isChanging);
+void drawStrategistMenu();
+void drawStrategistResult();
+void handleStrategistPinKeyPress();
+void sendToGeminiStrategist(int type);
+void loadStrategistLog();
+void saveStrategistLog();
 String getRecentChatContext(int maxMessages);
 void drawPinLock(bool isChanging);
 void handlePinLockKeyPress();
@@ -4142,6 +4171,7 @@ void loadConfig() {
         sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
         sysConfig.petSleep = doc["pet"]["slp"] | false;
         sysConfig.screenBrightness = doc["sys"]["brightness"] | 255;
+        sysConfig.strategistPin = doc["sys"]["stratPin"] | "123456";
 
         // Sync to legacy globals if needed
         myNickname = sysConfig.espnowNick;
@@ -4213,6 +4243,7 @@ void saveConfig() {
     doc["pet"]["eng"] = sysConfig.petEnergy;
     doc["pet"]["slp"] = sysConfig.petSleep;
     doc["sys"]["brightness"] = sysConfig.screenBrightness;
+    doc["sys"]["stratPin"] = sysConfig.strategistPin;
 
     File file = SD.open(CONFIG_FILE, FILE_WRITE);
     if (file) {
@@ -4596,6 +4627,88 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void drawPinLock(bool isChanging) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(isChanging ? 70 : 100, 10);
+  canvas.print(isChanging ? "Enter New PIN" : "Enter PIN");
+
+  // Draw PIN input dots
+  int dotStartX = (SCREEN_WIDTH - (4 * 20 - 5)) / 2;
+  for (int i = 0; i < 4; i++) {
+    if (i < pinInput.length()) {
+      canvas.fillCircle(dotStartX + i * 20, 45, 5, COLOR_PRIMARY);
+    } else {
+      canvas.drawCircle(dotStartX + i * 20, 45, 5, COLOR_DIM);
+    }
+  }
+
+  drawPinKeyboard();
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawStrategistPin(bool isChanging) {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+
+  String title = isChanging ? "Setup Strategist PIN" : "Strategist Access";
+  int16_t x1, y1;
+  uint16_t w, h;
+  canvas.getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor((SCREEN_WIDTH - w) / 2, 10);
+  canvas.print(title);
+
+  // Draw 6-digit PIN input dots
+  int dotStartX = (SCREEN_WIDTH - (6 * 20 - 5)) / 2;
+  for (int i = 0; i < 6; i++) {
+    if (i < stratPinInput.length()) {
+      canvas.fillCircle(dotStartX + i * 20, 45, 6, COLOR_PRIMARY);
+    } else {
+      canvas.drawCircle(dotStartX + i * 20, 45, 6, COLOR_DIM);
+    }
+  }
+
+  // Draw 6-digit specific keyboard (no OK button)
+  int keyW = 60;
+  int keyH = 25;
+  int gapX = 5;
+  int gapY = 4;
+  int startX = (SCREEN_WIDTH - (3 * keyW + 2 * gapX)) / 2;
+  int startY = 65;
+
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 3; c++) {
+      if (r == 3 && c == 2) continue; // Skip OK button area
+
+      int x = startX + c * (keyW + gapX);
+      int y = startY + r * (keyH + gapY);
+
+      const char* label = keyboardPin[r][c];
+
+      if (r == cursorY && c == cursorX) {
+        canvas.fillRoundRect(x, y, keyW, keyH, 5, COLOR_PRIMARY);
+        canvas.setTextColor(COLOR_BG);
+      } else {
+        canvas.drawRoundRect(x, y, keyW, keyH, 5, COLOR_BORDER);
+        canvas.setTextColor(COLOR_TEXT);
+      }
+
+      canvas.setTextSize(2);
+      int labelW = strlen(label) * 12;
+      canvas.setCursor(x + (keyW - labelW) / 2, y + 6);
+      canvas.print(label);
+    }
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 // ============ MAIN MENU (COOL VERTICAL) ============
 void drawMainMenuCool() {
     canvas.fillScreen(COLOR_BG);
@@ -4608,8 +4721,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
-    int numItems = 13;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "STRATEGIST"};
+    int numItems = 14;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -5308,8 +5421,8 @@ void drawSystemMenu() {
   canvas.setCursor(45, 7);
   canvas.print("System Settings");
 
-  const char* items[] = {"Device Info", "Security", "Brightness", "Back"};
-  drawScrollableMenu(items, 4, 45, 30, 5);
+  const char* items[] = {"Device Info", "Security", "Strategist PIN", "Brightness", "Back"};
+  drawScrollableMenu(items, 5, 45, 30, 5);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5340,29 +5453,6 @@ void drawPinKeyboard() {
       canvas.print(label);
     }
   }
-}
-
-void drawPinLock(bool isChanging) {
-  canvas.fillScreen(COLOR_BG);
-  drawStatusBar();
-
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setTextSize(2);
-  canvas.setCursor(isChanging ? 70 : 100, 10);
-  canvas.print(isChanging ? "Enter New PIN" : "Enter PIN");
-
-  // Draw PIN input dots
-  int dotStartX = (SCREEN_WIDTH - (4 * 20 - 5)) / 2;
-  for (int i = 0; i < 4; i++) {
-    if (i < pinInput.length()) {
-      canvas.fillCircle(dotStartX + i * 20, 45, 5, COLOR_PRIMARY);
-    } else {
-      canvas.drawCircle(dotStartX + i * 20, 45, 5, COLOR_DIM);
-    }
-  }
-
-  drawPinKeyboard();
-  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void sendToGemini() {
@@ -5632,6 +5722,12 @@ void handleMainMenuSelect() {
     case 12: // POMODORO
       changeState(STATE_POMODORO);
       break;
+    case 13: // STRATEGIST
+      stratPinInput = "";
+      cursorX = 0; cursorY = 0;
+      menuSelection = 0; // Reset menu selection for the next menu
+      changeState(STATE_STRATEGIST_PIN);
+      break;
   }
 }
 
@@ -5746,12 +5842,52 @@ void handleSystemMenuSelect() {
         changeState(STATE_CHANGE_PIN);
       }
       break;
-    case 2: // Brightness
+    case 2: // Strategist PIN
+      stratPinInput = "";
+      cursorX = 0; cursorY = 0;
+      changeState(STATE_STRATEGIST_SETUP_PIN);
+      break;
+    case 3: // Brightness
       changeState(STATE_BRIGHTNESS_ADJUST);
       break;
-    case 3: // Back
+    case 4: // Back
       changeState(STATE_MAIN_MENU);
       break;
+  }
+}
+
+void handleStrategistPinKeyPress() {
+  const char* key = keyboardPin[cursorY][cursorX];
+  if (strcmp(key, "OK") == 0) {
+     return;
+  }
+
+  if (strcmp(key, "<") == 0) {
+    if (stratPinInput.length() > 0) {
+      stratPinInput.remove(stratPinInput.length() - 1);
+    }
+  } else {
+    if (stratPinInput.length() < 6) {
+      stratPinInput += key;
+      if (stratPinInput.length() == 6) {
+        if (currentState == STATE_STRATEGIST_PIN) {
+          if (stratPinInput == sysConfig.strategistPin) {
+            showStatus("Access Granted", 1000);
+            stratPinInput = "";
+            changeState(STATE_STRATEGIST_MENU);
+          } else {
+            showStatus("Incorrect PIN", 1000);
+            stratPinInput = "";
+          }
+        } else if (currentState == STATE_STRATEGIST_SETUP_PIN) {
+          sysConfig.strategistPin = stratPinInput;
+          saveConfig();
+          showStatus("New PIN Saved", 1000);
+          stratPinInput = "";
+          changeState(STATE_SYSTEM_MENU);
+        }
+      }
+    }
   }
 }
 
@@ -5959,6 +6095,13 @@ void handleKeyPress() {
          showStatus("Renamed!", 1000);
          changeState(STATE_ESPNOW_PEER_SCAN);
       }
+    } else if (keyboardContext == CONTEXT_STRATEGIST_LOG) {
+      strategistLog = userInput;
+      saveStrategistLog();
+      sendToGeminiStrategist(1); // 1 = Prediction
+    } else if (keyboardContext == CONTEXT_STRATEGIST_FALLACY) {
+      strategistLog = userInput; // Reuse strategistLog to store the argument
+      sendToGeminiStrategist(0); // 0 = Fallacy
     }
   } else if (strcmp(key, "<") == 0) {
     if (userInput.length() > 0) {
@@ -6138,6 +6281,19 @@ void refreshCurrentScreen() {
     case STATE_CHANGE_PIN:
       drawPinLock(true);
       break;
+    case STATE_STRATEGIST_PIN:
+      drawStrategistPin(false);
+      break;
+    case STATE_STRATEGIST_SETUP_PIN:
+      drawStrategistPin(true);
+      break;
+    case STATE_STRATEGIST_MENU:
+      drawStrategistMenu();
+      break;
+    case STATE_STRATEGIST_FALLACY:
+    case STATE_STRATEGIST_PREDICTION:
+      drawStrategistResult();
+      break;
     case STATE_MUSIC_PLAYER:
       drawEnhancedMusicPlayer();
       break;
@@ -6192,6 +6348,25 @@ void drawDeauthDetector() {
 
 void drawLocalAiChat() {
   drawGenericToolScreen("LOCAL AI (Coming Soon)");
+}
+
+void drawStrategistMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 28, COLOR_PANEL);
+  canvas.drawFastHLine(0, 28, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawBitmap(10, 4, icon_strategist, 24, 24, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextSize(2);
+  canvas.setCursor(45, 7);
+  canvas.print("Social Strategist");
+
+  const char* items[] = {"Debunker (Fallacy)", "Predictor (Social)", "Back"};
+  drawScrollableMenu(items, 3, 45, 30, 5);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void drawFileViewer() {
@@ -6331,6 +6506,7 @@ void setup() {
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
+        loadStrategistLog();
     } else {
       // NVS fallback for main config
       preferences.begin("app-config", true);
@@ -6860,6 +7036,8 @@ void loop() {
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
+        case STATE_STRATEGIST_PIN:
+        case STATE_STRATEGIST_SETUP_PIN:
           cursorY = (cursorY > 0) ? cursorY - 1 : 3;
           break;
         case STATE_MAIN_MENU:
@@ -6914,6 +7092,13 @@ void loop() {
         case STATE_FILE_VIEWER:
           if (fileViewerScrollOffset > 0) fileViewerScrollOffset -= 20;
           break;
+        case STATE_STRATEGIST_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
+        case STATE_STRATEGIST_FALLACY:
+        case STATE_STRATEGIST_PREDICTION:
+          if (strategistScrollOffset > 0) strategistScrollOffset -= 10;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -6923,10 +7108,12 @@ void loop() {
       switch(currentState) {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
+        case STATE_STRATEGIST_PIN:
+        case STATE_STRATEGIST_SETUP_PIN:
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 12) menuSelection++;
+          if (menuSelection < 13) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -6979,6 +7166,13 @@ void loop() {
         case STATE_FILE_VIEWER:
           fileViewerScrollOffset += 20;
           break;
+        case STATE_STRATEGIST_MENU:
+          if (menuSelection < 2) menuSelection++;
+          break;
+        case STATE_STRATEGIST_FALLACY:
+        case STATE_STRATEGIST_PREDICTION:
+          strategistScrollOffset += 10;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -6988,7 +7182,12 @@ void loop() {
       switch(currentState) {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
+        case STATE_STRATEGIST_PIN:
+        case STATE_STRATEGIST_SETUP_PIN:
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
+          if (cursorY == 3 && cursorX == 2 && (currentState == STATE_STRATEGIST_PIN || currentState == STATE_STRATEGIST_SETUP_PIN)) {
+            cursorX = 1;
+          }
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -7025,7 +7224,12 @@ void loop() {
       switch(currentState) {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
+        case STATE_STRATEGIST_PIN:
+        case STATE_STRATEGIST_SETUP_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
+          if (cursorY == 3 && cursorX == 2 && (currentState == STATE_STRATEGIST_PIN || currentState == STATE_STRATEGIST_SETUP_PIN)) {
+            cursorX = 0;
+          }
           break;
         case STATE_KEYBOARD:
         case STATE_PASSWORD_INPUT:
@@ -7082,6 +7286,27 @@ void loop() {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           handlePinLockKeyPress();
+          break;
+        case STATE_STRATEGIST_PIN:
+        case STATE_STRATEGIST_SETUP_PIN:
+          handleStrategistPinKeyPress();
+          break;
+        case STATE_STRATEGIST_MENU:
+          if (menuSelection == 0) {
+            userInput = "";
+            keyboardContext = CONTEXT_STRATEGIST_FALLACY;
+            cursorX = 0; cursorY = 0;
+            currentKeyboardMode = MODE_LOWER;
+            changeState(STATE_KEYBOARD);
+          } else if (menuSelection == 1) {
+            userInput = strategistLog;
+            keyboardContext = CONTEXT_STRATEGIST_LOG;
+            cursorX = 0; cursorY = 0;
+            currentKeyboardMode = MODE_LOWER;
+            changeState(STATE_KEYBOARD);
+          } else {
+            changeState(STATE_MAIN_MENU);
+          }
           break;
         case STATE_SYSTEM_MENU:
           handleSystemMenuSelect();
@@ -7220,7 +7445,7 @@ void loop() {
     }
     
     if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-      if (currentState == STATE_PIN_LOCK) {
+      if (currentState == STATE_PIN_LOCK || currentState == STATE_STRATEGIST_PIN) {
         // Do nothing to prevent bypassing PIN
       } else if (currentState == STATE_POMODORO) {
         pomoState = POMO_IDLE;
@@ -7270,6 +7495,16 @@ void loop() {
           saveConfig();
           changeState(STATE_SYSTEM_MENU);
           break;
+        case STATE_STRATEGIST_SETUP_PIN:
+          changeState(STATE_SYSTEM_MENU);
+          break;
+        case STATE_STRATEGIST_MENU:
+          changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_STRATEGIST_FALLACY:
+        case STATE_STRATEGIST_PREDICTION:
+          changeState(STATE_STRATEGIST_MENU);
+          break;
         case STATE_ABOUT:
         case STATE_TOOL_WIFI_SONAR:
           // Cleanup
@@ -7318,6 +7553,155 @@ void loop() {
       ledQuickFlash();
     }
   }
+}
+
+void drawStrategistResult() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setTextSize(2);
+
+  if (currentState == STATE_STRATEGIST_FALLACY) {
+    canvas.setCursor(85, 20);
+    canvas.print("DEBUNKER");
+  } else {
+    canvas.setCursor(85, 20);
+    canvas.print("PREDICTOR");
+  }
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  int y = 48 - strategistScrollOffset;
+  int lineHeight = 10;
+  String word = "";
+  int x = 5;
+  for (unsigned int i = 0; i < strategistResult.length(); i++) {
+    char c = strategistResult.charAt(i);
+    if (c == ' ' || c == '\n' || i == strategistResult.length() - 1) {
+      if (i == strategistResult.length() - 1 && c != ' ' && c != '\n') {
+        word += c;
+      }
+      int wordWidth = word.length() * 6;
+      if (x + wordWidth > SCREEN_WIDTH - 10) {
+        y += lineHeight;
+        x = 5;
+      }
+      if (y >= 40 && y < SCREEN_HEIGHT - 5) {
+        canvas.setCursor(x, y);
+        canvas.print(word);
+      }
+      x += wordWidth + 6;
+      word = "";
+      if (c == '\n') {
+        y += lineHeight;
+        x = 5;
+      }
+    } else {
+      word += c;
+    }
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Scroll | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void loadStrategistLog() {
+  if (!sdCardMounted) return;
+  if (!beginSD()) return;
+  if (SD.exists("/strategist_log.txt")) {
+    File file = SD.open("/strategist_log.txt", FILE_READ);
+    if (file) {
+      strategistLog = "";
+      while (file.available()) {
+        strategistLog += (char)file.read();
+      }
+      file.close();
+    }
+  }
+  endSD();
+}
+
+void saveStrategistLog() {
+  if (!sdCardMounted) return;
+  if (!beginSD()) return;
+  File file = SD.open("/strategist_log.txt", FILE_WRITE);
+  if (file) {
+    file.print(strategistLog);
+    file.close();
+  }
+  endSD();
+}
+
+void sendToGeminiStrategist(int type) {
+  currentState = STATE_LOADING;
+  loadingFrame = 0;
+
+  for (int i = 0; i < 5; i++) {
+    showLoadingAnimation(0);
+    delay(100);
+    loadingFrame++;
+  }
+
+  if (geminiApiKey.length() == 0 || geminiApiKey.startsWith("PASTE_")) {
+    strategistResult = "Gemini API Key not found.";
+    currentState = (type == 0) ? STATE_STRATEGIST_FALLACY : STATE_STRATEGIST_PREDICTION;
+    strategistScrollOffset = 0;
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    strategistResult = "WiFi not connected.";
+    currentState = (type == 0) ? STATE_STRATEGIST_FALLACY : STATE_STRATEGIST_PREDICTION;
+    strategistScrollOffset = 0;
+    return;
+  }
+
+  HTTPClient http;
+  String url = String(geminiEndpoint) + "?key=" + geminiApiKey;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+
+  String prompt = "";
+  if (type == 0) { // Fallacy
+    prompt = "Identifikasi cacat logika (Logical Fallacy) dari argumen ini. Berikan satu kalimat bantahan yang elegan, tenang, namun mematikan yang akan membuat lawan bicara kehilangan kredibilitasnya di depan umum: \"" + strategistLog + "\"";
+  } else { // Prediction
+    prompt = "Berdasarkan pola perilaku masa lalu ini, prediksikan tindakan target dalam 48 jam ke depan. Fokus pada kemungkinan dia mencari sekutu atau melakukan sabotase sosial. Berikan persentase kemungkinan untuk setiap scenerio: \"" + strategistLog + "\"";
+  }
+
+  String escapedInput = prompt;
+  escapedInput.replace("\\", "\\\\");
+  escapedInput.replace("\"", "\\\"");
+  escapedInput.replace("\n", "\\n");
+  escapedInput.replace("\r", "");
+
+  String jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedInput + "\"}]}]}";
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    JsonDocument responseDoc;
+    DeserializationError error = deserializeJson(responseDoc, response);
+    if (!error && !responseDoc["candidates"].isNull()) {
+        strategistResult = responseDoc["candidates"][0]["content"]["parts"][0]["text"].as<String>();
+        strategistResult.trim();
+        ledSuccess();
+    } else {
+        strategistResult = "Response Parse Error";
+        ledError();
+    }
+  } else {
+    strategistResult = "API Error: " + String(httpResponseCode);
+    ledError();
+  }
+
+  http.end();
+  currentState = (type == 0) ? STATE_STRATEGIST_FALLACY : STATE_STRATEGIST_PREDICTION;
+  strategistScrollOffset = 0;
 }
 
 void drawPomodoroTimer() {
