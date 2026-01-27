@@ -150,6 +150,7 @@ enum AppState {
   STATE_TOOL_BLE_MENU,
   STATE_DEAUTH_DETECTOR,
   STATE_LOCAL_AI_CHAT,
+  STATE_GROQ_MODEL_SELECT,
   STATE_MUSIC_PLAYER,
   STATE_POMODORO,
   STATE_SCREENSAVER,
@@ -171,6 +172,7 @@ AppState transitionTargetState;
 
 // ============ API ENDPOINT ============
 const char* geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+const char* groqEndpoint = "https://api.groq.com/openai/v1/chat/completions";
 
 // ============ PREFERENCES & CONFIG ============
 Preferences preferences;
@@ -199,6 +201,7 @@ String userInput = "";
 String passwordInput = "";
 String geminiApiKey = "";
 String binderbyteApiKey = "";
+String groqApiKey = "";
 String selectedSSID = "";
 String aiResponse = "";
 int scrollOffset = 0;
@@ -665,8 +668,11 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
 
 // ============ AI MODE SELECTION ============
-enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
+enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_GROQ, MODE_LOCAL };
 AIMode currentAIMode = MODE_SUBARU;
+
+enum GroqModel { GROQ_LLAMA_3_3, GROQ_DEEPSEEK_R1 };
+GroqModel selectedGroqModel = GROQ_LLAMA_3_3;
 bool isSelectingMode = false;
 
 // ============ ESP-NOW CHAT SYSTEM ============
@@ -1053,6 +1059,9 @@ void drawStatusBar();
 void showStatus(String message, int delayMs);
 void scanWiFiNetworks(bool switchToScanState = true);
 void sendToGemini();
+void sendToGroq();
+void filterThinkTag(String &text);
+void drawGroqModelSelect();
 void triggerNeoPixelEffect(uint32_t color, int duration);
 void updateNeoPixel();
 void updateParticles();
@@ -1544,6 +1553,7 @@ void loadApiKeys() {
       if (!error) {
         geminiApiKey = doc["gemini_api_key"] | "";
         binderbyteApiKey = doc["binderbyte_api_key"] | "";
+        groqApiKey = doc["groq_api_key"] | "";
         Serial.println("✓ API keys loaded from SD card.");
       } else {
         Serial.print("Failed to parse api_keys.json: ");
@@ -1558,6 +1568,7 @@ void loadApiKeys() {
       JsonDocument doc;
       doc["gemini_api_key"] = "PASTE_YOUR_GEMINI_API_KEY_HERE";
       doc["binderbyte_api_key"] = "PASTE_YOUR_BINDERBYTE_API_KEY_HERE";
+      doc["groq_api_key"] = "PASTE_YOUR_GROQ_API_KEY_HERE";
       if (serializeJson(doc, file) == 0) {
         Serial.println("Failed to write to api_keys.json");
       } else {
@@ -1871,6 +1882,54 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawGroqModelSelect() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 2);
+  canvas.print("SELECT GROQ MODEL");
+  canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
+
+  const char* models[] = {"LLAMA 3.3 70B", "DEEPSEEK R1 70B"};
+  const char* descs[] = {
+    "Versatile & Balanced",
+    "Reasoning & Logic"
+  };
+
+  int itemHeight = 50;
+  int startY = 45;
+
+  for (int i = 0; i < 2; i++) {
+    int y = startY + (i * (itemHeight + 10));
+
+    if (i == (int)selectedGroqModel) {
+      canvas.fillRect(10, y, SCREEN_WIDTH - 20, itemHeight, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRect(10, y, SCREEN_WIDTH - 20, itemHeight, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    canvas.setCursor(20, y + 10);
+    canvas.print(models[i]);
+
+    canvas.setTextSize(1);
+    canvas.setCursor(20, y + 32);
+    canvas.print(descs[i]);
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DOWN=Select | SELECT=OK | L+R=Back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -4686,17 +4745,18 @@ void showAIModeSelection(int x_offset) {
   canvas.print("SELECT AI MODE");
   canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
   
-  const char* modes[] = {"SUBARU AWA (Online)", "STANDARD AI (Online)", "LOCAL AI (Offline)"};
+  const char* modes[] = {"SUBARU AWA (Online)", "STANDARD AI (Online)", "GROQ CLOUD (Speed)", "LOCAL AI (Offline)"};
   const char* descriptions[] = {
     "Personal, Memory, Friendly",
     "Helpful, Informative, Pro",
+    "Llama 3.3 / DeepSeek R1",
     "Fast, Private, No-Internet"
   };
   
-  int itemHeight = 42;
-  int startY = 30;
+  int itemHeight = 35;
+  int startY = 28;
   
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int y = startY + (i * itemHeight);
     
     if (i == (int)currentAIMode) {
@@ -5498,6 +5558,107 @@ void sendToGemini() {
   scrollOffset = 0;
 }
 
+void filterThinkTag(String &text) {
+  int startIdx = text.indexOf("<think>");
+  while (startIdx != -1) {
+    int endIdx = text.indexOf("</think>", startIdx);
+    if (endIdx != -1) {
+      text.remove(startIdx, endIdx - startIdx + 8);
+    } else {
+      text.remove(startIdx);
+      break;
+    }
+    startIdx = text.indexOf("<think>");
+  }
+  text.trim();
+}
+
+void sendToGroq() {
+  currentState = STATE_LOADING;
+  loadingFrame = 0;
+
+  for (int i = 0; i < 5; i++) {
+    showLoadingAnimation(0);
+    delay(100);
+    loadingFrame++;
+  }
+
+  if (groqApiKey.length() == 0 || groqApiKey.startsWith("PASTE_")) {
+    ledError();
+    aiResponse = "Groq API Key not found. Please add it to /api_keys.json on your SD card.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    ledError();
+    aiResponse = "Error: WiFi not connected. Please connect to a network first.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    return;
+  }
+
+  HTTPClient http;
+  http.begin(groqEndpoint);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + groqApiKey);
+  http.setTimeout(30000);
+
+  String modelName = (selectedGroqModel == GROQ_DEEPSEEK_R1) ? "deepseek-r1-distill-llama-70b" : "llama-3.3-70b-versatile";
+
+  String escapedInput = userInput;
+  escapedInput.replace("\\", "\\\\");
+  escapedInput.replace("\"", "\\\"");
+  escapedInput.replace("\n", "\\n");
+  escapedInput.replace("\r", "");
+
+  String jsonPayload = "{\"model\":\"" + modelName + "\",";
+  jsonPayload += "\"messages\":[";
+  jsonPayload += "{\"role\":\"system\",\"content\":\"Kamu adalah asisten AI yang cerdas dan membantu. Berikan jawaban dalam bahasa Indonesia yang baik dan benar.\"},";
+  jsonPayload += "{\"role\":\"user\",\"content\":\"" + escapedInput + "\"}";
+  jsonPayload += "],";
+  jsonPayload += "\"temperature\":0.7}";
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    JsonDocument responseDoc;
+    DeserializationError error = deserializeJson(responseDoc, response);
+
+    if (!error && !responseDoc["choices"].isNull()) {
+      JsonArray choices = responseDoc["choices"];
+      if (choices.size() > 0) {
+        aiResponse = choices[0]["message"]["content"].as<String>();
+
+        if (selectedGroqModel == GROQ_DEEPSEEK_R1) {
+          filterThinkTag(aiResponse);
+        }
+
+        aiResponse.trim();
+        appendChatToSD(userInput, aiResponse);
+        ledSuccess();
+        triggerNeoPixelEffect(pixels.Color(0, 255, 100), 1500);
+      } else {
+        aiResponse = "I couldn't generate a response. Please try again.";
+        ledError();
+      }
+    } else {
+      aiResponse = "Failed to parse AI response.";
+      ledError();
+    }
+  } else {
+    ledError();
+    aiResponse = "Groq HTTP Error: " + String(httpResponseCode);
+    triggerNeoPixelEffect(pixels.Color(255, 0, 0), 1000);
+  }
+
+  http.end();
+  currentState = STATE_CHAT_RESPONSE;
+  scrollOffset = 0;
+}
+
 void fetchPomodoroQuote() {
   pomoQuote = "";
   pomoQuoteLoading = true;
@@ -5881,7 +6042,11 @@ void handleKeyPress() {
   if (strcmp(key, "OK") == 0) {
     if (keyboardContext == CONTEXT_CHAT) {
       if (userInput.length() > 0) {
-        sendToGemini();
+        if (currentAIMode == MODE_GROQ) {
+          sendToGroq();
+        } else {
+          sendToGemini();
+        }
       }
     } else if (keyboardContext == CONTEXT_ESPNOW_CHAT) {
       if (userInput.length() > 0) {
@@ -6131,6 +6296,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_LOCAL_AI_CHAT:
       drawLocalAiChat();
+      break;
+    case STATE_GROQ_MODEL_SELECT:
+      drawGroqModelSelect();
       break;
     case STATE_PIN_LOCK:
       drawPinLock(false);
@@ -6819,7 +6987,7 @@ void loop() {
         buttonPressed = true;
       }
       if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        if ((int)currentAIMode < 2) {
+        if ((int)currentAIMode < 3) {
           currentAIMode = (AIMode)((int)currentAIMode + 1);
         }
         showAIModeSelection(0);
@@ -6830,6 +6998,8 @@ void loop() {
         if (currentAIMode == MODE_LOCAL) {
           showStatus("Local AI WIP", 1500);
           changeState(STATE_MAIN_MENU);
+        } else if (currentAIMode == MODE_GROQ) {
+          changeState(STATE_GROQ_MODEL_SELECT);
         } else {
           userInput = "";
           keyboardContext = CONTEXT_CHAT;
@@ -6864,6 +7034,9 @@ void loop() {
           break;
         case STATE_MAIN_MENU:
           if (menuSelection > 0) menuSelection--;
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          if ((int)selectedGroqModel > 0) selectedGroqModel = (GroqModel)((int)selectedGroqModel - 1);
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection > 0) menuSelection--;
@@ -6927,6 +7100,9 @@ void loop() {
           break;
         case STATE_MAIN_MENU:
           if (menuSelection < 12) menuSelection++;
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          if ((int)selectedGroqModel < 1) selectedGroqModel = (GroqModel)((int)selectedGroqModel + 1);
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -7055,6 +7231,14 @@ void loop() {
       switch(currentState) {
         case STATE_MAIN_MENU:
           handleMainMenuSelect();
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          userInput = "";
+          keyboardContext = CONTEXT_CHAT;
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          changeState(STATE_KEYBOARD);
           break;
         case STATE_POMODORO:
           if (pomoState == POMO_IDLE) {
@@ -7253,6 +7437,10 @@ void loop() {
         case STATE_TOOL_FILE_MANAGER:
         case STATE_FILE_VIEWER:
         case STATE_GAME_HUB:
+          changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          isSelectingMode = true;
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_DEVICE_INFO:
