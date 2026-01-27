@@ -153,7 +153,8 @@ enum AppState {
   STATE_MUSIC_PLAYER,
   STATE_POMODORO,
   STATE_SCREENSAVER,
-  STATE_BRIGHTNESS_ADJUST
+  STATE_BRIGHTNESS_ADJUST,
+  STATE_GROQ_MODEL_SELECT
 };
 
 AppState currentState = STATE_BOOT;
@@ -665,9 +666,14 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
 
 // ============ AI MODE SELECTION ============
-enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL };
+enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
 AIMode currentAIMode = MODE_SUBARU;
 bool isSelectingMode = false;
+
+// ============ GROQ API CONFIG ============
+String groqApiKey = "";
+int selectedGroqModel = 0;
+const char* groqModels[] = {"llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"};
 
 // ============ ESP-NOW CHAT SYSTEM ============
 #define MAX_ESPNOW_MESSAGES 50
@@ -1128,6 +1134,8 @@ void drawPomodoroTimer();
 void updatePomodoroLogic();
 void fetchPomodoroQuote();
 void updateAndDrawSmokeVisualizer();
+void drawGroqModelSelect();
+void sendToGroq();
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
 uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
@@ -1544,6 +1552,7 @@ void loadApiKeys() {
       if (!error) {
         geminiApiKey = doc["gemini_api_key"] | "";
         binderbyteApiKey = doc["binderbyte_api_key"] | "";
+        groqApiKey = doc["groq_api_key"] | "";
         Serial.println("✓ API keys loaded from SD card.");
       } else {
         Serial.print("Failed to parse api_keys.json: ");
@@ -1558,6 +1567,7 @@ void loadApiKeys() {
       JsonDocument doc;
       doc["gemini_api_key"] = "PASTE_YOUR_GEMINI_API_KEY_HERE";
       doc["binderbyte_api_key"] = "PASTE_YOUR_BINDERBYTE_API_KEY_HERE";
+      doc["groq_api_key"] = "PASTE_YOUR_GROQ_API_KEY_HERE";
       if (serializeJson(doc, file) == 0) {
         Serial.println("Failed to write to api_keys.json");
       } else {
@@ -4675,6 +4685,52 @@ void updateParticles() {
 }
 
 // ============ AI MODE SELECTION SCREEN ============
+// ============ GROQ MODEL SELECTION SCREEN ============
+void drawGroqModelSelect() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(50, 20);
+  canvas.print("SELECT GROQ MODEL");
+
+  const char* options[] = {"Llama 3.3 70B", "DeepSeek R1 70B"};
+
+  int startY = 60;
+  int itemHeight = 40;
+
+  for (int i = 0; i < 2; i++) {
+    int y = startY + (i * (itemHeight + 10));
+
+    if (i == selectedGroqModel) {
+      canvas.fillRoundRect(20, y, SCREEN_WIDTH - 40, itemHeight, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRoundRect(20, y, SCREEN_WIDTH - 40, itemHeight, 8, COLOR_BORDER);
+      canvas.setTextColor(COLOR_PRIMARY);
+    }
+
+    canvas.setTextSize(2);
+    int16_t x1, y1;
+    uint16_t w, h;
+    canvas.getTextBounds(options[i], 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, y + 12);
+    canvas.print(options[i]);
+  }
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Select | SELECT=OK | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 void showAIModeSelection(int x_offset) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -4686,17 +4742,18 @@ void showAIModeSelection(int x_offset) {
   canvas.print("SELECT AI MODE");
   canvas.drawFastHLine(0, 25, SCREEN_WIDTH, COLOR_BORDER);
   
-  const char* modes[] = {"SUBARU AWA (Online)", "STANDARD AI (Online)", "LOCAL AI (Offline)"};
+  const char* modes[] = {"SUBARU AWA (Online)", "STANDARD AI (Online)", "LOCAL AI (Offline)", "GROQ CLOUD (Online)"};
   const char* descriptions[] = {
     "Personal, Memory, Friendly",
     "Helpful, Informative, Pro",
-    "Fast, Private, No-Internet"
+    "Fast, Private, No-Internet",
+    "Llama 3.3 & DeepSeek R1"
   };
   
-  int itemHeight = 42;
-  int startY = 30;
+  int itemHeight = 34;
+  int startY = 28;
   
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     int y = startY + (i * itemHeight);
     
     if (i == (int)currentAIMode) {
@@ -5498,6 +5555,91 @@ void sendToGemini() {
   scrollOffset = 0;
 }
 
+void sendToGroq() {
+  currentState = STATE_LOADING;
+  loadingFrame = 0;
+
+  for (int i = 0; i < 5; i++) {
+    showLoadingAnimation(0);
+    delay(100);
+    loadingFrame++;
+  }
+
+  if (groqApiKey.length() == 0 || groqApiKey.startsWith("PASTE_")) {
+    ledError();
+    aiResponse = "Groq API Key not found. Please add it to /api_keys.json on your SD card.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    ledError();
+    aiResponse = "Error: WiFi not connected. Please connect to a network first.";
+    currentState = STATE_CHAT_RESPONSE;
+    scrollOffset = 0;
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure(); // Skip certificate validation for simplicity
+  HTTPClient http;
+
+  http.begin(client, "https://api.groq.com/openai/v1/chat/completions");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + groqApiKey);
+  http.setTimeout(30000);
+
+  String modelName = groqModels[selectedGroqModel];
+
+  JsonDocument doc;
+  doc["model"] = modelName;
+  JsonArray messages = doc["messages"].to<JsonArray>();
+  JsonObject msg1 = messages.add<JsonObject>();
+  msg1["role"] = "user";
+  msg1["content"] = userInput;
+
+  String jsonPayload;
+  serializeJson(doc, jsonPayload);
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode == 200) {
+    String response = http.getString();
+    JsonDocument responseDoc;
+    DeserializationError error = deserializeJson(responseDoc, response);
+
+    if (!error) {
+      aiResponse = responseDoc["choices"][0]["message"]["content"].as<String>();
+      aiResponse.trim();
+
+      // Filter <think> tags for DeepSeek R1
+      if (modelName.indexOf("deepseek") != -1) {
+        int thinkEnd = aiResponse.indexOf("</think>");
+        if (thinkEnd != -1) {
+          aiResponse = aiResponse.substring(thinkEnd + 8);
+          aiResponse.trim();
+        }
+      }
+
+      appendChatToSD(userInput, aiResponse);
+      ledSuccess();
+      triggerNeoPixelEffect(pixels.Color(0, 255, 100), 1500);
+    } else {
+      ledError();
+      aiResponse = "Error: Failed to parse Groq API response.";
+    }
+  } else {
+    ledError();
+    aiResponse = "Groq API Error: " + String(httpResponseCode);
+    if (httpResponseCode == 401) aiResponse += " (Invalid API Key)";
+  }
+
+  http.end();
+  currentState = STATE_CHAT_RESPONSE;
+  scrollOffset = 0;
+}
+
 void fetchPomodoroQuote() {
   pomoQuote = "";
   pomoQuoteLoading = true;
@@ -5881,7 +6023,11 @@ void handleKeyPress() {
   if (strcmp(key, "OK") == 0) {
     if (keyboardContext == CONTEXT_CHAT) {
       if (userInput.length() > 0) {
-        sendToGemini();
+        if (currentAIMode == MODE_GROQ) {
+          sendToGroq();
+        } else {
+          sendToGemini();
+        }
       }
     } else if (keyboardContext == CONTEXT_ESPNOW_CHAT) {
       if (userInput.length() > 0) {
@@ -6149,6 +6295,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_BRIGHTNESS_ADJUST:
       drawBrightnessMenu();
+      break;
+    case STATE_GROQ_MODEL_SELECT:
+      drawGroqModelSelect();
       break;
     default:
       drawMainMenuCool();
@@ -6819,7 +6968,7 @@ void loop() {
         buttonPressed = true;
       }
       if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        if ((int)currentAIMode < 2) {
+        if ((int)currentAIMode < 3) {
           currentAIMode = (AIMode)((int)currentAIMode + 1);
         }
         showAIModeSelection(0);
@@ -6830,6 +6979,9 @@ void loop() {
         if (currentAIMode == MODE_LOCAL) {
           showStatus("Local AI WIP", 1500);
           changeState(STATE_MAIN_MENU);
+        } else if (currentAIMode == MODE_GROQ) {
+          selectedGroqModel = 0;
+          changeState(STATE_GROQ_MODEL_SELECT);
         } else {
           userInput = "";
           keyboardContext = CONTEXT_CHAT;
@@ -6914,6 +7066,9 @@ void loop() {
         case STATE_FILE_VIEWER:
           if (fileViewerScrollOffset > 0) fileViewerScrollOffset -= 20;
           break;
+        case STATE_GROQ_MODEL_SELECT:
+          if (selectedGroqModel > 0) selectedGroqModel--;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -6978,6 +7133,9 @@ void loop() {
           break;
         case STATE_FILE_VIEWER:
           fileViewerScrollOffset += 20;
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          if (selectedGroqModel < 1) selectedGroqModel++;
           break;
         default: break;
       }
@@ -7214,6 +7372,14 @@ void loop() {
         case STATE_TOOL_COURIER:
           checkResiReal();
           break;
+        case STATE_GROQ_MODEL_SELECT:
+          userInput = "";
+          keyboardContext = CONTEXT_CHAT;
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          changeState(STATE_KEYBOARD);
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -7290,6 +7456,10 @@ void loop() {
           break;
         case STATE_CHAT_RESPONSE:
           changeState(STATE_KEYBOARD);
+          break;
+        case STATE_GROQ_MODEL_SELECT:
+          isSelectingMode = true;
+          changeState(STATE_MAIN_MENU);
           break;
         case STATE_KEYBOARD:
           if (keyboardContext == CONTEXT_CHAT) {
