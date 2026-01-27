@@ -1550,9 +1550,12 @@ void loadApiKeys() {
       JsonDocument doc;
       DeserializationError error = deserializeJson(doc, file);
       if (!error) {
-        geminiApiKey = doc["gemini_api_key"] | "";
-        binderbyteApiKey = doc["binderbyte_api_key"] | "";
-        groqApiKey = doc["groq_api_key"] | "";
+        geminiApiKey = doc["gemini_api_key"].as<String>();
+        geminiApiKey.trim();
+        binderbyteApiKey = doc["binderbyte_api_key"].as<String>();
+        binderbyteApiKey.trim();
+        groqApiKey = doc["groq_api_key"].as<String>();
+        groqApiKey.trim();
         Serial.println("✓ API keys loaded from SD card.");
       } else {
         Serial.print("Failed to parse api_keys.json: ");
@@ -3907,7 +3910,7 @@ String buildEnhancedPrompt(String currentMessage) {
   }
   prompt += "\n\n";
   
-  if (currentAIMode == MODE_SUBARU && ctx.totalInteractions > 0) {
+  if (ctx.totalInteractions > 0) {
     prompt += "=== CONVERSATION STATISTICS ===\n";
     prompt += "Total percakapan dengan user: " + String(ctx.totalInteractions) + " pesan\n";
     prompt += "History size: " + String(chatHistory.length()) + " bytes\n";
@@ -3924,7 +3927,7 @@ String buildEnhancedPrompt(String currentMessage) {
     prompt += "\n";
   }
   
-  if (currentAIMode == MODE_SUBARU && ctx.fullHistory.length() > 0) {
+  if (ctx.fullHistory.length() > 0) {
     prompt += "=== COMPLETE CONVERSATION HISTORY ===\n";
     prompt += "(Kamu HARUS membaca dan mengingat SEMUA percakapan ini)\n\n";
     prompt += ctx.fullHistory;
@@ -3935,21 +3938,19 @@ String buildEnhancedPrompt(String currentMessage) {
   prompt += currentMessage;
   prompt += "\n\n";
   
+  prompt += "=== CRITICAL INSTRUCTIONS (MEMORY & RECALL) ===\n";
+  prompt += "1. BACA seluruh history percakapan di atas dengan sangat teliti.\n";
+  prompt += "2. INGAT semua detail penting, nama, fakta, dan preferensi yang pernah user ceritakan.\n";
+  prompt += "3. Jika user menyebut sesuatu yang pernah dibahas sebelumnya, TUNJUKKAN bahwa kamu ingat dengan memberikan referensi spesifik.\n";
+  prompt += "4. Gunakan nama user jika sudah disebutkan sebelumnya dalam history.\n";
+  prompt += "5. Berikan respons yang personal dan nyambung dengan percakapan sebelumnya.\n";
+  prompt += "6. Jangan berpura-pura baru kenal; kamu adalah AI yang memiliki memori jangka panjang dari history tersebut.\n";
+  prompt += "7. Pastikan semua jawabanmu konsisten dengan informasi yang sudah diberikan sebelumnya.\n\n";
+
   if (currentAIMode == MODE_SUBARU) {
-    prompt += "=== CRITICAL INSTRUCTIONS ===\n";
-    prompt += "1. BACA seluruh history di atas dengan teliti.\n";
-    prompt += "2. INGAT semua detail penting yang pernah user ceritakan.\n";
-    prompt += "3. Kalau user menyebut sesuatu yang pernah dibahas, TUNJUKKAN kamu ingat dengan specific reference.\n";
-    prompt += "4. Gunakan nama user (jika sudah disebutkan di history).\n";
-    prompt += "5. Respons harus natural, personal, dan show that you remember past conversations.\n";
-    prompt += "6. Jangan bilang 'sepertinya kamu pernah bilang' - kamu TAHU PASTI dari history.\n";
-    prompt += "7. Track progress atau perubahan dari topik recurring.\n";
-    prompt += "8. Bicaralah seperti teman dekat yang BENAR-BENAR kenal user dari percakapan-percakapan sebelumnya.\n\n";
-    prompt += "Sekarang jawab pesan user dengan personality Subaru Awa dan FULL MEMORY dari history:";
+    prompt += "Sekarang jawab pesan user dengan personality Subaru Awa dan gunakan FULL MEMORY dari history di atas:";
   } else {
-    prompt += "=== INSTRUCTIONS ===\n";
-    prompt += "Jawab pertanyaan user dengan jelas, informatif, dan helpful. ";
-    prompt += "Gunakan format yang terstruktur jika diperlukan.";
+    prompt += "Sekarang jawab pesan user dengan jelas, informatif, dan pastikan kamu mengingat semua konteks dari history di atas:";
   }
   
   return prompt;
@@ -4009,14 +4010,16 @@ void appendChatToSD(String userText, String aiText) {
     return;
   }
 
-  String chatLogFile;
+  String chatLogFile = CHAT_HISTORY_FILE; // Unified history file
   String aiPersona;
 
   if (currentAIMode == MODE_STANDARD) {
-    chatLogFile = "/standard AI .txt";
     aiPersona = "STANDARD AI";
-  } else { // Default to Subaru
-    chatLogFile = CHAT_HISTORY_FILE;
+  } else if (currentAIMode == MODE_GROQ) {
+    aiPersona = (selectedGroqModel == 0) ? "LLAMA-3.3" : "DEEPSEEK-R1";
+  } else if (currentAIMode == MODE_LOCAL) {
+    aiPersona = "LOCAL AI";
+  } else {
     aiPersona = "SUBARU";
   }
   
@@ -4066,20 +4069,22 @@ void appendChatToSD(String userText, String aiText) {
   file.flush();
   file.close();
   
-  // Only update the main chat history for Subaru mode to keep context
-  if (currentAIMode == MODE_SUBARU) {
-    String memoryEntry = timestamp + "\nUser: " + userText + "\nSubaru: " + aiText + "\n---\n";
+  // Update the main chat history for all modes to keep context
+  String personaName = aiPersona;
+  personaName.toLowerCase();
+  if (personaName.length() > 0) personaName.setCharAt(0, toupper(personaName.charAt(0)));
   
-    if (chatHistory.length() + memoryEntry.length() >= MAX_HISTORY_SIZE) {
-      int trimPoint = chatHistory.length() * 0.3;
-      int separatorPos = chatHistory.indexOf("---\n", trimPoint);
-      if (separatorPos != -1) {
-        chatHistory = chatHistory.substring(separatorPos + 4);
-      }
-    }
+  String memoryEntry = timestamp + "\nUser: " + userText + "\n" + personaName + ": " + aiText + "\n---\n";
 
-    chatHistory += memoryEntry;
+  if (chatHistory.length() + memoryEntry.length() >= MAX_HISTORY_SIZE) {
+    int trimPoint = chatHistory.length() * 0.3;
+    int separatorPos = chatHistory.indexOf("---\n", trimPoint);
+    if (separatorPos != -1) {
+      chatHistory = chatHistory.substring(separatorPos + 4);
+    }
   }
+
+  chatHistory += memoryEntry;
 
   chatMessageCount++;
 
@@ -5591,13 +5596,17 @@ void sendToGroq() {
   http.setTimeout(30000);
 
   String modelName = groqModels[selectedGroqModel];
+  String enhancedPrompt = buildEnhancedPrompt(userInput);
 
   JsonDocument doc;
   doc["model"] = modelName;
+  doc["max_tokens"] = 4096;
+  doc["temperature"] = 0.7;
+
   JsonArray messages = doc["messages"].to<JsonArray>();
   JsonObject msg1 = messages.add<JsonObject>();
   msg1["role"] = "user";
-  msg1["content"] = userInput;
+  msg1["content"] = enhancedPrompt;
 
   String jsonPayload;
   serializeJson(doc, jsonPayload);
