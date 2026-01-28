@@ -5600,8 +5600,15 @@ void sendToGroq() {
 
   JsonDocument doc;
   doc["model"] = modelName;
-  doc["max_tokens"] = 4096;
-  doc["temperature"] = 0.7;
+
+  // Set parameters based on model
+  if (modelName.indexOf("deepseek") != -1) {
+    doc["max_tokens"] = 2048; // DeepSeek R1 on Groq has lower limits in free tier
+    doc["temperature"] = 0.6;  // Recommended for R1
+  } else {
+    doc["max_tokens"] = 4096;
+    doc["temperature"] = 0.7;
+  }
 
   JsonArray messages = doc["messages"].to<JsonArray>();
   JsonObject msg1 = messages.add<JsonObject>();
@@ -5640,6 +5647,8 @@ void sendToGroq() {
     }
   } else {
     ledError();
+    String errorBody = http.getString();
+    Serial.println("Groq API Error Response: " + errorBody);
     aiResponse = "Groq API Error: " + String(httpResponseCode);
     if (httpResponseCode == 401) aiResponse += " (Invalid API Key)";
   }
