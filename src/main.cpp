@@ -1041,6 +1041,32 @@ const char* AI_SYSTEM_PROMPT_STANDARD =
   "- Membantu dengan tugas-tugas praktis\n\n"
   "TONE: Profesional, informatif, dan membantu.";
 
+const char* AI_SYSTEM_PROMPT_LOCAL =
+  "Kamu adalah Local AI yang berjalan di perangkat keras ESP32-S3 tanpa koneksi internet. "
+  "Fokus utamamu adalah memberikan jawaban yang sangat ringkas, to-the-point, dan hemat memori. "
+  "Kamu adalah asisten teknis yang handal dalam keterbatasan.\n\n"
+  "TONE: Ringkas, teknis, dan langsung pada intinya.";
+
+const char* AI_SYSTEM_PROMPT_LLAMA =
+  "Kamu adalah Llama 3.3, AI yang penuh energi, imajinatif, dan ahli dalam bercerita. "
+  "Kamu suka mengeksplorasi ide-ide baru dan memberikan inspirasi kepada user. "
+  "Jawabanmu harus terasa hidup, ramah, dan penuh dengan detail kreatif.\n\n"
+  "COMMUNICATION STYLE:\n"
+  "- Kreatif dan ekspresif\n"
+  "- Gunakan analogi yang menarik\n"
+  "- Dorong eksplorasi ide\n\n"
+  "TONE: Hangat, inspiratif, dan komunikatif.";
+
+const char* AI_SYSTEM_PROMPT_DEEPSEEK =
+  "Kamu adalah DeepSeek R1, AI spesialis logika dan pemikiran mendalam. "
+  "Kamu selalu mendekati pertanyaan dengan metode ilmiah, menganalisis setiap detail secara sistematis, "
+  "dan memberikan solusi yang teruji secara logis. Kamu sangat ahli dalam hal teknis dan presisi.\n\n"
+  "COMMUNICATION STYLE:\n"
+  "- Logis dan sistematis\n"
+  "- Analisis langkah-demi-langkah\n"
+  "- Fokus pada akurasi teknis\n\n"
+  "TONE: Profesional, objektif, dan sangat presisi.";
+
 // ============ FORWARD DECLARATIONS ============
 void drawDeauthSelect();
 void drawDeauthAttack();
@@ -3905,6 +3931,16 @@ String buildEnhancedPrompt(String currentMessage) {
   prompt += "=== IDENTITY & PERSONALITY ===\n";
   if (currentAIMode == MODE_SUBARU) {
     prompt += AI_SYSTEM_PROMPT_SUBARU;
+  } else if (currentAIMode == MODE_STANDARD) {
+    prompt += AI_SYSTEM_PROMPT_STANDARD;
+  } else if (currentAIMode == MODE_LOCAL) {
+    prompt += AI_SYSTEM_PROMPT_LOCAL;
+  } else if (currentAIMode == MODE_GROQ) {
+    if (selectedGroqModel == 0) {
+      prompt += AI_SYSTEM_PROMPT_LLAMA;
+    } else {
+      prompt += AI_SYSTEM_PROMPT_DEEPSEEK;
+    }
   } else {
     prompt += AI_SYSTEM_PROMPT_STANDARD;
   }
@@ -3949,6 +3985,14 @@ String buildEnhancedPrompt(String currentMessage) {
 
   if (currentAIMode == MODE_SUBARU) {
     prompt += "Sekarang jawab pesan user dengan personality Subaru Awa dan gunakan FULL MEMORY dari history di atas:";
+  } else if (currentAIMode == MODE_LOCAL) {
+    prompt += "Sekarang jawab pesan user secara singkat dan padat sebagai Local AI:";
+  } else if (currentAIMode == MODE_GROQ) {
+    if (selectedGroqModel == 0) {
+      prompt += "Sekarang jawab pesan user dengan gaya kreatif Llama 3.3:";
+    } else {
+      prompt += "Sekarang jawab pesan user dengan analisis logis DeepSeek R1:";
+    }
   } else {
     prompt += "Sekarang jawab pesan user dengan jelas, informatif, dan pastikan kamu mengingat semua konteks dari history di atas:";
   }
