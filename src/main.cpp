@@ -154,7 +154,9 @@ enum AppState {
   STATE_POMODORO,
   STATE_SCREENSAVER,
   STATE_BRIGHTNESS_ADJUST,
-  STATE_GROQ_MODEL_SELECT
+  STATE_GROQ_MODEL_SELECT,
+  STATE_GAME_CONSOLE_PONG,
+  STATE_GAME_CONSOLE_LOGS
 };
 
 AppState currentState = STATE_BOOT;
@@ -281,6 +283,66 @@ struct PongParticle {
 };
 #define MAX_PONG_PARTICLES 20
 PongParticle pongParticles[MAX_PONG_PARTICLES];
+
+// ============ GAME CONSOLE SYSTEM ============
+struct GameLog {
+    String message;
+    unsigned long timestamp;
+};
+
+struct GameConsole {
+    static const int MAX_LOGS = 15;
+    GameLog logs[MAX_LOGS];
+    int logHead = 0;
+    int logCount = 0;
+    int lastPongCmd = -1;
+    bool lastBtnStates[50]; // Indexed by GPIO pin
+
+    void init() {
+        memset(lastBtnStates, 0, sizeof(lastBtnStates));
+        addLog("SYSTEM", "Console Initialized");
+    }
+
+    void addLog(String tag, String msg) {
+        logs[logHead] = {"[" + tag + "] " + msg, millis()};
+        logHead = (logHead + 1) % MAX_LOGS;
+        if (logCount < MAX_LOGS) logCount++;
+    }
+
+    void update() {
+        checkButton(BTN_UP, "UP");
+        checkButton(BTN_DOWN, "DOWN");
+        checkButton(BTN_LEFT, "LEFT");
+        checkButton(BTN_RIGHT, "RIGHT");
+        checkButton(BTN_SELECT, "SELECT");
+        checkButton(BTN_BACK, "BACK");
+
+        // Pong specific logic: 0=idle, 1=up, 2=down
+        int currentCmd = 0;
+        if (digitalRead(BTN_UP) == BTN_ACT) currentCmd = 1;
+        else if (digitalRead(BTN_DOWN) == BTN_ACT) currentCmd = 2;
+
+        if (currentCmd != lastPongCmd) {
+            addLog("PONG", "CMD_SEND: " + String(currentCmd));
+            lastPongCmd = currentCmd;
+        }
+    }
+
+    void checkButton(int pin, String name) {
+        if (pin < 0 || pin >= 50) return;
+        bool currentState = (digitalRead(pin) == BTN_ACT);
+        if (currentState != lastBtnStates[pin]) {
+            if (currentState) {
+                addLog("BTN", name + " PRESSED");
+            } else {
+                addLog("BTN", name + " RELEASED");
+            }
+            lastBtnStates[pin] = currentState;
+        }
+    }
+};
+
+GameConsole gConsole;
 
 // ============ GAME: SNAKE ============
 #define SNAKE_GRID_WIDTH 32
@@ -1126,6 +1188,8 @@ void drawGameOfLife();
 void drawFireEffect();
 void drawPongGame();
 void updatePongLogic();
+void drawConsolePong();
+void drawConsoleLogs();
 void drawRacingGame();
 void updateRacingLogic();
 void drawAboutScreen();
@@ -1913,6 +1977,100 @@ void drawESPNowChat() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void drawConsoleLogs() {
+  canvas.fillScreen(COLOR_BG);
+
+  // Grid background for high-tech look
+  for(int x=0; x<SCREEN_WIDTH; x+=40) canvas.drawFastVLine(x, 0, SCREEN_HEIGHT, 0x0841);
+  for(int y=0; y<SCREEN_HEIGHT; y+=40) canvas.drawFastHLine(0, y, SCREEN_WIDTH, 0x0841);
+
+  // Header
+  canvas.fillRect(0, 0, SCREEN_WIDTH, 22, COLOR_PANEL);
+  canvas.drawFastHLine(0, 22, SCREEN_WIDTH, COLOR_PRIMARY);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 7);
+  canvas.print("SYSTEM_TERMINAL :: SESSION_0x" + String(millis(), HEX));
+
+  // Blinking dot
+  if ((millis()/500) % 2 == 0) canvas.fillCircle(SCREEN_WIDTH - 15, 10, 3, 0x07E0);
+
+  int y = 30;
+  int startIdx = (gConsole.logHead + gConsole.MAX_LOGS - gConsole.logCount) % gConsole.MAX_LOGS;
+  for (int i = 0; i < gConsole.logCount; i++) {
+    int idx = (startIdx + i) % gConsole.MAX_LOGS;
+    GameLog& log = gConsole.logs[idx];
+
+    canvas.setCursor(10, y);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.printf("[%05lu] ", log.timestamp % 100000);
+
+    if (log.message.indexOf("PONG") != -1) canvas.setTextColor(0x07E0); // Green for Pong
+    else if (log.message.indexOf("BTN") != -1) canvas.setTextColor(0xFDA0); // Orange for Buttons
+    else canvas.setTextColor(COLOR_TEXT);
+
+    canvas.print(log.message);
+    y += 11;
+    if (y > SCREEN_HEIGHT - 5) break;
+  }
+
+  // Scanline effect
+  int scanY = (millis() / 15) % SCREEN_HEIGHT;
+  canvas.drawFastHLine(0, scanY, SCREEN_WIDTH, 0x2104);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawConsolePong() {
+  canvas.fillScreen(COLOR_BG);
+
+  // Split Screen: Left (Pong), Right (Console)
+  int splitX = 210;
+
+  // Left Side: Pong elements
+  for (int i = 0; i < SCREEN_HEIGHT; i += 20) {
+    canvas.drawFastVLine(splitX/2, i, 10, COLOR_PANEL);
+  }
+
+  // Paddles (Scale coordinates if necessary, but here we just bound them)
+  canvas.fillRect(5, player1.y, 10, 40, COLOR_PRIMARY);
+  canvas.fillRect(splitX - 15, player2.y, 10, 40, COLOR_PRIMARY);
+
+  // Ball
+  float ballX = (pongBall.x / (float)SCREEN_WIDTH) * splitX;
+  canvas.fillRect(ballX, pongBall.y, 10, 10, COLOR_PRIMARY);
+
+  // Right Side: Console Panel
+  canvas.fillRect(splitX, 0, SCREEN_WIDTH - splitX, SCREEN_HEIGHT, COLOR_PANEL);
+  canvas.drawFastVLine(splitX, 0, SCREEN_HEIGHT, COLOR_PRIMARY);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(1);
+  canvas.setCursor(splitX + 5, 5);
+  canvas.print("CMD_STREAM");
+  canvas.drawFastHLine(splitX + 5, 15, SCREEN_WIDTH - splitX - 10, COLOR_PRIMARY);
+
+  int y = 25;
+  int startIdx = (gConsole.logHead + gConsole.MAX_LOGS - gConsole.logCount) % gConsole.MAX_LOGS;
+  for (int i = 0; i < gConsole.logCount; i++) {
+    int idx = (startIdx + i) % gConsole.MAX_LOGS;
+    if (gConsole.logs[idx].message.indexOf("PONG") != -1) {
+        canvas.setCursor(splitX + 5, y);
+        canvas.setTextColor(0x07E0);
+        canvas.print("> ");
+        canvas.print(gConsole.logs[idx].message.substring(7));
+        y += 10;
+    }
+    if (y > SCREEN_HEIGHT - 10) break;
+  }
+
+  // Decoration
+  canvas.drawRect(splitX + 2, 2, SCREEN_WIDTH - splitX - 4, SCREEN_HEIGHT - 4, 0x4208);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 void drawWifiInfo() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -2353,8 +2511,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Racing", "Pong", "Snake", "Jumper", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 8, 45, 22, 2);
+  const char* items[] = {"Racing", "Pong", "Snake", "Jumper", "Starfield Warp", "Game of Life", "Doom Fire", "Console: Pong", "Console: Logs", "Back"};
+  drawScrollableMenu(items, 10, 45, 22, 2);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6032,6 +6190,13 @@ void handleGameHubMenuSelect() {
       changeState(STATE_VIS_FIRE);
       break;
     case 7:
+      pongGameActive = false;
+      changeState(STATE_GAME_CONSOLE_PONG);
+      break;
+    case 8:
+      changeState(STATE_GAME_CONSOLE_LOGS);
+      break;
+    case 9:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -6317,6 +6482,12 @@ void refreshCurrentScreen() {
     case STATE_GAME_PONG:
       drawPongGame();
       break;
+    case STATE_GAME_CONSOLE_PONG:
+      drawConsolePong();
+      break;
+    case STATE_GAME_CONSOLE_LOGS:
+      drawConsoleLogs();
+      break;
     case STATE_GAME_SNAKE:
       drawSnakeGame();
       break;
@@ -6481,6 +6652,7 @@ void setup() {
 
     // --- Init Core Systems ---
     Serial.begin(115200);
+    gConsole.init();
     setCpuFrequencyMhz(CPU_FREQ); // Start at full speed
 
     // Init Pins
@@ -6651,6 +6823,8 @@ void loop() {
   if (dt > 0.1f) dt = 0.1f; // Cap dt to prevent huge jumps
   lastFrameMillis = currentMillis;
 
+  gConsole.update();
+
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
       int itemGap = 45; // Sesuaikan dengan celah menu baru
@@ -6743,7 +6917,7 @@ void loop() {
     updateDeauthAttack();
   }
 
-  if (currentState == STATE_GAME_PONG) {
+  if (currentState == STATE_GAME_PONG || currentState == STATE_GAME_CONSOLE_PONG) {
     updatePongLogic();
   }
 
@@ -6818,7 +6992,7 @@ void loop() {
       musicIsPlaying = (digitalRead(DFPLAYER_BUSY_PIN) == LOW);
     }
 
-    if (currentState == STATE_GAME_PONG) {
+    if (currentState == STATE_GAME_PONG || currentState == STATE_GAME_CONSOLE_PONG) {
       float paddleSpeed = 250.0f * dt;
       if (digitalRead(BTN_UP) == BTN_ACT) {
         player1.y = max(0.0f, player1.y - paddleSpeed);
@@ -7502,6 +7676,8 @@ void loop() {
         case STATE_VIS_STARFIELD:
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
+        case STATE_GAME_CONSOLE_PONG:
+        case STATE_GAME_CONSOLE_LOGS:
           changeState(STATE_GAME_HUB);
           break;
         case STATE_BRIGHTNESS_ADJUST:
