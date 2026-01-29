@@ -2579,7 +2579,7 @@ void updateRacingLogic() {
     // Find player's current segment
     int playerSegmentIndex = 0;
     float trackZ = 0;
-    while(trackZ + (track[playerSegmentIndex].length * SEGMENT_STEP_LENGTH) < playerCar.z) {
+    while(playerSegmentIndex < totalSegments - 1 && trackZ + (track[playerSegmentIndex].length * SEGMENT_STEP_LENGTH) < playerCar.z) {
         trackZ += track[playerSegmentIndex].length * SEGMENT_STEP_LENGTH;
         playerSegmentIndex++;
     }
@@ -2627,7 +2627,7 @@ void updateRacingLogic() {
     // Find AI's current segment
     int aiSegmentIndex = 0;
     trackZ = 0;
-    while(trackZ + (track[aiSegmentIndex].length * SEGMENT_STEP_LENGTH) < aiCar.z) {
+    while(aiSegmentIndex < totalSegments - 1 && trackZ + (track[aiSegmentIndex].length * SEGMENT_STEP_LENGTH) < aiCar.z) {
         trackZ += track[aiSegmentIndex].length * SEGMENT_STEP_LENGTH;
         aiSegmentIndex++;
     }
@@ -2714,7 +2714,7 @@ void initPlatformerGame() {
       (float)random(0, SCREEN_WIDTH),
       (float)random(0, SCREEN_HEIGHT),
       (float)random(10, 50) / 100.0f, // Slower speeds for distant stars
-      (float)random(1, 3),
+      (int)random(1, 3),
       (uint16_t)random(0x39E7, 0x7BEF) // Shades of gray
     };
   }
@@ -2753,16 +2753,17 @@ void updatePlatformerLogic() {
   if (jumperPlayer.vy > 0) { // Only check for collision when falling
     for (int i = 0; i < JUMPER_MAX_PLATFORMS; i++) {
       if (jumperPlatforms[i].active) {
-        float p_bottom = jumperPlayer.y + 10;
+        float p_bottom = jumperPlayer.y;
         float p_prev_bottom = p_bottom - jumperPlayer.vy;
         float plat_y = jumperPlatforms[i].y;
 
-        if ((jumperPlayer.x > jumperPlatforms[i].x - 10 && jumperPlayer.x < jumperPlatforms[i].x + jumperPlatforms[i].width) && // Horizontal check
-            (p_bottom > plat_y && p_prev_bottom < plat_y + 5) ) { // Vertical check
+        // Accurate horizontal check for 14-pixel wide player centered at x
+        if ((jumperPlayer.x + 7 > jumperPlatforms[i].x && jumperPlayer.x - 7 < jumperPlatforms[i].x + jumperPlatforms[i].width) &&
+            (p_bottom >= plat_y && p_prev_bottom <= plat_y + 5) ) { // Vertical check
 
-          jumperPlayer.y = plat_y - 10;
+          jumperPlayer.y = plat_y;
           jumperPlayer.vy = JUMPER_LIFT;
-          triggerJumperParticles(jumperPlayer.x, jumperPlayer.y + 10);
+          triggerJumperParticles(jumperPlayer.x, jumperPlayer.y);
 
           if (jumperPlatforms[i].type == PLATFORM_BREAKABLE) {
             jumperPlatforms[i].active = false;
@@ -2930,19 +2931,26 @@ void drawRacingGame() {
 
     float roadX = 0;
     float roadY = 0;
-    float roadZ = 0;
 
     int currentSegment = 0;
     int segmentBaseZ = 0;
 
-    for (int n = 0; n < SCREEN_HEIGHT / 2; n++) {
-        int y = n + SCREEN_HEIGHT / 2;
+    if (totalSegments <= 0) return;
 
-        float perspective = (float)n / (SCREEN_HEIGHT / 2.0f);
+    // Find starting segment
+    while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < camZ) {
+        segmentBaseZ += track[currentSegment].length * SEGMENT_STEP_LENGTH;
+        currentSegment = (currentSegment + 1) % totalSegments;
+    }
+
+    // Draw from bottom to top (foreground to horizon)
+    for (int y = SCREEN_HEIGHT - 1; y >= SCREEN_HEIGHT / 2; y--) {
+        float perspective = (float)(y - SCREEN_HEIGHT/2) / (SCREEN_HEIGHT / 2.0f);
         float roadWidth = 30 + perspective * 800;
+        float lineZ = camZ + (SCREEN_HEIGHT - y) * 20;
 
-        // Find which segment we are in
-        while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < camZ + n * 20) {
+        // Find which segment we are in for this line
+        while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < lineZ) {
             segmentBaseZ += track[currentSegment].length * SEGMENT_STEP_LENGTH;
             currentSegment = (currentSegment + 1) % totalSegments;
         }
@@ -2951,16 +2959,16 @@ void drawRacingGame() {
         roadX += segment.curvature;
         roadY += segment.hill;
 
-        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * 200.0f / (n*20 + 1);
+        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * perspective * 200.0f;
 
-        uint16_t grassColor = ( (int)((camZ + n*20) / 400) % 2 == 0) ? C_DGREEN : C_GREEN;
+        uint16_t grassColor = ( (int)(lineZ / 400) % 2 == 0) ? C_DGREEN : C_GREEN;
         canvas.drawFastHLine(0, y, SCREEN_WIDTH, grassColor);
 
         // Road
         canvas.fillRect(screenX - roadWidth/2, y, roadWidth, 1, C_DGREY);
 
         // Rumble Strips (kerbs)
-        if (( (int)((camZ + n*20) / 200) % 2) == 0) {
+        if (( (int)(lineZ / 200) % 2) == 0) {
             canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, C_RED);
             canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, C_RED);
         } else {
@@ -2969,7 +2977,7 @@ void drawRacingGame() {
         }
 
         // Dashed center line
-        if (( (int)((camZ + n*20) / 100) % 2) == 0) {
+        if (( (int)(lineZ / 100) % 2) == 0) {
             canvas.fillRect(screenX - roadWidth*0.01, y, roadWidth*0.02, 1, C_YELLOW);
         }
     }
@@ -3115,21 +3123,21 @@ void updatePongLogic() {
   #define PADDLE_WIDTH 10
   #define PADDLE_HEIGHT 40
   // Player 1
-  if (pongBall.vx < 0 && pongBall.x < PADDLE_WIDTH + 5 && pongBall.x > 5) {
-    if (pongBall.y > player1.y && pongBall.y < player1.y + PADDLE_HEIGHT) {
+  if (pongBall.vx < 0 && (pongBall.x < PADDLE_WIDTH + 5 && pongBall.x + 10 > 5)) {
+    if (pongBall.y + 10 > player1.y && pongBall.y < player1.y + PADDLE_HEIGHT) {
       pongBall.x = PADDLE_WIDTH + 5;
       pongBall.vx *= -1.1; // Speed up
       // Add spin based on where it hit the paddle
-      pongBall.vy += (pongBall.y - (player1.y + PADDLE_HEIGHT / 2)) * 5.0f;
+      pongBall.vy += (pongBall.y + 5 - (player1.y + PADDLE_HEIGHT / 2)) * 5.0f;
       triggerPongParticles(pongBall.x, pongBall.y);
     }
   }
   // Player 2 (AI)
-  if (pongBall.vx > 0 && pongBall.x > SCREEN_WIDTH - PADDLE_WIDTH - 5 && pongBall.x < SCREEN_WIDTH - 5) {
-    if (pongBall.y > player2.y && pongBall.y < player2.y + PADDLE_HEIGHT) {
-      pongBall.x = SCREEN_WIDTH - PADDLE_WIDTH - 5;
+  if (pongBall.vx > 0 && (pongBall.x + 10 > SCREEN_WIDTH - PADDLE_WIDTH - 5 && pongBall.x < SCREEN_WIDTH - 5)) {
+    if (pongBall.y + 10 > player2.y && pongBall.y < player2.y + PADDLE_HEIGHT) {
+      pongBall.x = SCREEN_WIDTH - PADDLE_WIDTH - 15; // Set to left edge of paddle - ball width
       pongBall.vx *= -1.1; // Speed up
-      pongBall.vy += (pongBall.y - (player2.y + PADDLE_HEIGHT / 2)) * 5.0f;
+      pongBall.vy += (pongBall.y + 5 - (player2.y + PADDLE_HEIGHT / 2)) * 5.0f;
       triggerPongParticles(pongBall.x, pongBall.y);
     }
   }
@@ -5915,12 +5923,14 @@ void handleRacingModeSelect() {
   switch(menuSelection) {
     case 0: // 1 Player
       raceGameMode = RACE_MODE_SINGLE;
-      racingGameActive = false;
+      generateTrack();
+      racingGameActive = true;
       changeState(STATE_GAME_RACING);
       break;
     case 1: // 2 Player
       raceGameMode = RACE_MODE_MULTI;
-      racingGameActive = false;
+      generateTrack();
+      racingGameActive = true;
       changeState(STATE_GAME_RACING);
       break;
     case 2: // Back
