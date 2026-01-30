@@ -358,7 +358,8 @@ PongPacket gameDataKonsol;
 bool hasRemoteKonsol = false;
 unsigned long lastPacketTimeKonsol = 0;
 
-uint8_t CONSOLE1_MAC[] = {0xdc, 0xb4, 0xd9, 0x07, 0x25, 0xb4};
+uint8_t KONSOL_SCREEN_MAC[] = {0xEC, 0xE3, 0x34, 0x66, 0xA5, 0xDC};
+uint8_t CONSOLE1_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 uint8_t CONSOLE2_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 bool console1Connected = false;
@@ -1258,6 +1259,7 @@ void fetchPomodoroQuote();
 void updateAndDrawSmokeVisualizer();
 void drawGroqModelSelect();
 void sendToGroq();
+void sendPongPacketToScreen();
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
 uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
@@ -2092,6 +2094,12 @@ void drawKonsol() {
     canvas.getTextBounds(c1Mac, 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, 110);
     canvas.print(c1Mac);
+
+    String myMac = "MY MAC: " + WiFi.macAddress();
+    canvas.setTextColor(COLOR_DIM);
+    canvas.getTextBounds(myMac, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 130);
+    canvas.print(myMac);
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     return;
@@ -3512,6 +3520,10 @@ void updatePongLogic() {
   // Add a small delay/lag to the AI's reaction
   player2.y += (targetY - player2.y) * aiSpeed * 0.8f;
   player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
+
+  if (currentState == STATE_GAME_CONSOLE_PONG) {
+    sendPongPacketToScreen();
+  }
 }
 
 void drawPongGame() {
@@ -6060,6 +6072,31 @@ void sendToGroq() {
   scrollOffset = 0;
 }
 
+void sendPongPacketToScreen() {
+  static unsigned long lastSend = 0;
+  if (millis() - lastSend < 16) return; // Limit to ~60fps
+  lastSend = millis();
+
+  PongPacket p;
+  p.type = 1; // State
+  p.bX = (int16_t)pongBall.x;
+  p.bY = (int16_t)pongBall.y;
+  p.p1Y = (int16_t)player1.y;
+  p.p2Y = (int16_t)player2.y;
+  p.s1 = (uint8_t)player1.score;
+  p.s2 = (uint8_t)player2.score;
+
+  if (!pongGameActive) {
+    p.state = 0; // Lobby
+  } else {
+    p.state = 1; // Playing
+    if (player1.score >= 5) p.state = 2; // P1 Win
+    else if (player2.score >= 5) p.state = 3; // P2 Win
+  }
+
+  esp_now_send(KONSOL_SCREEN_MAC, (uint8_t *)&p, sizeof(PongPacket));
+}
+
 void fetchPomodoroQuote() {
   pomoQuote = "";
   pomoQuoteLoading = true;
@@ -6385,6 +6422,16 @@ void handleGameHubMenuSelect() {
       changeState(STATE_VIS_FIRE);
       break;
     case 7:
+      if (!espnowInitialized) initESPNow();
+      {
+        esp_now_peer_info_t peerInfo = {};
+        memcpy(peerInfo.peer_addr, KONSOL_SCREEN_MAC, 6);
+        peerInfo.channel = 0;
+        peerInfo.encrypt = false;
+        if (!esp_now_is_peer_exist(KONSOL_SCREEN_MAC)) {
+          esp_now_add_peer(&peerInfo);
+        }
+      }
       pongGameActive = false;
       changeState(STATE_GAME_CONSOLE_PONG);
       break;
