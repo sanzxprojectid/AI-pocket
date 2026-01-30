@@ -3512,6 +3512,25 @@ void updatePongLogic() {
   // Add a small delay/lag to the AI's reaction
   player2.y += (targetY - player2.y) * aiSpeed * 0.8f;
   player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
+
+  // Broadcast game state to remote display (e.g. CYD)
+  if (espnowInitialized) {
+    PongPacket packet;
+    packet.type = 1; // State
+    packet.bX = pongBall.x;
+    packet.bY = pongBall.y * 240 / SCREEN_HEIGHT;
+    packet.p1Y = player1.y * 240 / SCREEN_HEIGHT;
+    packet.p2Y = player2.y * 240 / SCREEN_HEIGHT;
+    packet.s1 = player1.score;
+    packet.s2 = player2.score;
+
+    // Determine game state: 1=Playing, 2=P1 Win (10 pts), 3=P2 Win (10 pts)
+    if (player1.score >= 10) packet.state = 2;
+    else if (player2.score >= 10) packet.state = 3;
+    else packet.state = 1;
+
+    esp_now_send(broadcastAddress, (uint8_t *)&packet, sizeof(packet));
+  }
 }
 
 void drawPongGame() {
@@ -6364,6 +6383,7 @@ void handleGameHubMenuSelect() {
       changeState(STATE_RACING_MODE_SELECT);
       break;
     case 1:
+      if (!espnowInitialized) initESPNow();
       pongGameActive = false;
       changeState(STATE_GAME_PONG);
       break;
@@ -6385,6 +6405,7 @@ void handleGameHubMenuSelect() {
       changeState(STATE_VIS_FIRE);
       break;
     case 7:
+      if (!espnowInitialized) initESPNow();
       pongGameActive = false;
       changeState(STATE_GAME_CONSOLE_PONG);
       break;
