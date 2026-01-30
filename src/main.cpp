@@ -156,7 +156,8 @@ enum AppState {
   STATE_BRIGHTNESS_ADJUST,
   STATE_GROQ_MODEL_SELECT,
   STATE_GAME_CONSOLE_PONG,
-  STATE_GAME_CONSOLE_LOGS
+  STATE_GAME_CONSOLE_LOGS,
+  STATE_KONSOL
 };
 
 AppState currentState = STATE_BOOT;
@@ -343,6 +344,36 @@ struct GameConsole {
 };
 
 GameConsole gConsole;
+
+// ============ KONSOL (PASSIVE PONG DISPLAY) ============
+struct PongPacket {
+  uint8_t type; // 0: Ping, 1: State, 2: Input
+  int16_t bX, bY;
+  int16_t p1Y, p2Y;
+  uint8_t s1, s2;
+  uint8_t state; // 0: Lobby, 1: Playing, 2: P1 Win, 3: P2 Win
+};
+
+PongPacket gameDataKonsol;
+bool hasRemoteKonsol = false;
+unsigned long lastPacketTimeKonsol = 0;
+
+uint8_t CONSOLE1_MAC[] = {0xdc, 0xb4, 0xd9, 0x07, 0x25, 0xb4};
+uint8_t CONSOLE2_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+bool console1Connected = false;
+bool console2Connected = false;
+unsigned long lastConsole1Packet = 0;
+unsigned long lastConsole2Packet = 0;
+
+int ballTrailX[5], ballTrailY[5];
+int trailIndexKonsol = 0;
+
+#define KONSOL_COLOR_PADDLE 0xFFFF
+#define KONSOL_COLOR_BALL   0xFFE0
+#define KONSOL_COLOR_UI     0x07FF
+#define KONSOL_COLOR_SUCCESS 0x07E0
+#define KONSOL_COLOR_DANGER  0xF800
 
 // ============ GAME: SNAKE ============
 #define SNAKE_GRID_WIDTH 32
@@ -725,7 +756,7 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_gamehub};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -1190,6 +1221,7 @@ void drawPongGame();
 void updatePongLogic();
 void drawConsolePong();
 void drawConsoleLogs();
+void drawKonsol();
 void drawRacingGame();
 void updateRacingLogic();
 void drawAboutScreen();
@@ -1687,6 +1719,56 @@ void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data,
 #else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
 #endif
+  if (len == sizeof(PongPacket)) {
+    PongPacket *p = (PongPacket*)data;
+    if (p->type > 2) return; // Safety check for packet type
+
+    bool isConsole1 = true;
+    bool isConsole2 = true;
+    for (int i = 0; i < 6; i++) {
+      if (CONSOLE1_MAC[i] != 0xFF && CONSOLE1_MAC[i] != mac[i]) { isConsole1 = false; break; }
+    }
+    for (int i = 0; i < 6; i++) {
+      if (CONSOLE2_MAC[i] != 0xFF && CONSOLE2_MAC[i] != mac[i]) { isConsole2 = false; break; }
+    }
+
+    if (!isConsole1 && !isConsole2 && CONSOLE1_MAC[0] != 0xFF) return;
+
+    if (isConsole1 && !console1Connected) {
+      console1Connected = true;
+      Serial.print("Console 1 connected: ");
+      for (int i = 0; i < 6; i++) { Serial.printf("%02X%s", mac[i], (i < 5 ? ":" : "")); }
+      Serial.println();
+    }
+    if (isConsole2 && !console2Connected && CONSOLE2_MAC[0] != 0xFF) {
+      console2Connected = true;
+      Serial.print("Console 2 connected: ");
+      for (int i = 0; i < 6; i++) { Serial.printf("%02X%s", mac[i], (i < 5 ? ":" : "")); }
+      Serial.println();
+    }
+
+    lastPacketTimeKonsol = millis();
+    if (isConsole1) lastConsole1Packet = millis();
+    if (isConsole2) lastConsole2Packet = millis();
+    hasRemoteKonsol = console1Connected || console2Connected;
+
+    if (p->type == 1) {
+      gameDataKonsol.bX = p->bX;
+      gameDataKonsol.bY = p->bY;
+      gameDataKonsol.p1Y = p->p1Y;
+      gameDataKonsol.p2Y = p->p2Y;
+      gameDataKonsol.s1 = p->s1;
+      gameDataKonsol.s2 = p->s2;
+      gameDataKonsol.state = p->state;
+
+      // Motion blur effect trail update
+      ballTrailX[trailIndexKonsol] = gameDataKonsol.bX;
+      ballTrailY[trailIndexKonsol] = gameDataKonsol.bY;
+      trailIndexKonsol = (trailIndexKonsol + 1) % 5;
+    }
+    return;
+  }
+
   memcpy(&incomingMsg, data, sizeof(incomingMsg));
   
   Serial.print("ESP-NOW Received from: ");
@@ -1974,6 +2056,116 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawKonsol() {
+  canvas.fillScreen(COLOR_BG);
+
+  float scaleY = 170.0f / 240.0f;
+
+  if (!hasRemoteKonsol) {
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_PRIMARY);
+    int16_t x1, y1;
+    uint16_t w, h;
+    String msg = "WAITING FOR PEER";
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 60);
+    canvas.print(msg);
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(KONSOL_COLOR_UI);
+    msg = "Konsol Display Ready";
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 90);
+    canvas.print(msg);
+
+    String c1Mac = "C1: ";
+    for (int i = 0; i < 6; i++) {
+      char hex[3];
+      sprintf(hex, "%02X", CONSOLE1_MAC[i]);
+      c1Mac += hex;
+      if (i < 5) c1Mac += ":";
+    }
+    canvas.setTextColor(KONSOL_COLOR_SUCCESS);
+    canvas.getTextBounds(c1Mac, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 110);
+    canvas.print(c1Mac);
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  if (gameDataKonsol.state == 0) {
+    canvas.setTextSize(2);
+    canvas.setTextColor(KONSOL_COLOR_SUCCESS);
+    int16_t x1, y1;
+    uint16_t w, h;
+    String msg = "PEER CONNECTED!";
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 70);
+    canvas.print(msg);
+
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(1);
+    msg = "Waiting for Host...";
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 100);
+    canvas.print(msg);
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  if (gameDataKonsol.state > 1) {
+    canvas.setTextSize(3);
+    canvas.setTextColor(KONSOL_COLOR_SUCCESS);
+    int16_t x1, y1;
+    uint16_t w, h;
+    String msg = "";
+    if (gameDataKonsol.state == 2) msg = "PLAYER 1 WINS!";
+    else if (gameDataKonsol.state == 3) msg = "PLAYER 2 WINS!";
+
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT - h) / 2);
+    canvas.print(msg);
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  for (int i = 0; i < SCREEN_HEIGHT; i += 20) {
+    canvas.fillRect(SCREEN_WIDTH / 2 - 1, i, 2, 10, 0x3186);
+  }
+
+  canvas.setTextSize(3);
+  canvas.setTextColor(KONSOL_COLOR_UI);
+  canvas.setCursor(SCREEN_WIDTH / 2 - 60, 30);
+  canvas.print(gameDataKonsol.s1);
+  canvas.setCursor(SCREEN_WIDTH / 2 + 40, 30);
+  canvas.print(gameDataKonsol.s2);
+
+  for (int i = 0; i < 5; i++) {
+    int alpha = i * 2;
+    // Calculate trail fade colors using TFT helper
+    uint16_t fadeColor = tft.color565(255 - alpha * 40, 255 - alpha * 40, 0);
+    canvas.fillRect(ballTrailX[i], ballTrailY[i] * scaleY, 10, 10 * scaleY, fadeColor);
+  }
+
+  canvas.fillRect(gameDataKonsol.bX, gameDataKonsol.bY * scaleY, 10, 10 * scaleY, KONSOL_COLOR_BALL);
+  canvas.drawRect(gameDataKonsol.bX, gameDataKonsol.bY * scaleY, 10, 10 * scaleY, COLOR_PRIMARY);
+
+  int pW = 12;
+  int pH = 60 * scaleY;
+  canvas.fillRect(0, gameDataKonsol.p1Y * scaleY, pW, pH, COLOR_PRIMARY);
+  canvas.drawRect(0, gameDataKonsol.p1Y * scaleY, pW, pH, KONSOL_COLOR_UI);
+  canvas.fillRect(SCREEN_WIDTH - pW, gameDataKonsol.p2Y * scaleY, pW, pH, COLOR_PRIMARY);
+  canvas.drawRect(SCREEN_WIDTH - pW, gameDataKonsol.p2Y * scaleY, pW, pH, KONSOL_COLOR_UI);
+
+  if (console1Connected) canvas.fillCircle(5, 5, 3, KONSOL_COLOR_SUCCESS);
+  if (console2Connected) canvas.fillCircle(SCREEN_WIDTH - 5, 5, 3, KONSOL_COLOR_SUCCESS);
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -4833,8 +5025,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO"};
-    int numItems = 13;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "KONSOL"};
+    int numItems = 14;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -6002,6 +6194,9 @@ void handleMainMenuSelect() {
     case 12: // POMODORO
       changeState(STATE_POMODORO);
       break;
+    case 13: // KONSOL
+      changeState(STATE_KONSOL);
+      break;
   }
 }
 
@@ -6542,6 +6737,9 @@ void refreshCurrentScreen() {
     case STATE_GROQ_MODEL_SELECT:
       drawGroqModelSelect();
       break;
+    case STATE_KONSOL:
+      drawKonsol();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -6770,6 +6968,12 @@ void setup() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     delay(500); // Short delay to see the complete message
 
+  // Initialize ball trail for Konsol
+  for (int i = 0; i < 5; i++) {
+    ballTrailX[i] = SCREEN_WIDTH / 2;
+    ballTrailY[i] = SCREEN_HEIGHT / 2;
+  }
+
     // --- Go to Main State ---
     preferences.begin("app-config", true);
     pinLockEnabled = preferences.getBool("pinLock", false);
@@ -6876,6 +7080,7 @@ void loop() {
     case STATE_TOOL_WIFI_SONAR:
     case STATE_TOOL_DEAUTH_ATTACK:
     case STATE_MUSIC_PLAYER: // For visualizer
+    case STATE_KONSOL:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
@@ -6952,6 +7157,16 @@ void loop() {
   if (currentState == STATE_POMODORO) {
     updatePomodoroLogic();
     screenIsDirty = true; // Keep the timer updated
+  }
+
+  // Konsol connection watchdog
+  if (hasRemoteKonsol) {
+    if (currentMillis - lastPacketTimeKonsol > 2000) {
+      hasRemoteKonsol = false;
+      console1Connected = false;
+      console2Connected = false;
+      Serial.println("All Pong connections lost!");
+    }
   }
 
   // Screensaver check
@@ -7327,7 +7542,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 12) menuSelection++;
+          if (menuSelection < 13) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -7686,6 +7901,7 @@ void loop() {
           break;
         case STATE_ABOUT:
         case STATE_TOOL_WIFI_SONAR:
+        case STATE_KONSOL:
           // Cleanup
           if (currentState == STATE_TOOL_SNIFFER) {
              esp_wifi_set_promiscuous(false);
