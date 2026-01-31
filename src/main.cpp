@@ -439,6 +439,7 @@ bool opponentPresent = false;
 unsigned long lastOpponentUpdate = 0;
 
 Camera camera = {0, 1500, -5000};
+float screenShake = 0;
 
 bool racingGameActive = false;
 #define MAX_ROAD_SEGMENTS 200
@@ -2703,16 +2704,34 @@ void drawScaledBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, in
 // New function for drawing scaled 16-bit color bitmaps
 void drawScaledColorBitmap(int16_t x, int16_t y, const uint16_t *bitmap, int16_t w, int16_t h, float scale) {
   if (scale <= 0) return;
-  int16_t scaledW = w * scale;
-  int16_t scaledH = h * scale;
+  int16_t scaledW = (int16_t)(w * scale);
+  int16_t scaledH = (int16_t)(h * scale);
 
-  for (int16_t j = 0; j < scaledH; j++) {
-    for (int16_t i = 0; i < scaledW; i++) {
-      int16_t srcX = i / scale;
-      int16_t srcY = j / scale;
-      uint16_t color = pgm_read_word(&bitmap[srcY * w + srcX]);
-      if (color != 0x0000) { // Assuming 0x0000 is transparent
-        canvas.drawPixel(x + i, y + j, color);
+  int16_t xStart = (x < 0) ? -x : 0;
+  int16_t yStart = (y < 0) ? -y : 0;
+  int16_t xEnd = (x + scaledW > SCREEN_WIDTH) ? SCREEN_WIDTH - x : scaledW;
+  int16_t yEnd = (y + scaledH > SCREEN_HEIGHT) ? SCREEN_HEIGHT - y : scaledH;
+
+  if (xStart >= xEnd || yStart >= yEnd) return;
+
+  uint16_t* buffer = canvas.getBuffer();
+  float invScale = 1.0f / scale;
+
+  for (int16_t j = yStart; j < yEnd; j++) {
+    int16_t srcY = (int16_t)(j * invScale);
+    if (srcY >= h) continue;
+
+    int16_t canvasY = y + j;
+    int32_t rowOffset = canvasY * SCREEN_WIDTH;
+    int32_t bitmapOffset = srcY * w;
+
+    for (int16_t i = xStart; i < xEnd; i++) {
+      int16_t srcX = (int16_t)(i * invScale);
+      if (srcX >= w) continue;
+
+      uint16_t color = pgm_read_word(&bitmap[bitmapOffset + srcX]);
+      if (color != 0x0000) {
+        buffer[rowOffset + x + i] = color;
       }
     }
   }
@@ -3082,18 +3101,41 @@ void generateTrack() {
   totalSegments = 0;
   sceneryCount = 0;
 
-  // Add some segments to the track
-  track[totalSegments++] = {STRAIGHT, 0, 0, 50};
-  track[totalSegments++] = {CURVE, 0.5, 0, 30};
-  track[totalSegments++] = {HILL, 0, 0.5, 20};
-  track[totalSegments++] = {HILL, 0, -0.5, 20};
-  track[totalSegments++] = {CURVE, -0.7, 0, 40};
-  track[totalSegments++] = {STRAIGHT, 0, 0, 30};
+  // Use a fixed seed for consistent track generation if needed,
+  // or random for more variety. Let's go with variety!
+  randomSeed(millis());
 
-  // Add some scenery
-  scenery[sceneryCount++] = {TREE, -1.5, 2000};
-  scenery[sceneryCount++] = {BUSH, 1.2, 4000};
-  scenery[sceneryCount++] = {SIGN, -1.8, 6000};
+  // Generate a procedural track
+  for (int i = 0; i < 40; i++) {
+      int len = random(30, 80);
+      float curve = 0;
+      float hill = 0;
+      RoadSegmentType type = STRAIGHT;
+
+      int r = random(0, 10);
+      if (r < 4) {
+          type = STRAIGHT;
+      } else if (r < 7) {
+          type = CURVE;
+          curve = (random(-15, 16) / 10.0f);
+      } else {
+          type = HILL;
+          hill = (random(-8, 9) / 10.0f);
+      }
+
+      track[totalSegments++] = {type, curve, hill, len};
+      if (totalSegments >= MAX_ROAD_SEGMENTS) break;
+  }
+
+  // Scattered scenery along the track
+  for (int i = 5; i < totalSegments; i++) {
+      if (random(0, 10) > 6) {
+          float side = (random(0, 2) == 0) ? -2.0f : 2.0f;
+          SceneryType st = (SceneryType)random(0, 3);
+          scenery[sceneryCount++] = {st, side, (float)i * SEGMENT_STEP_LENGTH};
+          if (sceneryCount >= MAX_SCENERY) break;
+      }
+  }
 }
 
 void updateRacingLogic() {
@@ -3163,6 +3205,7 @@ void updateRacingLogic() {
     // Off-road penalty & Collision Detection
     if (abs(playerCar.x) > 1.0f) {
         playerCar.speed *= 0.98; // More gradual slowdown
+        if (playerCar.speed > 30) screenShake = max(screenShake, 1.5f);
 
         // Check for collision with scenery
         for (int i = 0; i < sceneryCount; i++) {
@@ -3170,9 +3213,15 @@ void updateRacingLogic() {
             if (dz > 0 && dz < 200) { // Check only objects in front
                 if (abs(scenery[i].x - playerCar.x) < 0.5f) {
                     playerCar.speed = 0; // CRASH! Full stop.
+                    screenShake = 10.0f;
                 }
             }
         }
+    }
+
+    if (screenShake > 0) {
+        screenShake -= 20.0f * dt;
+        if (screenShake < 0) screenShake = 0;
     }
 
     playerCar.x = constrain(playerCar.x, -2.5, 2.5); // Wider track limits
@@ -3476,12 +3525,33 @@ void drawPlatformerGame() {
 
 
 void drawRacingGame() {
-    canvas.fillScreen(0x4A49); // Sky Blue
+    // --- Sky Gradient ---
+    for(int y=0; y < SCREEN_HEIGHT/2; y++) {
+        uint8_t r = 30 + (y * 50) / (SCREEN_HEIGHT/2);
+        uint8_t g = 30 + (y * 100) / (SCREEN_HEIGHT/2);
+        uint8_t b = 150 + (y * 105) / (SCREEN_HEIGHT/2);
+        canvas.drawFastHLine(0, y, SCREEN_WIDTH, color565(r, g, b));
+    }
 
-    // --- Draw Parallax Background (Mountains) ---
+    // --- Draw Parallax Background (Mountains & Clouds) ---
+    // Distant Clouds
+    for(int i=0; i<3; i++) {
+        int cloudX = (int)(i * 160 - camera.z * 0.01f) % (SCREEN_WIDTH + 100) - 50;
+        canvas.fillCircle(cloudX, 30 + i*15, 20, 0xFFFF);
+        canvas.fillCircle(cloudX + 15, 35 + i*15, 15, 0xFFFF);
+        canvas.fillCircle(cloudX - 15, 35 + i*15, 15, 0xFFFF);
+    }
+
+    // Distant Mountains (Darker)
     for(int i=0; i<SCREEN_WIDTH; i++) {
-        float mountainHeight = sin((i * 0.1f + camera.z * 0.001f)) * 20 + sin(i * 0.05f + camera.z * 0.002f) * 10;
-        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, 100, 0x3A2E);
+        float mountainHeight = sin((i * 0.04f + camera.z * 0.0003f)) * 25 + sin(i * 0.02f + camera.z * 0.0001f) * 10 + 30;
+        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, mountainHeight, 0x18C3); // Very Dark Gray/Blue
+    }
+
+    // Closer Mountains
+    for(int i=0; i<SCREEN_WIDTH; i++) {
+        float mountainHeight = sin((i * 0.08f + camera.z * 0.0008f)) * 15 + sin(i * 0.04f + camera.z * 0.0004f) * 5 + 15;
+        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, mountainHeight, 0x3A2E); // Brownish Gray
     }
 
     // --- Draw Road ---
@@ -3504,6 +3574,7 @@ void drawRacingGame() {
     }
 
     // Draw from bottom to top (foreground to horizon)
+    uint16_t* buffer = canvas.getBuffer();
     for (int y = SCREEN_HEIGHT - 1; y >= SCREEN_HEIGHT / 2; y--) {
         float perspective = (float)(y - SCREEN_HEIGHT/2) / (SCREEN_HEIGHT / 2.0f);
         float roadWidth = 30 + perspective * 800;
@@ -3522,23 +3593,29 @@ void drawRacingGame() {
         float screenX = SCREEN_WIDTH/2 + (roadX - camX) * perspective * 200.0f;
 
         uint16_t grassColor = ( (int)(lineZ / 400) % 2 == 0) ? C_DGREEN : C_GREEN;
-        canvas.drawFastHLine(0, y, SCREEN_WIDTH, grassColor);
+        uint16_t rumbleColor = ( (int)(lineZ / 200) % 2 == 0) ? C_RED : C_WHITE;
 
-        // Road
-        canvas.fillRect(screenX - roadWidth/2, y, roadWidth, 1, C_DGREY);
+        int roadHalf = roadWidth / 2;
+        int kerbWidth = roadWidth * 0.05;
+        int rStart = screenX - roadHalf;
+        int rEnd = screenX + roadHalf;
+        int k1Start = rStart - kerbWidth;
+        int k2End = rEnd + kerbWidth;
 
-        // Rumble Strips (kerbs)
-        if (( (int)(lineZ / 200) % 2) == 0) {
-            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, C_RED);
-            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, C_RED);
-        } else {
-            canvas.fillRect(screenX - roadWidth/2 - roadWidth*0.05, y, roadWidth*0.05, 1, C_WHITE);
-            canvas.fillRect(screenX + roadWidth/2, y, roadWidth*0.05, 1, C_WHITE);
-        }
-
-        // Dashed center line
-        if (( (int)(lineZ / 100) % 2) == 0) {
-            canvas.fillRect(screenX - roadWidth*0.01, y, roadWidth*0.02, 1, C_YELLOW);
+        uint16_t* row = &buffer[y * SCREEN_WIDTH];
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            if (x < k1Start || x >= k2End) {
+                row[x] = grassColor;
+            } else if (x >= rStart && x < rEnd) {
+                // Dashed center line
+                if (((int)(lineZ / 100) % 2 == 0) && (x >= screenX - roadWidth * 0.015 && x <= screenX + roadWidth * 0.015)) {
+                    row[x] = C_YELLOW;
+                } else {
+                    row[x] = C_DGREY;
+                }
+            } else {
+                row[x] = rumbleColor;
+            }
         }
     }
 
@@ -3593,23 +3670,49 @@ void drawRacingGame() {
     }
 
     // --- Draw HUD ---
-    canvas.fillRoundRect(5, 5, 100, 30, 5, COLOR_PANEL);
-    canvas.drawRoundRect(5, 5, 100, 30, 5, COLOR_BORDER);
+    // Speedometer (Bottom Left)
+    canvas.fillRoundRect(5, SCREEN_HEIGHT - 45, 85, 40, 5, COLOR_PANEL);
+    canvas.drawRoundRect(5, SCREEN_HEIGHT - 45, 85, 40, 5, COLOR_BORDER);
     canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setTextSize(1);
+    canvas.setCursor(15, SCREEN_HEIGHT - 38);
+    canvas.print("SPEED");
     canvas.setTextSize(2);
-    canvas.setCursor(15, 12);
+    canvas.setCursor(15, SCREEN_HEIGHT - 28);
     canvas.print((int)playerCar.speed);
     canvas.setTextSize(1);
     canvas.print(" KM/H");
 
-    // Tampilkan FPS di pojok kanan atas
+    // Distance/Progress Bar (Top Center)
+    int barW = 160;
+    int barX = (SCREEN_WIDTH - barW) / 2;
+    int barY = 10;
+    canvas.fillRoundRect(barX - 4, barY - 4, barW + 8, 14, 4, COLOR_PANEL);
+    canvas.drawRoundRect(barX - 4, barY - 4, barW + 8, 14, 4, COLOR_BORDER);
+
+    // Calculate total track length
+    int totalTrackLength = 0;
+    for(int i = 0; i < totalSegments; i++) {
+        totalTrackLength += track[i].length * SEGMENT_STEP_LENGTH;
+    }
+    float progress = (totalTrackLength > 0) ? (playerCar.z / totalTrackLength) : 0;
+    if (progress > 1.0f) progress = 1.0f;
+    canvas.fillRect(barX, barY, (int)(barW * progress), 6, COLOR_SUCCESS);
+
+    // FPS Display (Top Right)
     canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setCursor(SCREEN_WIDTH - 50, 5);
-    canvas.print("FPS: ");
+    canvas.setTextColor(0x7BEF); // Dim white/gray
+    canvas.setCursor(SCREEN_WIDTH - 50, 10);
+    canvas.print("FPS:");
     canvas.print(perfFPS);
 
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    // Apply Screen Shake
+    int sx = 0, sy = 0;
+    if (screenShake > 0) {
+        sx = random(-(int)screenShake, (int)screenShake + 1);
+        sy = random(-(int)screenShake, (int)screenShake + 1);
+    }
+    tft.drawRGBBitmap(sx, sy, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void triggerPongParticles(float x, float y) {
