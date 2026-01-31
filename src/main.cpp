@@ -2083,6 +2083,15 @@ void drawESPNowChat() {
 }
 
 void drawKonsol() {
+  static unsigned long lastPing = 0;
+  if (!hasRemoteKonsol && millis() - lastPing > 500) {
+    PongPacket ping;
+    ping.type = 0;
+    ping.state = 0;
+    esp_now_send(KONSOL_SCREEN_MAC, (uint8_t *)&ping, sizeof(ping));
+    lastPing = millis();
+  }
+
   canvas.fillScreen(COLOR_BG);
 
   float scaleY = 170.0f / 240.0f;
