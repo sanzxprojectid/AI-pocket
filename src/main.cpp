@@ -276,6 +276,7 @@ struct PongPaddle {
 PongBall pongBall;
 PongPaddle player1, player2;
 bool pongGameActive = false;
+bool pongRunning = false;
 
 // Pong particles
 struct PongParticle {
@@ -2113,17 +2114,18 @@ void drawKonsol() {
     canvas.setCursor((SCREEN_WIDTH - w) / 2, 90);
     canvas.print(msg);
 
-    String c1Mac = "C1: ";
-    for (int i = 0; i < 6; i++) {
-      char hex[3];
-      sprintf(hex, "%02X", CONSOLE1_MAC[i]);
-      c1Mac += hex;
-      if (i < 5) c1Mac += ":";
+    String c1Name = "CONSOLE 1";
+    for (int i = 0; i < espnowPeerCount; i++) {
+      if (memcmp(espnowPeers[i].mac, CONSOLE1_MAC, 6) == 0) {
+        c1Name = espnowPeers[i].nickname;
+        c1Name.toUpperCase();
+        break;
+      }
     }
     canvas.setTextColor(KONSOL_COLOR_SUCCESS);
-    canvas.getTextBounds(c1Mac, 0, 0, &x1, &y1, &w, &h);
+    canvas.getTextBounds(c1Name, 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, 110);
-    canvas.print(c1Mac);
+    canvas.print(c1Name);
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     return;
@@ -2135,13 +2137,16 @@ void drawKonsol() {
     int16_t x1, y1;
     uint16_t w, h;
     String msg = "PEER CONNECTED!";
+    if (espnowMessageCount > 0) {
+        msg = espnowMessages[espnowMessageCount-1].text;
+    }
     canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, 70);
+    canvas.setCursor(max(0, (int)(SCREEN_WIDTH - w) / 2), 70);
     canvas.print(msg);
 
     canvas.setTextColor(COLOR_PRIMARY);
     canvas.setTextSize(1);
-    msg = "Waiting for Host...";
+    msg = "Waiting for Game Start...";
     canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, 100);
     canvas.print(msg);
@@ -2291,6 +2296,15 @@ void drawConsolePong() {
 
   // Decoration
   canvas.drawRect(splitX + 2, 2, SCREEN_WIDTH - splitX - 4, SCREEN_HEIGHT - 4, 0x4208);
+
+  if (!pongRunning) {
+      canvas.fillRoundRect(20, 60, 170, 50, 8, COLOR_PANEL);
+      canvas.drawRoundRect(20, 60, 170, 50, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_PRIMARY);
+      canvas.setTextSize(1);
+      canvas.setCursor(30, 80);
+      canvas.print("READY? PRESS SELECT");
+  }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3471,6 +3485,7 @@ void resetPongBall() {
 }
 
 void updatePongLogic() {
+  static unsigned long lastLobbyPing = 0;
   if (!pongGameActive) {
     player1.score = 0;
     player2.score = 0;
@@ -3478,8 +3493,31 @@ void updatePongLogic() {
     player2.y = SCREEN_HEIGHT / 2 - 20;
     resetPongBall();
     pongGameActive = true;
+    pongRunning = false;
+    lastLobbyPing = 0;
     // Clear particles
     for(int i=0; i<MAX_PONG_PARTICLES; i++) pongParticles[i].life = 0;
+    return;
+  }
+
+  if (!pongRunning) {
+    if (millis() - lastLobbyPing > 500) {
+      lastLobbyPing = millis();
+      if (espnowInitialized) {
+        PongPacket ping;
+        ping.type = 0; // Ping
+        ping.state = 0; // Lobby
+        esp_now_send(KONSOL_SCREEN_MAC, (uint8_t *)&ping, sizeof(ping));
+
+        // Kirim pesan singkat setiap 2 detik untuk deteksi
+        if (millis() % 2000 < 500) {
+          outgoingMsg.type = 'M';
+          strncpy(outgoingMsg.text, "Pong Console Siap!", ESPNOW_MESSAGE_MAX_LEN - 1);
+          strncpy(outgoingMsg.nickname, myNickname.c_str(), 31);
+          esp_now_send(KONSOL_SCREEN_MAC, (uint8_t *)&outgoingMsg, sizeof(outgoingMsg));
+        }
+      }
+    }
     return;
   }
 
@@ -3594,6 +3632,15 @@ void drawPongGame() {
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
   canvas.print("L+R=Back");
+
+  if (!pongRunning) {
+      canvas.fillRoundRect(50, 60, 220, 50, 8, COLOR_PANEL);
+      canvas.drawRoundRect(50, 60, 220, 50, 8, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_PRIMARY);
+      canvas.setTextSize(2);
+      canvas.setCursor(65, 78);
+      canvas.print("READY? PRESS SELECT");
+  }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7787,6 +7834,13 @@ void loop() {
           break;
         case STATE_GAME_HUB:
           handleGameHubMenuSelect();
+          break;
+        case STATE_GAME_PONG:
+        case STATE_GAME_CONSOLE_PONG:
+          if (!pongRunning) {
+              pongRunning = true;
+              ledSuccess();
+          }
           break;
         case STATE_TOOL_SNIFFER:
           // Toggle active/passive or just reset stats
