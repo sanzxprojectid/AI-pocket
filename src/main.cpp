@@ -879,7 +879,7 @@ const char* keyboardMac[3][10] = {
 enum KeyboardMode { MODE_LOWER, MODE_UPPER, MODE_NUMBERS };
 KeyboardMode currentKeyboardMode = MODE_LOWER;
 
-enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER };
+enum KeyboardContext { CONTEXT_CHAT, CONTEXT_WIFI_PASSWORD, CONTEXT_BLE_NAME, CONTEXT_ESPNOW_CHAT, CONTEXT_ESPNOW_NICKNAME, CONTEXT_ESPNOW_ADD_MAC, CONTEXT_ESPNOW_RENAME_PEER, CONTEXT_WIKI_SEARCH };
 KeyboardContext keyboardContext = CONTEXT_CHAT;
 
 // ============ CHAT THEME & ANIMATION ============
@@ -1296,6 +1296,7 @@ void updateAndDrawSmokeVisualizer();
 void drawGroqModelSelect();
 void sendToGroq();
 void fetchRandomWiki();
+void fetchWikiSearch(String query);
 void saveWikiBookmark();
 void drawWikiViewer();
 void updateSystemMetrics();
@@ -6398,7 +6399,7 @@ void fetchRandomWiki() {
   refreshCurrentScreen(); // Show loading status
 
   HTTPClient http;
-  http.begin("https://en.wikipedia.org/api/rest_v1/page/random/summary");
+  http.begin("https://id.wikipedia.org/api/rest_v1/page/random/summary");
   http.addHeader("User-Agent", "AI-Pocket-S3-Viewer/2.2 (https://github.com/IhsanSubaru)");
   http.setTimeout(15000);
 
@@ -6414,6 +6415,56 @@ void fetchRandomWiki() {
       currentArticle.url = doc["content_urls"]["desktop"]["page"].as<String>();
       wikiScrollOffset = 0;
       ledSuccess();
+    } else {
+      showStatus("JSON Parse Error", 1500);
+    }
+  } else {
+    showStatus("Wiki API Error: " + String(httpCode), 1500);
+  }
+
+  http.end();
+  wikiIsLoading = false;
+}
+
+void fetchWikiSearch(String query) {
+  if (WiFi.status() != WL_CONNECTED) {
+    showStatus("WiFi not connected!", 1500);
+    return;
+  }
+
+  wikiIsLoading = true;
+  refreshCurrentScreen();
+
+  HTTPClient http;
+  String encodedQuery = query;
+  encodedQuery.replace(" ", "%20");
+  String url = "https://id.wikipedia.org/w/api.php?action=query&prop=extracts|info&exintro&explaintext&inprop=url&generator=search&gsrsearch=" + encodedQuery + "&gsrlimit=1&format=json&origin=*";
+
+  http.begin(url);
+  http.addHeader("User-Agent", "AI-Pocket-S3-Viewer/2.2 (https://github.com/IhsanSubaru)");
+  http.setTimeout(15000);
+
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      if (doc["query"]["pages"]) {
+        JsonObject pages = doc["query"]["pages"].as<JsonObject>();
+        for (JsonPair kv : pages) {
+          JsonObject page = kv.value().as<JsonObject>();
+          currentArticle.title = page["title"].as<String>();
+          currentArticle.extract = page["extract"].as<String>();
+          currentArticle.url = page["fullurl"].as<String>();
+          wikiScrollOffset = 0;
+          ledSuccess();
+          break;
+        }
+      } else {
+        showStatus("No results found", 1500);
+      }
     } else {
       showStatus("JSON Parse Error", 1500);
     }
@@ -6969,6 +7020,11 @@ void handleKeyPress() {
          espnowPeers[selectedPeer].nickname = userInput;
          showStatus("Renamed!", 1000);
          changeState(STATE_ESPNOW_PEER_SCAN);
+      }
+    } else if (keyboardContext == CONTEXT_WIKI_SEARCH) {
+      if (userInput.length() > 0) {
+        fetchWikiSearch(userInput);
+        changeState(STATE_WIKI_VIEWER);
       }
     }
   } else if (strcmp(key, "<") == 0) {
@@ -7986,12 +8042,14 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 13) menuSelection++;
+          if (menuSelection < 14) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
           break;
         case STATE_SYSTEM_MENU:
+          if (menuSelection < 4) menuSelection++;
+          break;
         case STATE_SYSTEM_INFO_MENU:
           if (menuSelection < 3) menuSelection++;
           break;
@@ -8081,6 +8139,14 @@ void loop() {
              currentKeyboardMode = MODE_LOWER;
              changeState(STATE_KEYBOARD);
           }
+          break;
+        case STATE_WIKI_VIEWER:
+          userInput = "";
+          keyboardContext = CONTEXT_WIKI_SEARCH;
+          cursorX = 0;
+          cursorY = 0;
+          currentKeyboardMode = MODE_LOWER;
+          changeState(STATE_KEYBOARD);
           break;
         default: break;
       }
