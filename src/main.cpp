@@ -346,7 +346,7 @@ struct GameConsole {
 GameConsole gConsole;
 
 // ============ KONSOL (PASSIVE PONG DISPLAY) ============
-struct PongPacket {
+struct __attribute__((packed)) PongPacket {
   uint8_t type; // 0: Ping, 1: State, 2: Input
   int16_t bX, bY;
   int16_t p1Y, p2Y;
@@ -802,7 +802,7 @@ bool espnowInitialized = false;
 bool espnowBroadcastMode = true; // true = broadcast, false = unicast to selected peer
 String myNickname = "ESP32";
 
-typedef struct struct_message {
+typedef struct __attribute__((packed)) struct_message {
   char type; // 'M' = message, 'H' = hello/handshake, 'P' = ping, 'R' = race data
   char nickname[32];
   unsigned long timestamp;
@@ -1722,7 +1722,10 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
 #endif
   if (len == sizeof(PongPacket)) {
     PongPacket *p = (PongPacket*)data;
-    if (p->type > 2) return; // Safety check for packet type
+    if (p->type > 2) {
+      Serial.printf("PongPacket type error: %d\n", p->type);
+      return;
+    }
 
     bool isConsole1 = true;
     bool isConsole2 = true;
@@ -1733,7 +1736,10 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
       if (CONSOLE2_MAC[i] != 0xFF && CONSOLE2_MAC[i] != mac[i]) { isConsole2 = false; break; }
     }
 
-    if (!isConsole1 && !isConsole2 && CONSOLE1_MAC[0] != 0xFF) return;
+    if (!isConsole1 && !isConsole2 && CONSOLE1_MAC[0] != 0xFF) {
+      // Serial.println("PongPacket rejected: MAC mismatch");
+      return;
+    }
 
     if (isConsole1 && !console1Connected) {
       console1Connected = true;
@@ -1883,22 +1889,29 @@ bool initESPNow() {
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
   
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add broadcast peer");
-    return false;
+  if (!esp_now_is_peer_exist(broadcastAddress)) {
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("Failed to add broadcast peer");
+      return false;
+    }
   }
 
-  // Add Konsol Screen peer
-  memset(&peerInfo, 0, sizeof(peerInfo));
-  memcpy(peerInfo.peer_addr, KONSOL_SCREEN_MAC, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add Konsol Screen peer");
+  // Add Konsol Screen peer (if different from broadcast)
+  if (!esp_now_is_peer_exist(KONSOL_SCREEN_MAC)) {
+    memset(&peerInfo, 0, sizeof(peerInfo));
+    memcpy(peerInfo.peer_addr, KONSOL_SCREEN_MAC, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("Failed to add Konsol Screen peer");
+    }
   }
   
   espnowInitialized = true;
-  Serial.println("ESP-NOW Initialized Successfully");
+  Serial.print("ESP-NOW Initialized. MAC: ");
+  Serial.print(WiFi.macAddress());
+  Serial.print(" | Channel: ");
+  Serial.println(WiFi.channel());
   
   // Send hello message
   outgoingMsg.type = 'H';
@@ -6224,6 +6237,7 @@ void handleMainMenuSelect() {
       changeState(STATE_POMODORO);
       break;
     case 13: // KONSOL
+      if (!espnowInitialized) initESPNow();
       changeState(STATE_KONSOL);
       break;
   }
