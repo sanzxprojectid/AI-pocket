@@ -360,6 +360,7 @@ unsigned long lastPacketTimeKonsol = 0;
 
 uint8_t CONSOLE1_MAC[] = {0xdc, 0xb4, 0xd9, 0x07, 0x25, 0xb4};
 uint8_t CONSOLE2_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint8_t KONSOL_SCREEN_MAC[] = {0xec, 0xe3, 0x34, 0x66, 0xa5, 0xdc};
 
 bool console1Connected = false;
 bool console2Connected = false;
@@ -1885,6 +1886,15 @@ bool initESPNow() {
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("Failed to add broadcast peer");
     return false;
+  }
+
+  // Add Konsol Screen peer
+  memset(&peerInfo, 0, sizeof(peerInfo));
+  memcpy(peerInfo.peer_addr, KONSOL_SCREEN_MAC, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add Konsol Screen peer");
   }
   
   espnowInitialized = true;
@@ -3529,7 +3539,7 @@ void updatePongLogic() {
     else if (player2.score >= 10) packet.state = 3;
     else packet.state = 1;
 
-    esp_now_send(broadcastAddress, (uint8_t *)&packet, sizeof(packet));
+    esp_now_send(KONSOL_SCREEN_MAC, (uint8_t *)&packet, sizeof(packet));
   }
 }
 
