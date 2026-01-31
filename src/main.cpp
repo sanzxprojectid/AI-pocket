@@ -360,7 +360,7 @@ unsigned long lastPacketTimeKonsol = 0;
 
 uint8_t CONSOLE1_MAC[] = {0xdc, 0xb4, 0xd9, 0x07, 0x25, 0xb4};
 uint8_t CONSOLE2_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-uint8_t KONSOL_SCREEN_MAC[] = {0xec, 0xe3, 0x34, 0x66, 0xa5, 0xdc};
+uint8_t KONSOL_SCREEN_MAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 bool console1Connected = false;
 bool console2Connected = false;
@@ -1741,9 +1741,9 @@ void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len) {
       for (int i = 0; i < 6; i++) { Serial.printf("%02X%s", mac[i], (i < 5 ? ":" : "")); }
       Serial.println();
     }
-    if (isConsole2 && !console2Connected && CONSOLE2_MAC[0] != 0xFF) {
+    if (isConsole2 && !console2Connected) {
       console2Connected = true;
-      Serial.print("Console 2 connected: ");
+      Serial.print("Console (Broadcast/C2) connected: ");
       for (int i = 0; i < 6; i++) { Serial.printf("%02X%s", mac[i], (i < 5 ? ":" : "")); }
       Serial.println();
     }
