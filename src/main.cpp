@@ -157,7 +157,9 @@ enum AppState {
   STATE_GROQ_MODEL_SELECT,
   STATE_GAME_CONSOLE_PONG,
   STATE_GAME_CONSOLE_LOGS,
-  STATE_KONSOL
+  STATE_KONSOL,
+  STATE_WIKI_VIEWER,
+  STATE_SYSTEM_MONITOR
 };
 
 AppState currentState = STATE_BOOT;
@@ -758,7 +760,18 @@ const unsigned char icon_pomodoro[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_gamehub};
+const unsigned char icon_wikipedia[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF, 0xC0, 0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8,
+0x3E, 0x00, 0x00, 0x7C, 0x3C, 0x00, 0x00, 0x3C, 0x78, 0x00, 0x00, 0x1E, 0x70, 0x18, 0x18, 0x0E,
+0x70, 0x18, 0x18, 0x0E, 0x60, 0x3C, 0x3C, 0x06, 0x60, 0x3C, 0x3C, 0x06, 0x60, 0x3C, 0x3C, 0x06,
+0x40, 0x7E, 0x7E, 0x02, 0x40, 0x7E, 0x7E, 0x02, 0x40, 0x7E, 0x7E, 0x02, 0x40, 0xFF, 0xFF, 0x02,
+0x40, 0xFF, 0xFF, 0x02, 0x40, 0xFF, 0xFF, 0x02, 0x60, 0xDB, 0xDB, 0x06, 0x60, 0xDB, 0xDB, 0x06,
+0x70, 0x99, 0x99, 0x0E, 0x78, 0x00, 0x00, 0x1E, 0x3C, 0x00, 0x00, 0x3C, 0x3E, 0x00, 0x00, 0x7C,
+0x1F, 0xFF, 0xFF, 0xF8, 0x0F, 0xFF, 0xFF, 0xF0, 0x03, 0xFF, 0xFF, 0xC0, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_gamehub, icon_wikipedia};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -769,6 +782,28 @@ bool isSelectingMode = false;
 String groqApiKey = "";
 int selectedGroqModel = 0;
 const char* groqModels[] = {"llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"};
+
+// ============ WIKIPEDIA VIEWER DATA ============
+struct WikiArticle {
+  String title;
+  String extract;
+  String url;
+};
+WikiArticle currentArticle;
+int wikiScrollOffset = 0;
+bool wikiIsLoading = false;
+
+// ============ SYSTEM MONITOR DATA ============
+#define SYS_MONITOR_HISTORY_LEN 160
+struct SystemMetrics {
+  int rssiHistory[SYS_MONITOR_HISTORY_LEN];
+  int battHistory[SYS_MONITOR_HISTORY_LEN];
+  int tempHistory[SYS_MONITOR_HISTORY_LEN];
+  int ramHistory[SYS_MONITOR_HISTORY_LEN];
+  int historyIndex = 0;
+  unsigned long lastUpdate = 0;
+};
+SystemMetrics sysMetrics;
 
 // ============ ESP-NOW CHAT SYSTEM ============
 #define MAX_ESPNOW_MESSAGES 50
@@ -1260,6 +1295,11 @@ void fetchPomodoroQuote();
 void updateAndDrawSmokeVisualizer();
 void drawGroqModelSelect();
 void sendToGroq();
+void fetchRandomWiki();
+void saveWikiBookmark();
+void drawWikiViewer();
+void updateSystemMetrics();
+void drawSystemMonitor();
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
 uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
@@ -2080,6 +2120,129 @@ void drawESPNowChat() {
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
   canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ SYSTEM MONITOR FUNCTIONS ============
+void updateSystemMetrics() {
+  if (millis() - sysMetrics.lastUpdate < 1000) return;
+  sysMetrics.lastUpdate = millis();
+
+  // WiFi RSSI
+  int rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : -100;
+  sysMetrics.rssiHistory[sysMetrics.historyIndex] = rssi;
+
+  // Battery Voltage (scaled by 100 for storage as int)
+  sysMetrics.battHistory[sysMetrics.historyIndex] = (int)(batteryVoltage * 100);
+
+  // CPU Temperature
+  sysMetrics.tempHistory[sysMetrics.historyIndex] = (int)temperatureRead();
+
+  // Free RAM (in KB)
+  sysMetrics.ramHistory[sysMetrics.historyIndex] = (int)(ESP.getFreeHeap() / 1024);
+
+  sysMetrics.historyIndex = (sysMetrics.historyIndex + 1) % SYS_MONITOR_HISTORY_LEN;
+}
+
+void drawGraph(int x, int y, int w, int h, int data[], int size, int currentIndex, uint16_t color, String label, String value) {
+  canvas.drawRect(x, y, w, h, COLOR_BORDER);
+  canvas.fillRect(x, y, w, 12, COLOR_PANEL);
+  canvas.drawFastHLine(x, y + 12, w, COLOR_BORDER);
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(color);
+  canvas.setCursor(x + 4, y + 2);
+  canvas.print(label);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  int valW = value.length() * 6;
+  canvas.setCursor(x + w - valW - 4, y + 2);
+  canvas.print(value);
+
+  // Find min/max for scaling
+  int minVal = data[0];
+  int maxVal = data[0];
+  for (int i = 1; i < size; i++) {
+    if (data[i] < minVal) minVal = data[i];
+    if (data[i] > maxVal) maxVal = data[i];
+  }
+
+  // Padding for min/max to avoid flat lines at edges
+  if (maxVal == minVal) {
+    maxVal = minVal + 1;
+    minVal = minVal - 1;
+  }
+
+  float range = maxVal - minVal;
+  int graphH = h - 16;
+  int graphY = y + 14;
+
+  for (int i = 0; i < w - 2; i++) {
+    int dataIdx = (currentIndex - (w - 2) + i + size) % size;
+    int val = data[dataIdx];
+    if (val == 0 && dataIdx != currentIndex) continue; // Skip uninitialized
+
+    int py = graphY + graphH - (int)((val - minVal) * graphH / range);
+    py = constrain(py, graphY, graphY + graphH);
+
+    if (i > 0) {
+      int prevIdx = (dataIdx - 1 + size) % size;
+      int prevVal = data[prevIdx];
+      int ppy = graphY + graphH - (int)((prevVal - minVal) * graphH / range);
+      ppy = constrain(ppy, graphY, graphY + graphH);
+      canvas.drawLine(x + 1 + i - 1, ppy, x + 1 + i, py, color);
+    } else {
+      canvas.drawPixel(x + 1 + i, py, color);
+    }
+  }
+}
+
+void drawSystemMonitor() {
+  updateSystemMetrics();
+
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // 2x2 Grid Layout
+  int padding = 5;
+  int graphW = (SCREEN_WIDTH - 3 * padding) / 2;
+  int graphH = (SCREEN_HEIGHT - 45 - 3 * padding) / 2;
+
+  int startY = 30;
+
+  // Top Left: WiFi RSSI (Green)
+  String rssiVal = String(sysMetrics.rssiHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " dBm";
+  drawGraph(padding, startY, graphW, graphH, sysMetrics.rssiHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0x07E0, "WiFi RSSI", rssiVal);
+
+  // Top Right: Battery (Yellow)
+  float bVal = sysMetrics.battHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN] / 100.0f;
+  String battVal = String(bVal, 2) + " V";
+  drawGraph(2 * padding + graphW, startY, graphW, graphH, sysMetrics.battHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0xFFE0, "Battery", battVal);
+
+  // Bottom Left: CPU Temp (Red)
+  String tempVal = String(sysMetrics.tempHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " C";
+  drawGraph(padding, startY + padding + graphH, graphW, graphH, sysMetrics.tempHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0xF800, "CPU Temp", tempVal);
+
+  // Bottom Right: Free RAM (Cyan)
+  String ramVal = String(sysMetrics.ramHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " KB";
+  drawGraph(2 * padding + graphW, startY + padding + graphH, graphW, graphH, sysMetrics.ramHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0x07FF, "Free RAM", ramVal);
+
+  // Footer: Uptime
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+
+  unsigned long sec = millis() / 1000;
+  int h = sec / 3600;
+  int m = (sec % 3600) / 60;
+  int s = sec % 60;
+  char uptimeStr[32];
+  sprintf(uptimeStr, "Uptime: %02dh %02dm %02ds | L+R=Back", h, m, s);
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print(uptimeStr);
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -5123,8 +5286,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "KONSOL"};
-    int numItems = 14;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "KONSOL", "WIKIPEDIA"};
+    int numItems = 15;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -5870,8 +6033,8 @@ void drawSystemMenu() {
   canvas.setCursor(45, 7);
   canvas.print("System Settings");
 
-  const char* items[] = {"Device Info", "Security", "Brightness", "Back"};
-  drawScrollableMenu(items, 4, 45, 30, 5);
+  const char* items[] = {"Device Info", "Security", "System Monitor", "Brightness", "Back"};
+  drawScrollableMenu(items, 5, 45, 25, 4);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6224,6 +6387,163 @@ void changeState(AppState newState) {
   }
 }
 
+// ============ WIKIPEDIA FUNCTIONS ============
+void fetchRandomWiki() {
+  if (WiFi.status() != WL_CONNECTED) {
+    showStatus("WiFi not connected!", 1500);
+    return;
+  }
+
+  wikiIsLoading = true;
+  refreshCurrentScreen(); // Show loading status
+
+  HTTPClient http;
+  http.begin("https://en.wikipedia.org/api/rest_v1/page/random/summary");
+  http.addHeader("User-Agent", "AI-Pocket-S3-Viewer/2.2 (https://github.com/IhsanSubaru)");
+  http.setTimeout(15000);
+
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      currentArticle.title = doc["title"].as<String>();
+      currentArticle.extract = doc["extract"].as<String>();
+      currentArticle.url = doc["content_urls"]["desktop"]["page"].as<String>();
+      wikiScrollOffset = 0;
+      ledSuccess();
+    } else {
+      showStatus("JSON Parse Error", 1500);
+    }
+  } else {
+    showStatus("Wiki API Error: " + String(httpCode), 1500);
+  }
+
+  http.end();
+  wikiIsLoading = false;
+}
+
+void saveWikiBookmark() {
+  if (!sdCardMounted) {
+    showStatus("SD Card not ready", 1500);
+    return;
+  }
+
+  if (beginSD()) {
+    File file = SD.open("/wiki_bookmarks.txt", FILE_APPEND);
+    if (file) {
+      file.println(currentArticle.title + "|" + currentArticle.url);
+      file.close();
+      showStatus("Bookmarked!", 1000);
+      ledSuccess();
+    } else {
+      showStatus("File Open Error", 1500);
+    }
+    endSD();
+  }
+}
+
+void drawWikiViewer() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x3186); // Dark Gray
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(10, 20);
+  canvas.print("WIKIPEDIA");
+
+  if (wikiIsLoading) {
+    canvas.setTextSize(1);
+    canvas.setCursor(SCREEN_WIDTH - 100, 23);
+    canvas.print("Loading...");
+  }
+
+  // Article Content
+  int y = 50 - wikiScrollOffset;
+
+  // Draw Title
+  canvas.setTextSize(2);
+  canvas.setTextColor(0xFFE0); // Yellow
+
+  // Simple word wrap for Title
+  String title = currentArticle.title;
+  if (title.length() == 0) title = "No Article Loaded";
+
+  int x = 10;
+  String word = "";
+  for (unsigned int i = 0; i < title.length(); i++) {
+    char c = title.charAt(i);
+    if (c == ' ' || i == title.length() - 1) {
+      if (i == title.length() - 1) word += c;
+      int wordW = word.length() * 12;
+      if (x + wordW > SCREEN_WIDTH - 10) {
+        y += 20;
+        x = 10;
+      }
+      if (y > 40 && y < SCREEN_HEIGHT - 20) {
+        canvas.setCursor(x, y);
+        canvas.print(word);
+      }
+      x += wordW + 12;
+      word = "";
+    } else {
+      word += c;
+    }
+  }
+
+  y += 25;
+  canvas.drawFastHLine(10, y - 5, SCREEN_WIDTH - 20, COLOR_BORDER);
+
+  // Draw Extract
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  x = 10;
+  word = "";
+  String extract = currentArticle.extract;
+  if (extract.length() == 0) extract = "Press SELECT to fetch a random article.";
+
+  for (unsigned int i = 0; i < extract.length(); i++) {
+    char c = extract.charAt(i);
+    if (c == ' ' || c == '\n' || i == extract.length() - 1) {
+      if (i == extract.length() - 1 && c != ' ' && c != '\n') word += c;
+      int wordW = word.length() * 6;
+      if (x + wordW > SCREEN_WIDTH - 15) {
+        y += 12;
+        x = 10;
+      }
+      if (y > 40 && y < SCREEN_HEIGHT - 20) {
+        canvas.setCursor(x, y);
+        canvas.print(word);
+      }
+      x += wordW + 6;
+      word = "";
+      if (c == '\n') {
+        y += 12;
+        x = 10;
+      }
+    } else {
+      word += c;
+    }
+  }
+
+  // Footer
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(5, SCREEN_HEIGHT - 12);
+  canvas.print("SEL=New | HOLD SEL=Save | UP/DN=Scroll");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 // ============ MENU HANDLERS ============
 void handleMainMenuSelect() {
   switch(menuSelection) {
@@ -6295,6 +6615,10 @@ void handleMainMenuSelect() {
     case 13: // KONSOL
       if (!espnowInitialized) initESPNow();
       changeState(STATE_KONSOL);
+      break;
+    case 14: // WIKIPEDIA
+      wikiScrollOffset = 0;
+      changeState(STATE_WIKI_VIEWER);
       break;
   }
 }
@@ -6412,10 +6736,18 @@ void handleSystemMenuSelect() {
         changeState(STATE_CHANGE_PIN);
       }
       break;
-    case 2: // Brightness
+    case 2: // System Monitor
+      sysMetrics.historyIndex = 0;
+      memset(sysMetrics.rssiHistory, 0, sizeof(sysMetrics.rssiHistory));
+      memset(sysMetrics.battHistory, 0, sizeof(sysMetrics.battHistory));
+      memset(sysMetrics.tempHistory, 0, sizeof(sysMetrics.tempHistory));
+      memset(sysMetrics.ramHistory, 0, sizeof(sysMetrics.ramHistory));
+      changeState(STATE_SYSTEM_MONITOR);
+      break;
+    case 3: // Brightness
       changeState(STATE_BRIGHTNESS_ADJUST);
       break;
-    case 3: // Back
+    case 4: // Back
       changeState(STATE_MAIN_MENU);
       break;
   }
@@ -6841,6 +7173,12 @@ void refreshCurrentScreen() {
     case STATE_KONSOL:
       drawKonsol();
       break;
+    case STATE_WIKI_VIEWER:
+      drawWikiViewer();
+      break;
+    case STATE_SYSTEM_MONITOR:
+      drawSystemMonitor();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -7182,6 +7520,8 @@ void loop() {
     case STATE_TOOL_DEAUTH_ATTACK:
     case STATE_MUSIC_PLAYER: // For visualizer
     case STATE_KONSOL:
+    case STATE_WIKI_VIEWER:
+    case STATE_SYSTEM_MONITOR:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
@@ -7631,6 +7971,9 @@ void loop() {
         case STATE_GROQ_MODEL_SELECT:
           if (selectedGroqModel > 0) selectedGroqModel--;
           break;
+        case STATE_WIKI_VIEWER:
+          if (wikiScrollOffset > 0) wikiScrollOffset -= 20;
+          break;
         default: break;
       }
       buttonPressed = true;
@@ -7698,6 +8041,9 @@ void loop() {
           break;
         case STATE_GROQ_MODEL_SELECT:
           if (selectedGroqModel < 1) selectedGroqModel++;
+          break;
+        case STATE_WIKI_VIEWER:
+          wikiScrollOffset += 20;
           break;
         default: break;
       }
@@ -7949,7 +8295,24 @@ void loop() {
           currentKeyboardMode = MODE_LOWER;
           changeState(STATE_KEYBOARD);
           break;
+        case STATE_WIKI_VIEWER:
+          if (btnSelectPressTime == 0) {
+            btnSelectPressTime = currentMillis;
+          } else if (!btnSelectLongPressTriggered && (currentMillis - btnSelectPressTime > longPressDuration)) {
+            btnSelectLongPressTriggered = true;
+            saveWikiBookmark();
+          }
+          break;
         default: break;
+      }
+
+      // Special handling for Wikipedia Select release
+      if (currentState == STATE_WIKI_VIEWER && digitalRead(BTN_SELECT) != BTN_ACT) {
+        if (btnSelectPressTime > 0 && !btnSelectLongPressTriggered) {
+          fetchRandomWiki();
+        }
+        btnSelectPressTime = 0;
+        btnSelectLongPressTriggered = false;
       }
       buttonPressed = true;
     }
@@ -8031,6 +8394,10 @@ void loop() {
           break;
         case STATE_GROQ_MODEL_SELECT:
           isSelectingMode = true;
+          changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_WIKI_VIEWER:
+        case STATE_SYSTEM_MONITOR:
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_KEYBOARD:
