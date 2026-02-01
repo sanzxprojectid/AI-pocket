@@ -161,7 +161,8 @@ enum AppState {
   STATE_WIKI_VIEWER,
   STATE_SYSTEM_MONITOR,
   STATE_PRAYER_TIMES,
-  STATE_PRAYER_SETTINGS
+  STATE_PRAYER_SETTINGS,
+  STATE_PRAYER_CITY_SELECT
 };
 
 AppState currentState = STATE_BOOT;
@@ -633,6 +634,33 @@ struct LocationData {
   String country;
   bool isValid;
 };
+
+struct CityPreset {
+  const char* name;
+  float lat;
+  float lon;
+};
+
+const CityPreset indonesianCities[] = {
+  {"Jakarta", -6.2088, 106.8456},
+  {"Surabaya", -7.2575, 112.7521},
+  {"Bandung", -6.9175, 107.6191},
+  {"Medan", 3.5952, 98.6722},
+  {"Semarang", -6.9667, 110.4167},
+  {"Makassar", -5.1478, 119.4327},
+  {"Palembang", -2.9761, 104.7754},
+  {"Padang", -0.9471, 100.4172},
+  {"Payakumbuh", -0.2201, 100.6309},
+  {"Yogyakarta", -7.7956, 110.3695},
+  {"Denpasar", -8.6705, 115.2126},
+  {"Banjarmasin", -3.3167, 114.5900},
+  {"Samarinda", -0.4949, 117.1492},
+  {"Pontianak", -0.0263, 109.3425},
+  {"Ambon", -3.6954, 128.1814},
+  {"Jayapura", -2.5916, 140.6690}
+};
+const int cityCount = sizeof(indonesianCities) / sizeof(indonesianCities[0]);
+int citySelectCursor = 0;
 
 struct PrayerSettings {
   bool notificationEnabled;
@@ -7197,10 +7225,108 @@ const char* prayerSettingsItems[] = {
   "Silent Mode",
   "Reminder Time",
   "Auto Location",
+  "Select City (Manual)",
   "Refresh Data",
   "Back"
 };
-int prayerSettingsCount = 7;
+int prayerSettingsCount = 8;
+
+void drawCitySelect() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 20);
+  canvas.println("SELECT CITY");
+
+  int y = 50;
+  canvas.setTextSize(1);
+
+  // Show 6 cities at a time
+  int startIdx = (citySelectCursor >= 3) ? (citySelectCursor - 3) : 0;
+  if (startIdx + 6 > cityCount) startIdx = (cityCount > 6) ? (cityCount - 6) : 0;
+
+  for (int i = startIdx; i < ( (startIdx + 6 < cityCount) ? (startIdx + 6) : cityCount ); i++) {
+    if (i == citySelectCursor) {
+      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(15, y);
+    canvas.print(indonesianCities[i].name);
+
+    // Show coordinates on the right
+    canvas.setCursor(SCREEN_WIDTH - 120, y);
+    canvas.printf("%.4f, %.4f", indonesianCities[i].lat, indonesianCities[i].lon);
+
+    y += 16;
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Scroll | SELECT=Confirm | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handleCitySelectInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_PRAYER_SETTINGS);
+    delay(200);
+    return;
+  }
+
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    citySelectCursor = (citySelectCursor + 1) % cityCount;
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    citySelectCursor = (citySelectCursor - 1 + cityCount) % cityCount;
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    ledSuccess();
+
+    // Update location data
+    userLocation.latitude = indonesianCities[citySelectCursor].lat;
+    userLocation.longitude = indonesianCities[citySelectCursor].lon;
+    userLocation.city = indonesianCities[citySelectCursor].name;
+    userLocation.country = "Indonesia";
+    userLocation.isValid = true;
+
+    // Disable auto location
+    prayerSettings.autoLocation = false;
+
+    // Save to preferences
+    preferences.begin("prayer-data", false);
+    preferences.putFloat("prayerLat", userLocation.latitude);
+    preferences.putFloat("prayerLon", userLocation.longitude);
+    preferences.putString("prayerCity", userLocation.city);
+    preferences.putBool("prayerAutoLoc", prayerSettings.autoLocation);
+    preferences.end();
+
+    Serial.printf("Manual Location: %s (%.4f, %.4f)\n",
+                  userLocation.city.c_str(), userLocation.latitude, userLocation.longitude);
+
+    // Fetch prayer times with new location
+    fetchPrayerTimes();
+
+    showStatus("Location Updated!", 1000);
+    changeState(STATE_PRAYER_SETTINGS);
+    delay(200);
+  }
+}
 
 void drawPrayerSettings() {
   canvas.fillScreen(COLOR_BG);
@@ -7307,9 +7433,12 @@ void handlePrayerSettingsInput() {
         preferences.end();
         break;
       case 5:
-        fetchUserLocation();
+        changeState(STATE_PRAYER_CITY_SELECT);
         break;
       case 6:
+        fetchUserLocation();
+        break;
+      case 7:
         changeState(STATE_PRAYER_TIMES);
         break;
     }
@@ -7966,6 +8095,9 @@ void refreshCurrentScreen() {
     case STATE_PRAYER_SETTINGS:
       drawPrayerSettings();
       break;
+    case STATE_PRAYER_CITY_SELECT:
+      drawCitySelect();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -8391,6 +8523,9 @@ void loop() {
     }
     else if (currentState == STATE_PRAYER_SETTINGS) {
       handlePrayerSettingsInput();
+    }
+    else if (currentState == STATE_PRAYER_CITY_SELECT) {
+      handleCitySelectInput();
     }
 
   // Backlight smoothing logic
