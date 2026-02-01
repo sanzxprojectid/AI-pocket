@@ -3605,8 +3605,10 @@ void updateRacingLogic() {
 
     // Player steering input - scaled by speed
     float steerForce = 0;
-    // Harder to turn at high speed, easier at low speed
-    float steerSensitivity = 4.0f + (playerCar.speed / 50.0f);
+    // Harder to turn at high speed to maintain control
+    float steerSensitivity = 6.0f - (playerCar.speed / 80.0f);
+    if (steerSensitivity < 2.5f) steerSensitivity = 2.5f;
+
     if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -steerSensitivity;
     if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = steerSensitivity;
 
@@ -7254,6 +7256,9 @@ void drawPrayerTimes() {
   canvas.setCursor(15, footerY + 6);
   canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth + " " + currentPrayer.hijriYear + " H");
 
+  canvas.setCursor(SCREEN_WIDTH - 110, footerY + 6);
+  canvas.print("HOLD SEL=Settings");
+
   canvas.setCursor(15, footerY + 18);
   canvas.print(userLocation.city);
 
@@ -7316,26 +7321,23 @@ void drawCitySelect() {
   canvas.setCursor(15, 20);
   canvas.print("CITY SELECTION");
 
-  int listY = 50;
+  int centerY = 85;
   canvas.setTextSize(1);
 
-  // Smooth Highlight Bar
-  canvas.fillRoundRect(5, 48 + citySelectScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
+  // Smooth Highlight Bar fixed at center
+  canvas.fillRoundRect(5, centerY - 2, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
 
   for (int i = 0; i < cityCount; i++) {
-    int itemY = listY + (i * 18) - (citySelectScroll / 18.0f); // Minimal scroll effect on text if needed
-    // Actually keep text fixed but highlight moves, or vice versa?
-    // The current loop() logic moves the 'Scroll' variable.
-    // Let's make it so text scrolls too if many cities.
-
-    int drawY = listY + (i * 18);
+    // List scrolls relative to citySelectScroll
+    int drawY = centerY + (i * 18) - (int)citySelectScroll;
 
     if (drawY < 40 || drawY > SCREEN_HEIGHT - 20) continue;
 
     if (i == citySelectCursor) {
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.setTextColor(COLOR_TEXT);
+      int dist = abs(drawY - centerY);
+      canvas.setTextColor(dist > 36 ? COLOR_DIM : COLOR_TEXT);
     }
 
     canvas.setCursor(20, drawY + 4);
@@ -7422,19 +7424,21 @@ void drawPrayerSettings() {
   canvas.setCursor(15, 20);
   canvas.print("PRAYER SETTINGS");
 
-  // Smooth Selection Highlight
-  canvas.fillRoundRect(5, 48 + prayerSettingsScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
+  int centerY = 85;
+  // Smooth Selection Highlight fixed at center
+  canvas.fillRoundRect(5, centerY - 2, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
 
-  int listY = 50;
   canvas.setTextSize(1);
-
   for (int i = 0; i < prayerSettingsCount; i++) {
-    int drawY = listY + (i * 18);
+    int drawY = centerY + (i * 18) - (int)prayerSettingsScroll;
+
+    if (drawY < 40 || drawY > SCREEN_HEIGHT - 20) continue;
 
     if (i == prayerSettingsCursor) {
       canvas.setTextColor(COLOR_BG);
     } else {
-      canvas.setTextColor(COLOR_TEXT);
+      int dist = abs(drawY - centerY);
+      canvas.setTextColor(dist > 36 ? COLOR_DIM : COLOR_TEXT);
     }
 
     canvas.setCursor(20, drawY + 4);
