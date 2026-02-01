@@ -1419,6 +1419,7 @@ void fetchUserLocation() {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, "https://ipwho.is/");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(10000);
 
   int httpCode = http.GET();
@@ -1454,10 +1455,20 @@ void fetchUserLocation() {
 
         // Fetch prayer times immediately
         fetchPrayerTimes();
+      } else {
+        Serial.println("IP Location API returned success=false");
+        prayerFetchFailed = true;
+        prayerFetchError = "IP Loc API Failed";
       }
+    } else {
+      Serial.println("JSON parsing failed for location");
+      prayerFetchFailed = true;
+      prayerFetchError = "Loc JSON Error";
     }
   } else {
     Serial.printf("HTTP GET failed: %d\n", httpCode);
+    prayerFetchFailed = true;
+    prayerFetchError = "Loc HTTP Err: " + String(httpCode);
   }
 
   http.end();
@@ -1507,6 +1518,7 @@ void fetchPrayerTimes() {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(15000);
 
   int httpCode = http.GET();
@@ -7274,21 +7286,26 @@ void drawPrayerTimes() {
 
 void handlePrayerTimesInput() {
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
-    if (!currentPrayer.isValid && prayerFetchFailed) {
-      ledSuccess();
-      fetchPrayerTimes();
-      delay(200);
-      return;
-    }
-
     unsigned long pressTime = millis();
+    bool longPressed = false;
+
     while (digitalRead(BTN_SELECT) == BTN_ACT) {
       if (millis() - pressTime > 1000) {
+        longPressed = true;
         ledQuickFlash();
         changeState(STATE_PRAYER_SETTINGS);
-        return;
+        break;
       }
       delay(10);
+    }
+
+    if (!longPressed) {
+      // Short press: retry fetch if it previously failed
+      if (!currentPrayer.isValid && prayerFetchFailed) {
+        ledSuccess();
+        fetchPrayerTimes();
+        delay(200);
+      }
     }
   }
 }
