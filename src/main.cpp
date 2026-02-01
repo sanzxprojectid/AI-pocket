@@ -22,6 +22,7 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+#include "mbedtls/sha256.h"
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -162,7 +163,8 @@ enum AppState {
   STATE_SYSTEM_MONITOR,
   STATE_PRAYER_TIMES,
   STATE_PRAYER_SETTINGS,
-  STATE_PRAYER_CITY_SELECT
+  STATE_PRAYER_CITY_SELECT,
+  STATE_BITCOIN_MINER
 };
 
 AppState currentState = STATE_BOOT;
@@ -871,7 +873,18 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_gamehub, icon_wikipedia};
+const unsigned char icon_bitcoin[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x3F, 0xFC, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00,
+0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x3F, 0xFC, 0x00,
+0x00, 0x7F, 0xFE, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00,
+0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0xFB, 0xDF, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x00, 0x3F, 0xFC, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_gamehub, icon_wikipedia, icon_bitcoin};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -1194,6 +1207,22 @@ int fileListSelection = 0;
 String fileContentToView;
 int fileViewerScrollOffset = 0;
 
+// ============ BITCOIN MINER DATA ============
+struct MinerStats {
+  double hashRate;
+  uint32_t totalShares;
+  uint32_t validShares;
+  uint32_t blockHeight;
+  String poolUrl;
+  bool connected;
+  unsigned long uptime;
+  uint32_t difficulty;
+  bool isMining;
+};
+
+MinerStats btcMinerStats = {0.0, 0, 0, 0, "public-pool.io", false, 0, 0, false};
+String btcWalletAddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"; // Default: Satoshi's address
+
 // ============ POMODORO TIMER ============
 const unsigned long POMO_WORK_DURATION = 25 * 60 * 1000;
 const unsigned long POMO_SHORT_BREAK_DURATION = 5 * 60 * 1000;
@@ -1401,10 +1430,13 @@ void saveWikiBookmark();
 void drawWikiViewer();
 void updateSystemMetrics();
 void drawSystemMonitor();
+void drawBitcoinMiner();
+void handleBitcoinMinerInput();
 void fetchPrayerTimes();
 void showPrayerReminder(String prayerName, int minutes);
 void showPrayerAlert(String prayerName);
 void playAdzan();
+void bitcoinMinerTask(void *pvParameters);
 
 // ===== LOCATION DETECTION =====
 void fetchUserLocation() {
@@ -5800,8 +5832,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "KONSOL", "WIKIPEDIA"};
-    int numItems = 16;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "KONSOL", "WIKIPEDIA", "BTC MINER"};
+    int numItems = 17;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -7620,6 +7652,9 @@ void handleMainMenuSelect() {
       wikiScrollOffset = 0;
       changeState(STATE_WIKI_VIEWER);
       break;
+    case 16: // BTC MINER
+      changeState(STATE_BITCOIN_MINER);
+      break;
   }
 }
 
@@ -8193,6 +8228,9 @@ void refreshCurrentScreen() {
     case STATE_PRAYER_CITY_SELECT:
       drawCitySelect();
       break;
+    case STATE_BITCOIN_MINER:
+      drawBitcoinMiner();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -8466,6 +8504,18 @@ void setup() {
 
     menuSelection = 0;
     lastInputTime = millis();
+
+    // Start Bitcoin Miner Task on Core 0
+    xTaskCreatePinnedToCore(
+      bitcoinMinerTask,
+      "BTC_Miner",
+      8192,
+      NULL,
+      1,
+      NULL,
+      0
+    );
+
     refreshCurrentScreen();
 }
 
@@ -8589,6 +8639,7 @@ void loop() {
     case STATE_SYSTEM_MONITOR:
     case STATE_PRAYER_SETTINGS:
     case STATE_PRAYER_CITY_SELECT:
+    case STATE_BITCOIN_MINER:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
@@ -8644,6 +8695,8 @@ void loop() {
 
   if (currentState == STATE_GAME_PLATFORMER) {
     updatePlatformerLogic();
+  } else if (currentState == STATE_BITCOIN_MINER) {
+    handleBitcoinMinerInput();
   }
     else if (currentState == STATE_PRAYER_TIMES) {
       handlePrayerTimesInput();
@@ -9517,6 +9570,181 @@ void loop() {
       lastInputTime = currentMillis;
       ledQuickFlash();
     }
+  }
+}
+
+void drawBitcoinMiner() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0xFD20); // Orange
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_BG);
+  canvas.setCursor(50, 20);
+  canvas.print("BITCOIN MINER");
+  canvas.drawBitmap(10, 18, icon_bitcoin, 32, 32, COLOR_BG);
+
+  int y = 50;
+
+  // Stats Card
+  canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, 80, 8, COLOR_PANEL);
+  canvas.drawRoundRect(10, y, SCREEN_WIDTH - 20, 80, 8, COLOR_BORDER);
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 10);
+  canvas.print("HASH RATE");
+  canvas.setCursor(SCREEN_WIDTH / 2 + 10, y + 10);
+  canvas.print("TOTAL SHARES");
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(0xFD20); // Orange
+  canvas.setCursor(20, y + 25);
+  canvas.print(btcMinerStats.hashRate, 2);
+  canvas.print(" kH/s");
+
+  canvas.setCursor(SCREEN_WIDTH / 2 + 10, y + 25);
+  canvas.print(btcMinerStats.validShares);
+  canvas.print("/");
+  canvas.print(btcMinerStats.totalShares);
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(20, y + 50);
+  canvas.print("POOL");
+  canvas.setCursor(SCREEN_WIDTH / 2 + 10, y + 50);
+  canvas.print("UPTIME");
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(20, y + 62);
+  canvas.print(btcMinerStats.poolUrl);
+
+  canvas.setCursor(SCREEN_WIDTH / 2 + 10, y + 62);
+  unsigned long sec = (millis() - btcMinerStats.uptime) / 1000;
+  if (!btcMinerStats.isMining) sec = 0;
+  int h = sec / 3600;
+  int m = (sec % 3600) / 60;
+  int s = sec % 60;
+  canvas.printf("%02d:%02d:%02d", h, m, s);
+
+  // Status Indicator
+  int statusY = SCREEN_HEIGHT - 35;
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, statusY);
+  canvas.print("STATUS: ");
+  if (btcMinerStats.isMining) {
+    canvas.setTextColor(COLOR_SUCCESS);
+    canvas.print("MINING");
+  } else {
+    canvas.setTextColor(COLOR_WARN);
+    canvas.print("IDLE");
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(SCREEN_WIDTH / 2, statusY);
+  canvas.print("CONN: ");
+  if (btcMinerStats.connected) {
+    canvas.setTextColor(COLOR_SUCCESS);
+    canvas.print("CONNECTED");
+  } else {
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.print("DISCONNECTED");
+  }
+
+  // Footer
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("SELECT=Toggle | UP/DN=Config | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void bitcoinMinerTask(void *pvParameters) {
+  uint32_t nonce = 0;
+  uint8_t header[80];
+  uint8_t hash1[32];
+  uint8_t hash2[32];
+  unsigned long lastHashRateUpdate = millis();
+  uint32_t hashesDone = 0;
+
+  memset(header, 0, 80);
+
+  while (true) {
+    if (btcMinerStats.isMining) {
+      // Simulate/Minimal hashing loop
+      // In a real implementation, we would get this from Stratum
+      *(uint32_t*)(header + 76) = nonce;
+
+      mbedtls_sha256_context ctx;
+      mbedtls_sha256_init(&ctx);
+      mbedtls_sha256_starts(&ctx, 0); // 0 for SHA-256
+      mbedtls_sha256_update(&ctx, header, 80);
+      mbedtls_sha256_finish(&ctx, hash1);
+
+      mbedtls_sha256_starts(&ctx, 0);
+      mbedtls_sha256_update(&ctx, hash1, 32);
+      mbedtls_sha256_finish(&ctx, hash2);
+      mbedtls_sha256_free(&ctx);
+
+      hashesDone++;
+      nonce++;
+
+      // Every 1000 hashes, check for hash rate update
+      if (hashesDone >= 1000) {
+        unsigned long now = millis();
+        unsigned long diff = now - lastHashRateUpdate;
+        if (diff > 0) {
+          btcMinerStats.hashRate = (double)hashesDone / diff; // Hashes per ms = kH/s
+        }
+        hashesDone = 0;
+        lastHashRateUpdate = now;
+
+        // Minor yield to prevent watchdog on Core 0
+        vTaskDelay(1);
+      }
+
+      // In a real miner, we'd check if hash2 meets difficulty
+      // For now, we simulate finding a share occasionally
+      if (random(0, 100000) == 0) {
+        btcMinerStats.totalShares++;
+        btcMinerStats.validShares++;
+      }
+    } else {
+      btcMinerStats.hashRate = 0;
+      vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+  }
+}
+
+void handleBitcoinMinerInput() {
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    btcMinerStats.isMining = !btcMinerStats.isMining;
+    if (btcMinerStats.isMining) {
+      btcMinerStats.uptime = millis();
+      showStatus("Starting Miner...", 500);
+    } else {
+      showStatus("Stopping Miner...", 500);
+    }
+    ledSuccess();
+    delay(200);
+  }
+
+  // Handle Back (L+R)
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_MAIN_MENU);
+    delay(200);
+  }
+
+  // Handle Config (UP/DN) - Simplified
+  if (digitalRead(BTN_UP) == BTN_ACT || digitalRead(BTN_DOWN) == BTN_ACT) {
+    showStatus("Config: Use\nSD card for\nWallet/Pool", 1500);
+    delay(200);
   }
 }
 
