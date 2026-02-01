@@ -1419,6 +1419,7 @@ void fetchUserLocation() {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, "https://ipwho.is/");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(10000);
 
   int httpCode = http.GET();
@@ -1458,6 +1459,8 @@ void fetchUserLocation() {
     }
   } else {
     Serial.printf("HTTP GET failed: %d\n", httpCode);
+    String payload = http.getString();
+    Serial.println("Response: " + payload.substring(0, 100));
   }
 
   http.end();
@@ -1507,6 +1510,7 @@ void fetchPrayerTimes() {
   client.setInsecure();
   HTTPClient http;
   http.begin(client, url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.setTimeout(15000);
 
   int httpCode = http.GET();
@@ -1559,6 +1563,8 @@ void fetchPrayerTimes() {
     }
   } else {
     Serial.printf("HTTP GET failed: %d\n", httpCode);
+    String payload = http.getString();
+    Serial.println("Response: " + payload.substring(0, 100));
     prayerFetchFailed = true;
     prayerFetchError = "HTTP Error: " + String(httpCode);
   }
@@ -7274,21 +7280,26 @@ void drawPrayerTimes() {
 
 void handlePrayerTimesInput() {
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
-    if (!currentPrayer.isValid && prayerFetchFailed) {
-      ledSuccess();
-      fetchPrayerTimes();
-      delay(200);
-      return;
-    }
-
     unsigned long pressTime = millis();
+    bool longPressTriggered = false;
+
     while (digitalRead(BTN_SELECT) == BTN_ACT) {
       if (millis() - pressTime > 1000) {
         ledQuickFlash();
         changeState(STATE_PRAYER_SETTINGS);
-        return;
+        longPressTriggered = true;
+        // Wait for release
+        while (digitalRead(BTN_SELECT) == BTN_ACT) delay(10);
+        break;
       }
       delay(10);
+    }
+
+    // Only retry on short press and if previously failed
+    if (!longPressTriggered && !currentPrayer.isValid && prayerFetchFailed) {
+      ledSuccess();
+      fetchPrayerTimes();
+      delay(200);
     }
   }
 }
