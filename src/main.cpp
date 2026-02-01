@@ -5120,7 +5120,7 @@ void updateStatusBarData() {
 }
 
 void drawBatteryIcon() {
-    int x = SCREEN_WIDTH - 30;
+    int x = SCREEN_WIDTH - 25;
     int y = 2;
     int w = 22;
     int h = 10;
@@ -5149,7 +5149,7 @@ void drawBatteryIcon() {
     canvas.setTextSize(1);
     canvas.setTextColor(battColor);
     char buf[10];
-    sprintf(buf, "%.2fV %d%%", batteryVoltage, batteryPercentage);
+    sprintf(buf, "%.1fV %d%%", batteryVoltage, batteryPercentage);
     String text(buf);
     int16_t x1, y1;
     uint16_t textW, textH;
@@ -5169,31 +5169,32 @@ void drawStatusBar() {
   }
   
   if (sdCardMounted) {
-    canvas.setCursor(45, 2);
+    canvas.setCursor(38, 2);
     canvas.print("SD");
   }
   
   if (chatMessageCount > 0) {
-    canvas.setCursor(65, 2);
+    canvas.setCursor(55, 2);
     canvas.print("C:");
     canvas.print(chatMessageCount);
   }
   
   if (espnowInitialized) {
-    canvas.setCursor(100, 2);
+    canvas.setCursor(85, 2);
     canvas.print("ESP:");
     canvas.print(espnowPeerCount);
   }
   
+  int prayerWidth = 0;
   if (currentPrayer.isValid && currentState != STATE_PRAYER_TIMES) {
     NextPrayerInfo next = getNextPrayer();
     canvas.setTextSize(1);
     canvas.setTextColor(0x07E0); // Green
 
     String countdown = formatRemainingTime(next.remainingMinutes);
-    int textWidth = (countdown.length() + 2) * 6;
+    prayerWidth = (countdown.length() + 2) * 6;
 
-    canvas.setCursor(SCREEN_WIDTH - 75 - textWidth, 2);
+    canvas.setCursor(SCREEN_WIDTH - 105 - prayerWidth, 2);
     canvas.print("P:");
     canvas.print(countdown);
   }
@@ -5205,7 +5206,7 @@ void drawStatusBar() {
 
     String fpsStr = String(perfFPS);
     int textWidth = (fpsStr.length() + 4) * 6; // "XXX FPS"
-    int panelX = SCREEN_WIDTH - 65 - textWidth;
+    int panelX = SCREEN_WIDTH - 110 - prayerWidth - textWidth;
 
     canvas.fillRoundRect(panelX, 0, textWidth, 12, 3, COLOR_PANEL);
     canvas.drawRoundRect(panelX, 0, textWidth, 12, 3, COLOR_BORDER);
@@ -5226,7 +5227,7 @@ void drawStatusBar() {
     else if (cachedRSSI > -65) bars = 3;
     else if (cachedRSSI > -75) bars = 2;
     else if (cachedRSSI > -85) bars = 1;
-    int x = SCREEN_WIDTH - 70;
+    int x = SCREEN_WIDTH - 100;
     int y = 8;
     for (int i = 0; i < 4; i++) {
       int h = (i + 1) * 2;
