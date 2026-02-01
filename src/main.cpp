@@ -5682,31 +5682,31 @@ void drawEarthquakeMonitor() {
   drawStatusBar();
 
   // Header
-  canvas.setTextSize(2);
+  canvas.fillRect(0, 13, SCREEN_WIDTH, 22, COLOR_PANEL);
+  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 35, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, 25);
-  canvas.print("Earthquakes");
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 20);
+  canvas.print("EARTHQUAKE MONITOR");
 
   // Filter indicator
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.setCursor(10, 45);
-  canvas.print("M");
-  canvas.print(eqSettings.minMagnitude, 1);
-  canvas.print("+ ");
+  String filter = "M" + String(eqSettings.minMagnitude, 1) + "+";
+  if (eqSettings.indonesiaOnly) filter += " Indo";
+  else if (eqSettings.maxRadiusKm > 0) filter += " " + String(eqSettings.maxRadiusKm) + "km";
+  else filter += " World";
 
-  if (eqSettings.indonesiaOnly) {
-    canvas.print("Indonesia ");
-  } else if (eqSettings.maxRadiusKm > 0) {
-    canvas.print(eqSettings.maxRadiusKm);
-    canvas.print("km ");
-  } else {
-    canvas.print("Worldwide ");
-  }
+  int16_t x1, y1; uint16_t w, h;
+  canvas.setTextSize(1);
+  canvas.getTextBounds(filter, 0, 0, &x1, &y1, &w, &h);
+  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setCursor(SCREEN_WIDTH - 10 - w, 20);
+  canvas.print(filter);
 
   if (!earthquakeDataLoaded) {
     canvas.setTextSize(1);
-    canvas.setCursor(60, 80);
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(SCREEN_WIDTH/2 - 45, 80);
     canvas.print("Loading data...");
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     return;
@@ -5714,74 +5714,67 @@ void drawEarthquakeMonitor() {
 
   if (earthquakeCount == 0) {
     canvas.setTextSize(1);
-    canvas.setCursor(40, 80);
+    canvas.setTextColor(COLOR_WARN);
+    canvas.setCursor(SCREEN_WIDTH/2 - 60, 80);
     canvas.print("No earthquakes found");
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     return;
   }
 
   // Earthquake list
-  int y = 60;
-  int visible = 0;
-  int maxVisible = 4;  // Reduced to 4 to fit SCREEN_HEIGHT 170
+  int startY = 40;
+  int itemH = 27;
+  int maxVisible = 4;
 
-  for (int i = earthquakeScrollOffset; i < earthquakeCount && visible < maxVisible; i++, visible++) {
+  for (int i = earthquakeScrollOffset; i < earthquakeCount && (i - earthquakeScrollOffset) < maxVisible; i++) {
+    int y = startY + (i - earthquakeScrollOffset) * itemH;
     Earthquake eq = earthquakes[i];
 
     // Highlight selected
     if (i == earthquakeCursor) {
-      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 22, COLOR_PANEL);
-      canvas.drawRect(5, y - 2, SCREEN_WIDTH - 10, 22, COLOR_PRIMARY);
+      canvas.fillRoundRect(5, y - 2, SCREEN_WIDTH - 10, itemH - 1, 4, 0x2104);
+      canvas.drawRoundRect(5, y - 2, SCREEN_WIDTH - 10, itemH - 1, 4, COLOR_BORDER);
     }
 
-    // Magnitude badge
+    // Magnitude Pill
     uint16_t magColor = getMagnitudeColor(eq.magnitude);
-    canvas.fillCircle(18, y + 8, 9, magColor);
+    canvas.fillRoundRect(10, y + 2, 35, 18, 4, magColor);
     canvas.setTextColor(COLOR_BG);
     canvas.setTextSize(1);
-    canvas.setCursor(10, y + 5);
-    // Center the magnitude text a bit better
-    if (eq.magnitude < 10.0f) canvas.setCursor(13, y + 5);
-    canvas.printf("%.1f", eq.magnitude);
+    String magStr = String(eq.magnitude, 1);
+    canvas.getTextBounds(magStr, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(10 + (35-w)/2, y + 2 + (18-h)/2 + 1);
+    canvas.print(magStr);
 
     // Location
     canvas.setTextColor(COLOR_TEXT);
     canvas.setTextSize(1);
-    canvas.setCursor(35, y);
+    canvas.setCursor(55, y + 2);
     String place = eq.place;
-    if (place.length() > 35) {
-      place = place.substring(0, 32) + "...";
-    }
+    if (place.length() > 38) place = place.substring(0, 35) + "...";
     canvas.print(place);
 
     // Time & Distance
-    canvas.setCursor(35, y + 10);
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.print(getRelativeTime(eq.time));
+    canvas.setCursor(55, y + 13);
+    canvas.setTextColor(COLOR_DIM);
+    String sub = getRelativeTime(eq.time);
+    if (eq.distance > 0) sub += " | " + String((int)eq.distance) + "km away";
 
-    if (eq.distance > 0) {
-      canvas.print(" | ");
-      canvas.print(int(eq.distance));
-      canvas.print("km away");
-    }
-
-    // Tsunami warning
     if (eq.tsunami == 1) {
       canvas.setTextColor(0xF800); // Red
-      canvas.print(" [TSUNAMI]");
+      sub += " [TSUNAMI]";
     }
-
-    y += 24;
+    canvas.print(sub);
   }
 
   // Footer
-  int footerY = SCREEN_HEIGHT - 15;
-  canvas.fillRect(0, footerY, SCREEN_WIDTH, 15, COLOR_PANEL);
+  int footerY = SCREEN_HEIGHT - 18;
+  canvas.fillRect(0, footerY, SCREEN_WIDTH, 18, COLOR_PANEL);
   canvas.drawFastHLine(0, footerY, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(5, footerY + 3);
-  canvas.printf("Total: %d | SEL=Detail | R=Settings | L=Refresh", earthquakeCount);
+  canvas.setCursor(10, footerY + 4);
+  canvas.printf("%d results | SEL:Detail | R:Set | L:Ref", earthquakeCount);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5791,114 +5784,84 @@ void drawEarthquakeDetail() {
   drawStatusBar();
 
   Earthquake eq = selectedEarthquake;
+  if (!eq.isValid) return;
 
-  if (!eq.isValid) {
-    canvas.setCursor(50, 80);
-    canvas.print("No earthquake selected");
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    return;
-  }
-
-  int y = 20;
-
-  // Magnitude (big)
-  canvas.setTextSize(3);
+  // Header Card
   uint16_t magColor = getMagnitudeColor(eq.magnitude);
+  canvas.fillRoundRect(5, 20, SCREEN_WIDTH - 10, 50, 8, COLOR_PANEL);
+  canvas.drawRoundRect(5, 20, SCREEN_WIDTH - 10, 50, 8, magColor);
+
+  canvas.setTextSize(4);
   canvas.setTextColor(magColor);
-  canvas.setCursor(10, y);
+  canvas.setCursor(20, 30);
   canvas.printf("%.1f", eq.magnitude);
 
   canvas.setTextSize(1);
-  canvas.setCursor(70, y + 5);
   canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(110, 30);
   canvas.print(getMagnitudeLabel(eq.magnitude));
+  canvas.setCursor(110, 42);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.print("Magnitude (" + eq.magType + ")");
 
-  canvas.setCursor(70, y + 15);
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.print("Type: " + eq.magType);
+  // Content Area
+  int y = 80;
+  int16_t x1, y1; uint16_t w, h;
 
-  y += 30;
-  canvas.drawFastHLine(10, y, SCREEN_WIDTH - 20, COLOR_BORDER);
-  y += 10;
-
-  // Location
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_SECONDARY);
+  // Place
+  canvas.setTextColor(0xFFE0); // Yellow header
   canvas.setCursor(10, y);
-  canvas.print("LOCATION:");
+  canvas.print("LOKASI:");
   y += 12;
-
   canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(15, y);
-  // Word wrap for long place names
-  String place = eq.place;
-  if (place.length() > 45) {
-    int breakPoint = place.lastIndexOf(' ', 45);
-    if (breakPoint == -1) breakPoint = 45;
-    canvas.print(place.substring(0, breakPoint));
-    y += 10;
-    canvas.setCursor(15, y);
-    canvas.print(place.substring(breakPoint + 1));
+  String p = eq.place;
+  if (p.length() > 45) {
+      canvas.print(p.substring(0, 45));
+      y += 10;
+      canvas.setCursor(15, y);
+      canvas.print(p.substring(45));
   } else {
-    canvas.print(place);
+      canvas.print(p);
   }
-  y += 15;
+  y += 20;
 
-  // Coordinates & Depth
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.setCursor(10, y);
-  canvas.printf("LAT: %.4f  LON: %.4f", eq.latitude, eq.longitude);
-  y += 12;
-  canvas.setCursor(10, y);
-  canvas.printf("DEPTH: %.1f km", eq.depth);
-  y += 15;
-
-  // Time
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.setCursor(10, y);
-  canvas.print("TIME:");
-  y += 12;
-
+  // Stats Grid
+  int col2 = 160;
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, y); canvas.print("KEDALAMAN:");
+  canvas.setCursor(col2, y); canvas.print("WAKTU:");
+  y += 10;
   canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(15, y);
+  canvas.setCursor(15, y); canvas.printf("%.1f km", eq.depth);
+  canvas.setCursor(col2 + 5, y); canvas.print(getRelativeTime(eq.time));
+  y += 18;
 
-  time_t t = eq.time / 1000;
-  struct tm* timeinfo = localtime(&t);
-  char timeStr[64];
-  strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
-  canvas.print(timeStr);
-  canvas.print(" (");
-  canvas.print(getRelativeTime(eq.time));
-  canvas.print(")");
-  y += 15;
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, y); canvas.print("KOORDINAT:");
+  canvas.setCursor(col2, y); canvas.print("JARAK:");
+  y += 10;
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(15, y); canvas.printf("%.4f, %.4f", eq.latitude, eq.longitude);
+  canvas.setCursor(col2 + 5, y);
+  if (eq.distance > 0) canvas.printf("%.1f km", eq.distance);
+  else canvas.print("Unknown");
 
-  // Distance from user
-  if (eq.distance > 0) {
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.setCursor(10, y);
-    canvas.print("DISTANCE FROM YOU:");
-    y += 12;
-    canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setCursor(15, y);
-    canvas.printf("%.1f km", eq.distance);
-    y += 15;
-  }
-
-  // Tsunami warning
   if (eq.tsunami == 1) {
-    canvas.fillRect(10, y, SCREEN_WIDTH - 20, 18, 0xF800);
+    y += 18;
+    canvas.fillRect(10, y, SCREEN_WIDTH - 20, 16, 0xF800);
     canvas.setTextColor(COLOR_BG);
-    canvas.setCursor(20, y + 5);
-    canvas.print("!!! TSUNAMI WARNING !!!");
+    canvas.setCursor(25, y + 4);
+    canvas.print("!!! PERINGATAN TSUNAMI !!!");
   }
 
   // Footer
-  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
-  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  int footerY = SCREEN_HEIGHT - 18;
+  canvas.drawFastHLine(0, footerY, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R = Back to List");
+  canvas.setCursor(10, footerY + 4);
+  canvas.print("SELECT: Lihat Peta | L+R: Kembali");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7462,90 +7425,92 @@ void drawPrayerTimes() {
     return;
   }
 
-  // --- TOP CARD: NEXT PRAYER ---
-  NextPrayerInfo next = getNextPrayer();
-  int cardH = 65;
-  canvas.fillRoundRect(10, 20, SCREEN_WIDTH - 20, cardH, 10, COLOR_PANEL);
-  canvas.drawRoundRect(10, 20, SCREEN_WIDTH - 20, cardH, 10, COLOR_BORDER);
-
-  // Gradient decoration on the card
-  for(int i=0; i<cardH-4; i++) {
-    uint8_t alpha = map(i, 0, cardH-4, 40, 10);
-    canvas.drawFastHLine(12, 22 + i, SCREEN_WIDTH - 24, color565(alpha, alpha, alpha + 10));
-  }
-
-  canvas.setTextColor(COLOR_DIM);
+  // Header
+  canvas.fillRect(0, 13, SCREEN_WIDTH, 20, COLOR_PANEL);
+  canvas.drawFastHLine(0, 13, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 33, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
-  canvas.setCursor(20, 30);
-  canvas.print("NEXT PRAYER");
+  canvas.setCursor(10, 19);
+  canvas.print("JADWAL SHALAT");
+  canvas.setCursor(SCREEN_WIDTH - 100, 19);
+  canvas.print(currentPrayer.gregorianDate);
+
+  NextPrayerInfo next = getNextPrayer();
+
+  // --- TOP CARD: NEXT PRAYER ---
+  int nextY = 38;
+  canvas.fillRoundRect(5, nextY, SCREEN_WIDTH - 10, 50, 8, COLOR_PANEL);
+  canvas.drawRoundRect(5, nextY, SCREEN_WIDTH - 10, 50, 8, COLOR_BORDER);
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(15, nextY + 8);
+  canvas.print("MENDEKATI:");
 
   canvas.setTextColor(0x07FF); // Cyan
   canvas.setTextSize(3);
-  canvas.setCursor(20, 45);
+  canvas.setCursor(15, nextY + 20);
   canvas.print(next.name);
 
   // Countdown
   String countdown = formatRemainingTime(next.remainingMinutes);
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.setCursor(SCREEN_WIDTH - 110, 30);
-  canvas.print("COMMENCING IN");
-
-  canvas.setTextSize(3);
-  canvas.setTextColor(0xFFE0); // Yellow
   int16_t x1, y1; uint16_t w, h;
+  canvas.setTextSize(2);
+  canvas.setTextColor(0xFFE0); // Yellow
   canvas.getTextBounds(countdown, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH - 20 - w, 45);
+  canvas.setCursor(SCREEN_WIDTH - 15 - w, nextY + 24);
   canvas.print(countdown);
 
-  // Mini progress bar in card
-  int pBarW = SCREEN_WIDTH - 40;
-  canvas.fillRect(20, 75, pBarW, 3, 0x2104);
-  // Assuming a period of 4 hours (240 mins) for visual progress if we don't have exact prev prayer
-  float pPercent = constrain(1.0f - (float)next.remainingMinutes / 240.0f, 0.0f, 1.0f);
-  canvas.fillRect(20, 75, (int)(pBarW * pPercent), 3, 0x07E0);
-
-  // --- MIDDLE: PRAYER LIST ---
+  // --- MIDDLE: PRAYER LIST (Two Columns) ---
   int listY = 95;
+  int colWidth = SCREEN_WIDTH / 2 - 15;
   String prayers[6] = {"Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"};
   String times[6] = {currentPrayer.fajr, currentPrayer.sunrise, currentPrayer.dhuhr, currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha};
 
   canvas.setTextSize(1);
   for (int i = 0; i < 6; i++) {
-    int rowY = listY + (i * 12);
+    int col = i / 3;
+    int row = i % 3;
+    int x = 10 + (col * (colWidth + 20));
+    int y = listY + (row * 18);
+
     bool isNext = (next.index != -1 && prayerNames[next.index] == prayers[i]);
 
     if (isNext) {
-      canvas.fillRect(10, rowY - 1, SCREEN_WIDTH - 20, 11, 0x1305); // Very dark blue/green
-      canvas.setTextColor(COLOR_PRIMARY);
+      canvas.fillRoundRect(x - 4, y - 2, colWidth + 8, 16, 4, 0x2104);
+      canvas.drawRoundRect(x - 4, y - 2, colWidth + 8, 16, 4, 0x07FF);
+      canvas.setTextColor(0x07FF);
     } else {
-      canvas.setTextColor(0xBDD7); // Light Gray
+      canvas.setTextColor(COLOR_SECONDARY);
     }
 
-    drawPrayerIcon(15, rowY - 2, i);
-    canvas.setCursor(38, rowY);
+    drawPrayerIcon(x, y - 2, i);
+    canvas.setCursor(x + 22, y + 2);
     canvas.print(prayers[i]);
 
-    canvas.setCursor(SCREEN_WIDTH - 60, rowY);
+    canvas.setCursor(x + colWidth - 30, y + 2);
     canvas.print(times[i]);
   }
 
-  // --- BOTTOM: INFO & DATE ---
-  int footerY = SCREEN_HEIGHT - 32;
-  canvas.drawFastHLine(10, footerY, SCREEN_WIDTH - 20, COLOR_BORDER);
+  // --- BOTTOM: FOOTER ---
+  int footerY = SCREEN_HEIGHT - 18;
+  canvas.drawFastHLine(10, footerY - 2, SCREEN_WIDTH - 20, COLOR_BORDER);
 
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(15, footerY + 6);
-  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth + " " + currentPrayer.hijriYear + " H");
+  canvas.setCursor(10, footerY + 2);
+  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth);
 
-  canvas.setCursor(15, footerY + 18);
-  canvas.print(userLocation.city);
+  String loc = userLocation.city;
+  if (loc.length() > 15) loc = loc.substring(0, 12) + "...";
+  canvas.getTextBounds(loc, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH / 2 - w / 2, footerY + 2);
+  canvas.print(loc);
 
-  canvas.setTextColor(COLOR_SECONDARY);
-  String qiblaStr = "Qibla: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 1) + "°";
+  String qiblaStr = "Qibla: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 0) + "°";
   canvas.getTextBounds(qiblaStr, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH - 15 - w, footerY + 18);
+  canvas.setCursor(SCREEN_WIDTH - 10 - w, footerY + 2);
   canvas.print(qiblaStr);
 
   canvas.drawBitmap(SCREEN_WIDTH - 45, footerY - 50, icon_prayer, 32, 32, 0x4208); // Faded background icon
