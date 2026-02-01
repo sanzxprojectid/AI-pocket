@@ -533,6 +533,7 @@ ParallaxLayer jumperStars[JUMPER_MAX_STARS];
 
 // ===== PRAYER TIMES SYSTEM =====
 struct PrayerTimes {
+  String imsak;
   String fajr;
   String sunrise;
   String dhuhr;
@@ -589,13 +590,15 @@ struct PrayerSettings {
   int reminderMinutes;  // 5, 10, 15, or 30
   bool autoLocation;
   int calculationMethod; // 20 for MUI Indonesia
+  int hijriAdjustment;
 };
 
 struct NextPrayerInfo {
   String name;
   String time;
   int remainingMinutes;
-  int index; // 0-4
+  int index; // 0-6
+  float progress; // 0.0 to 1.0
 };
 
 PrayerTimes currentPrayer;
@@ -605,8 +608,8 @@ LocationData userLocation;
 PrayerSettings prayerSettings;
 
 // Prayer notification tracking
-bool prayerNotified[5] = {false, false, false, false, false};
-String prayerNames[5] = {"Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"};
+bool prayerNotified[7] = {false, false, false, false, false, false, false};
+String prayerNames[7] = {"Imsak", "Subuh", "Terbit", "Dzuhur", "Ashar", "Maghrib", "Isya"};
 int prayerScrollOffset = 0;
 unsigned long lastPrayerCheck = 0;
 bool isDFPlayerAvailable = false;
@@ -1497,6 +1500,7 @@ void fetchPrayerTimes() {
   url += "latitude=" + String(userLocation.latitude, 4);
   url += "&longitude=" + String(userLocation.longitude, 4);
   url += "&method=" + String(prayerSettings.calculationMethod);
+  url += "&adjustment=" + String(prayerSettings.hijriAdjustment);
 
   WiFiClientSecure client;
   client.setInsecure();
@@ -1520,6 +1524,7 @@ void fetchPrayerTimes() {
       JsonObject hijri = date["hijri"];
 
       // Extract prayer times
+      currentPrayer.imsak = timings["Imsak"].as<String>().substring(0, 5);
       currentPrayer.fajr = timings["Fajr"].as<String>().substring(0, 5);
       currentPrayer.sunrise = timings["Sunrise"].as<String>().substring(0, 5);
       currentPrayer.dhuhr = timings["Dhuhr"].as<String>().substring(0, 5);
@@ -1538,12 +1543,14 @@ void fetchPrayerTimes() {
       currentPrayer.lastFetch = millis();
 
       // Reset notification flags
-      for (int i = 0; i < 5; i++) {
+      for (int i = 0; i < 7; i++) {
         prayerNotified[i] = false;
       }
 
       Serial.println("Prayer times updated successfully");
-      Serial.println("Fajr: " + currentPrayer.fajr);
+      Serial.println("Imsak: " + currentPrayer.imsak);
+      Serial.println("Subuh: " + currentPrayer.fajr);
+      Serial.println("Terbit: " + currentPrayer.sunrise);
       Serial.println("Dhuhr: " + currentPrayer.dhuhr);
       Serial.println("Asr: " + currentPrayer.asr);
       Serial.println("Maghrib: " + currentPrayer.maghrib);
@@ -1584,6 +1591,7 @@ NextPrayerInfo getNextPrayer() {
   result.time = "--:--";
   result.remainingMinutes = 0;
   result.index = -1;
+  result.progress = 0.0f;
 
   if (!currentPrayer.isValid) return result;
 
@@ -1591,31 +1599,58 @@ NextPrayerInfo getNextPrayer() {
   if (currentMin == -1) return result;
 
   // Prayer times in order
-  String times[5] = {
+  String times[7] = {
+    currentPrayer.imsak,
     currentPrayer.fajr,
+    currentPrayer.sunrise,
     currentPrayer.dhuhr,
     currentPrayer.asr,
     currentPrayer.maghrib,
     currentPrayer.isha
   };
 
+  int prayerMinutes[7];
+  for (int i = 0; i < 7; i++) {
+    prayerMinutes[i] = timeToMinutes(times[i]);
+  }
+
   // Find next prayer
-  for (int i = 0; i < 5; i++) {
-    int prayerMin = timeToMinutes(times[i]);
-    if (prayerMin > currentMin) {
-      result.name = prayerNames[i];
-      result.time = times[i];
-      result.remainingMinutes = prayerMin - currentMin;
-      result.index = i;
-      return result;
+  int nextIdx = -1;
+  for (int i = 0; i < 7; i++) {
+    if (prayerMinutes[i] > currentMin) {
+      nextIdx = i;
+      break;
     }
   }
 
-  // If no prayer left today, next is Fajr tomorrow
-  result.name = "Fajr";
-  result.time = currentPrayer.fajr;
-  result.remainingMinutes = (24 * 60 - currentMin) + timeToMinutes(currentPrayer.fajr);
-  result.index = 0;
+  if (nextIdx != -1) {
+    result.name = prayerNames[nextIdx];
+    result.time = times[nextIdx];
+    result.remainingMinutes = prayerMinutes[nextIdx] - currentMin;
+    result.index = nextIdx;
+
+    // Progress calculation
+    int prevMin;
+    if (nextIdx == 0) {
+      prevMin = prayerMinutes[6] - (24 * 60); // Isya yesterday
+    } else {
+      prevMin = prayerMinutes[nextIdx - 1];
+    }
+    result.progress = (float)(currentMin - prevMin) / (prayerMinutes[nextIdx] - prevMin);
+  } else {
+    // If no prayer left today, next is Imsak tomorrow
+    result.name = prayerNames[0];
+    result.time = times[0];
+    result.remainingMinutes = (24 * 60 - currentMin) + prayerMinutes[0];
+    result.index = 0;
+
+    int prevMin = prayerMinutes[6]; // Isya today
+    int nextMin = (24 * 60) + prayerMinutes[0]; // Imsak tomorrow
+    result.progress = (float)(currentMin - prevMin) / (nextMin - prevMin);
+  }
+
+  if (result.progress < 0.0f) result.progress = 0.0f;
+  if (result.progress > 1.0f) result.progress = 1.0f;
 
   return result;
 }
@@ -1626,7 +1661,7 @@ String formatRemainingTime(int minutes) {
   } else {
     int hours = minutes / 60;
     int mins = minutes % 60;
-    return String(hours) + "h " + String(mins) + "m";
+    return String(hours) + "j " + String(mins) + "m";
   }
 }
 
@@ -1652,7 +1687,8 @@ void checkPrayerNotifications() {
 
   // Check for adzan time (within 1 minute window)
   if (next.remainingMinutes <= 1) {
-    if (prayerSettings.adzanSoundEnabled && !prayerSettings.silentMode) {
+    bool isFardhu = (next.index == 1 || next.index == 3 || next.index == 4 || next.index == 5 || next.index == 6);
+    if (isFardhu && prayerSettings.adzanSoundEnabled && !prayerSettings.silentMode) {
       playAdzan();
     }
     showPrayerAlert(next.name);
@@ -7359,33 +7395,40 @@ void drawWikiViewer() {
 // ===== PRAYER TIMES UI =====
 void drawPrayerIcon(int x, int y, int type) {
   switch(type) {
-    case 0: // Fajr - Morning Horizon
+    case 0: // Imsak - Early dawn
+      canvas.drawCircle(x + 8, y + 8, 3, COLOR_DIM);
+      canvas.drawLine(x + 8, y + 2, x + 8, y + 5, COLOR_DIM);
+      canvas.drawLine(x + 8, y + 11, x + 8, y + 14, COLOR_DIM);
+      canvas.drawLine(x + 2, y + 8, x + 5, y + 8, COLOR_DIM);
+      canvas.drawLine(x + 11, y + 8, x + 14, y + 8, COLOR_DIM);
+      break;
+    case 1: // Subuh - Morning Horizon
       canvas.drawLine(x, y + 8, x + 16, y + 8, COLOR_ACCENT);
       canvas.drawCircle(x + 8, y + 8, 4, COLOR_ACCENT);
       canvas.fillRect(x, y + 9, 16, 4, COLOR_BG);
       break;
-    case 1: // Sunrise
+    case 2: // Terbit - Sunrise
       canvas.drawCircle(x + 8, y + 10, 5, 0xFDA0); // Orange
       canvas.fillRect(x, y + 11, 16, 5, COLOR_BG);
       canvas.drawLine(x + 2, y + 11, x + 14, y + 11, 0xFDA0);
       break;
-    case 2: // Dhuhr - Sun
+    case 3: // Dzuhur - Sun
       canvas.drawCircle(x + 8, y + 8, 4, 0xFFE0); // Yellow
       for(int i=0; i<8; i++) {
         float a = i * PI / 4;
         canvas.drawLine(x+8+cos(a)*5, y+8+sin(a)*5, x+8+cos(a)*7, y+8+sin(a)*7, 0xFFE0);
       }
       break;
-    case 3: // Asr - Afternoon Sun
+    case 4: // Ashar - Afternoon Sun
       canvas.drawCircle(x + 8, y + 8, 4, 0xFE60); // Golden
       canvas.drawLine(x + 1, y + 1, x + 4, y + 4, 0xFE60);
       break;
-    case 4: // Maghrib - Sunset
+    case 5: // Maghrib - Sunset
       canvas.drawCircle(x + 8, y + 10, 5, 0xF800); // Red
       canvas.fillRect(x, y + 11, 16, 5, COLOR_BG);
       canvas.drawLine(x, y + 11, x + 16, y + 11, 0xF800);
       break;
-    case 5: // Isha - Moon
+    case 6: // Isya - Moon
       canvas.drawCircle(x + 8, y + 8, 5, 0xCE7F); // Whitish Blue
       canvas.fillCircle(x + 11, y + 6, 4, COLOR_BG);
       break;
@@ -7431,17 +7474,27 @@ void drawPrayerTimes() {
   canvas.drawFastHLine(0, 33, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
+
+  int16_t tx1, ty1; uint16_t tw, th;
+  String cityName = userLocation.city;
+  if (cityName.length() > 15) cityName = cityName.substring(0, 12) + "...";
+  canvas.getTextBounds(cityName, 0, 0, &tx1, &ty1, &tw, &th);
+  canvas.setCursor(SCREEN_WIDTH/2 - tw/2, 19);
+  canvas.print(cityName);
+
   canvas.setCursor(10, 19);
-  canvas.print("JADWAL SHALAT");
-  canvas.setCursor(SCREEN_WIDTH - 100, 19);
+  canvas.print("JADWAL");
+
+  canvas.getTextBounds(currentPrayer.gregorianDate, 0, 0, &tx1, &ty1, &tw, &th);
+  canvas.setCursor(SCREEN_WIDTH - 10 - tw, 19);
   canvas.print(currentPrayer.gregorianDate);
 
   NextPrayerInfo next = getNextPrayer();
 
   // --- TOP CARD: NEXT PRAYER ---
   int nextY = 38;
-  canvas.fillRoundRect(5, nextY, SCREEN_WIDTH - 10, 50, 8, COLOR_PANEL);
-  canvas.drawRoundRect(5, nextY, SCREEN_WIDTH - 10, 50, 8, COLOR_BORDER);
+  canvas.fillRoundRect(5, nextY, SCREEN_WIDTH - 10, 52, 8, COLOR_PANEL);
+  canvas.drawRoundRect(5, nextY, SCREEN_WIDTH - 10, 52, 8, COLOR_BORDER);
 
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
@@ -7450,46 +7503,55 @@ void drawPrayerTimes() {
 
   canvas.setTextColor(0x07FF); // Cyan
   canvas.setTextSize(3);
-  canvas.setCursor(15, nextY + 20);
+  canvas.setCursor(15, nextY + 18);
   canvas.print(next.name);
 
   // Countdown
   String countdown = formatRemainingTime(next.remainingMinutes);
-  int16_t x1, y1; uint16_t w, h;
   canvas.setTextSize(2);
   canvas.setTextColor(0xFFE0); // Yellow
-  canvas.getTextBounds(countdown, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH - 15 - w, nextY + 24);
+  canvas.getTextBounds(countdown, 0, 0, &tx1, &ty1, &tw, &th);
+  canvas.setCursor(SCREEN_WIDTH - 15 - tw, nextY + 15);
   canvas.print(countdown);
 
+  // Progress Bar
+  int pbW = SCREEN_WIDTH - 30;
+  int pbH = 4;
+  int pbX = 15;
+  int pbY = nextY + 42;
+  canvas.drawRoundRect(pbX, pbY, pbW, pbH, 2, COLOR_BORDER);
+  canvas.fillRoundRect(pbX, pbY, (int)(pbW * next.progress), pbH, 2, 0x07FF);
+
   // --- MIDDLE: PRAYER LIST (Two Columns) ---
-  int listY = 95;
-  int colWidth = SCREEN_WIDTH / 2 - 15;
-  String prayers[6] = {"Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"};
-  String times[6] = {currentPrayer.fajr, currentPrayer.sunrise, currentPrayer.dhuhr, currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha};
+  int listY = 98;
+  int colWidth = SCREEN_WIDTH / 2 - 20;
+  String times[7] = {
+    currentPrayer.imsak, currentPrayer.fajr, currentPrayer.sunrise,
+    currentPrayer.dhuhr, currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha
+  };
 
   canvas.setTextSize(1);
-  for (int i = 0; i < 6; i++) {
-    int col = i / 3;
-    int row = i % 3;
-    int x = 10 + (col * (colWidth + 20));
-    int y = listY + (row * 18);
+  for (int i = 0; i < 7; i++) {
+    int col = i / 4;
+    int row = i % 4;
+    int x = 15 + (col * (colWidth + 25));
+    int y = listY + (row * 22);
 
-    bool isNext = (next.index != -1 && prayerNames[next.index] == prayers[i]);
+    bool isNext = (next.index == i);
 
     if (isNext) {
-      canvas.fillRoundRect(x - 4, y - 2, colWidth + 8, 16, 4, 0x2104);
-      canvas.drawRoundRect(x - 4, y - 2, colWidth + 8, 16, 4, 0x07FF);
+      canvas.fillRoundRect(x - 4, y - 3, colWidth + 12, 20, 4, 0x2104);
+      canvas.drawRoundRect(x - 4, y - 3, colWidth + 12, 20, 4, 0x07FF);
       canvas.setTextColor(0x07FF);
     } else {
       canvas.setTextColor(COLOR_SECONDARY);
     }
 
-    drawPrayerIcon(x, y - 2, i);
-    canvas.setCursor(x + 22, y + 2);
-    canvas.print(prayers[i]);
+    drawPrayerIcon(x, y, i);
+    canvas.setCursor(x + 22, y + 4);
+    canvas.print(prayerNames[i]);
 
-    canvas.setCursor(x + colWidth - 30, y + 2);
+    canvas.setCursor(x + colWidth - 25, y + 4);
     canvas.print(times[i]);
   }
 
@@ -7502,15 +7564,10 @@ void drawPrayerTimes() {
   canvas.setCursor(10, footerY + 2);
   canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth);
 
-  String loc = userLocation.city;
-  if (loc.length() > 15) loc = loc.substring(0, 12) + "...";
-  canvas.getTextBounds(loc, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH / 2 - w / 2, footerY + 2);
-  canvas.print(loc);
 
   String qiblaStr = "Qibla: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 0) + "°";
-  canvas.getTextBounds(qiblaStr, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH - 10 - w, footerY + 2);
+  canvas.getTextBounds(qiblaStr, 0, 0, &tx1, &ty1, &tw, &th);
+  canvas.setCursor(SCREEN_WIDTH - 10 - tw, footerY + 2);
   canvas.print(qiblaStr);
 
   canvas.drawBitmap(SCREEN_WIDTH - 45, footerY - 50, icon_prayer, 32, 32, 0x4208); // Faded background icon
@@ -7551,12 +7608,13 @@ const char* prayerSettingsItems[] = {
   "Adzan Sound",
   "Silent Mode",
   "Reminder Time",
+  "Hijri Correction",
   "Auto Location",
   "Select City (Manual)",
   "Refresh Data",
   "Back"
 };
-int prayerSettingsCount = 8;
+int prayerSettingsCount = 9;
 
 void drawCitySelect() {
   canvas.fillScreen(COLOR_BG);
@@ -7714,7 +7772,8 @@ void drawPrayerSettings() {
     else if (i == 1) status = prayerSettings.adzanSoundEnabled ? "[ON]" : "[OFF]";
     else if (i == 2) status = prayerSettings.silentMode ? "[ON]" : "[OFF]";
     else if (i == 3) status = String(prayerSettings.reminderMinutes) + " mins";
-    else if (i == 4) status = prayerSettings.autoLocation ? "[AUTO]" : "[MANUAL]";
+    else if (i == 4) status = (prayerSettings.hijriAdjustment >= 0 ? "+" : "") + String(prayerSettings.hijriAdjustment) + " days";
+    else if (i == 5) status = prayerSettings.autoLocation ? "[AUTO]" : "[MANUAL]";
 
     canvas.print(prayerSettingsItems[i]);
 
@@ -7788,22 +7847,29 @@ void handlePrayerSettingsInput() {
         preferences.end();
         break;
       case 4:
+        prayerSettings.hijriAdjustment++;
+        if (prayerSettings.hijriAdjustment > 2) prayerSettings.hijriAdjustment = -2;
+        preferences.begin("prayer-data", false);
+        preferences.putInt("prayerHijri", prayerSettings.hijriAdjustment);
+        preferences.end();
+        break;
+      case 5:
         prayerSettings.autoLocation = !prayerSettings.autoLocation;
         preferences.begin("prayer-data", false);
         preferences.putBool("prayerAutoLoc", prayerSettings.autoLocation);
         preferences.end();
         break;
-      case 5:
+      case 6:
         changeState(STATE_PRAYER_CITY_SELECT);
         break;
-      case 6:
+      case 7:
         if (prayerSettings.autoLocation) {
           fetchUserLocation();
         } else {
           fetchPrayerTimes();
         }
         break;
-      case 7:
+      case 8:
         changeState(STATE_PRAYER_TIMES);
         break;
     }
@@ -8911,7 +8977,8 @@ void setup() {
         prayerSettings.silentMode = preferences.getBool("prayerSilent", false);
         prayerSettings.reminderMinutes = preferences.getInt("prayerRemind", 5);
         prayerSettings.autoLocation = preferences.getBool("prayerAutoLoc", true);
-        prayerSettings.calculationMethod = 11; // MUI Indonesia / Singapore
+        prayerSettings.calculationMethod = preferences.getInt("prayerCalc", 20); // Default 20 for Kemenag RI
+        prayerSettings.hijriAdjustment = preferences.getInt("prayerHijri", 0);
         preferences.end();
 
         loadLocationFromPreferences();
