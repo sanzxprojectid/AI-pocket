@@ -679,6 +679,8 @@ struct NextPrayerInfo {
 };
 
 PrayerTimes currentPrayer;
+bool prayerFetchFailed = false;
+String prayerFetchError = "";
 LocationData userLocation;
 PrayerSettings prayerSettings;
 
@@ -1479,9 +1481,13 @@ void fetchPrayerTimes() {
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected");
+    prayerFetchFailed = true;
+    prayerFetchError = "WiFi Disconnected";
     return;
   }
 
+  prayerFetchFailed = false;
+  prayerFetchError = "";
   Serial.println("Fetching prayer times...");
 
   // Build URL
@@ -1523,6 +1529,7 @@ void fetchPrayerTimes() {
       currentPrayer.hijriYear = hijri["year"].as<String>();
 
       currentPrayer.isValid = true;
+      prayerFetchFailed = false;
       currentPrayer.lastFetch = millis();
 
       // Reset notification flags
@@ -1538,9 +1545,13 @@ void fetchPrayerTimes() {
       Serial.println("Isha: " + currentPrayer.isha);
     } else {
       Serial.println("JSON parsing failed");
+      prayerFetchFailed = true;
+      prayerFetchError = "Data Format Error";
     }
   } else {
     Serial.printf("HTTP GET failed: %d\n", httpCode);
+    prayerFetchFailed = true;
+    prayerFetchError = "HTTP Error: " + String(httpCode);
   }
 
   http.end();
@@ -7109,16 +7120,28 @@ void drawPrayerTimes() {
 
   if (!currentPrayer.isValid) {
     canvas.setTextSize(2);
-    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextColor(prayerFetchFailed ? 0xF800 : COLOR_TEXT);
     canvas.setCursor(40, 70);
-    canvas.println("Loading...");
+    if (prayerFetchFailed) {
+      canvas.println("Fetch Failed!");
+    } else {
+      canvas.println("Loading...");
+    }
 
     canvas.setTextSize(1);
     canvas.setCursor(30, 100);
-    if (!userLocation.isValid) {
-      canvas.println("Detecting location via IP...");
+    if (prayerFetchFailed) {
+      canvas.setTextColor(COLOR_DIM);
+      canvas.println(prayerFetchError);
+      canvas.setCursor(30, 120);
+      canvas.setTextColor(COLOR_PRIMARY);
+      canvas.println("Press SELECT to retry");
     } else {
-      canvas.println("Fetching prayer times...");
+      if (!userLocation.isValid) {
+        canvas.println("Detecting location via IP...");
+      } else {
+        canvas.println("Fetching prayer times...");
+      }
     }
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -7205,6 +7228,13 @@ void drawPrayerTimes() {
 
 void handlePrayerTimesInput() {
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    if (!currentPrayer.isValid && prayerFetchFailed) {
+      ledSuccess();
+      fetchPrayerTimes();
+      delay(200);
+      return;
+    }
+
     unsigned long pressTime = millis();
     while (digitalRead(BTN_SELECT) == BTN_ACT) {
       if (millis() - pressTime > 1000) {
@@ -7436,7 +7466,11 @@ void handlePrayerSettingsInput() {
         changeState(STATE_PRAYER_CITY_SELECT);
         break;
       case 6:
-        fetchUserLocation();
+        if (prayerSettings.autoLocation) {
+          fetchUserLocation();
+        } else {
+          fetchPrayerTimes();
+        }
         break;
       case 7:
         changeState(STATE_PRAYER_TIMES);
@@ -8320,7 +8354,7 @@ void setup() {
         prayerSettings.silentMode = preferences.getBool("prayerSilent", false);
         prayerSettings.reminderMinutes = preferences.getInt("prayerRemind", 5);
         prayerSettings.autoLocation = preferences.getBool("prayerAutoLoc", true);
-        prayerSettings.calculationMethod = 20; // MUI Indonesia
+        prayerSettings.calculationMethod = 11; // MUI Indonesia / Singapore
         preferences.end();
 
         loadLocationFromPreferences();
