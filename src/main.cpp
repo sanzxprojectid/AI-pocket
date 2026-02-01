@@ -7454,9 +7454,6 @@ void drawPrayerTimes() {
       canvas.getTextBounds(prayerFetchError, 0, 0, &x1, &y1, &w, &h);
       canvas.setCursor((SCREEN_WIDTH - w) / 2, 100);
       canvas.println(prayerFetchError);
-      canvas.setTextColor(COLOR_PRIMARY);
-      canvas.setCursor(SCREEN_WIDTH/2 - 50, 125);
-      canvas.println("Press SELECT to retry");
     } else {
       canvas.setTextColor(COLOR_DIM);
       String loadMsg = !userLocation.isValid ? "Locating via IP..." : "Fetching timings...";
@@ -7523,8 +7520,8 @@ void drawPrayerTimes() {
   canvas.fillRoundRect(pbX, pbY, (int)(pbW * next.progress), pbH, 2, 0x07FF);
 
   // --- MIDDLE: PRAYER LIST (Two Columns) ---
-  int listY = 98;
-  int colWidth = SCREEN_WIDTH / 2 - 20;
+  int listY = 92;
+  int colWidth = 145;
   String times[7] = {
     currentPrayer.imsak, currentPrayer.fajr, currentPrayer.sunrise,
     currentPrayer.dhuhr, currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha
@@ -7534,24 +7531,24 @@ void drawPrayerTimes() {
   for (int i = 0; i < 7; i++) {
     int col = i / 4;
     int row = i % 4;
-    int x = 15 + (col * (colWidth + 25));
-    int y = listY + (row * 22);
+    int x = 10 + (col * (colWidth + 10));
+    int y = listY + (row * 15);
 
     bool isNext = (next.index == i);
 
     if (isNext) {
-      canvas.fillRoundRect(x - 4, y - 3, colWidth + 12, 20, 4, 0x2104);
-      canvas.drawRoundRect(x - 4, y - 3, colWidth + 12, 20, 4, 0x07FF);
+      canvas.fillRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, 0x2104);
+      canvas.drawRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, 0x07FF);
       canvas.setTextColor(0x07FF);
     } else {
       canvas.setTextColor(COLOR_SECONDARY);
     }
 
     drawPrayerIcon(x, y, i);
-    canvas.setCursor(x + 22, y + 4);
+    canvas.setCursor(x + 22, y + 2);
     canvas.print(prayerNames[i]);
 
-    canvas.setCursor(x + colWidth - 25, y + 4);
+    canvas.setCursor(x + 105, y + 2);
     canvas.print(times[i]);
   }
 
@@ -7561,16 +7558,17 @@ void drawPrayerTimes() {
 
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, footerY + 2);
-  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth);
 
+  // Hijri Date moved to Top Card
+  String hijriStr = currentPrayer.hijriDate + " " + currentPrayer.hijriMonth;
+  canvas.getTextBounds(hijriStr, 0, 0, &tx1, &ty1, &tw, &th);
+  canvas.setCursor(SCREEN_WIDTH - 15 - tw, nextY + 8);
+  canvas.print(hijriStr);
 
-  String qiblaStr = "Qibla: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 0) + "°";
+  String qiblaStr = "Kiblat: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 0) + "°";
   canvas.getTextBounds(qiblaStr, 0, 0, &tx1, &ty1, &tw, &th);
-  canvas.setCursor(SCREEN_WIDTH - 10 - tw, footerY + 2);
+  canvas.setCursor((SCREEN_WIDTH - tw) / 2, footerY + 2);
   canvas.print(qiblaStr);
-
-  canvas.drawBitmap(SCREEN_WIDTH - 45, footerY - 50, icon_prayer, 32, 32, 0x4208); // Faded background icon
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7665,8 +7663,6 @@ void drawCitySelect() {
   canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
   canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Navigate | SELECT=Apply | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7788,8 +7784,6 @@ void drawPrayerSettings() {
   canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
   canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Select | SELECT=Toggle | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
