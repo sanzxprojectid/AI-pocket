@@ -226,6 +226,9 @@ float prayerSettingsVelocity = 0.0f;
 float citySelectScroll = 0.0f;
 float citySelectVelocity = 0.0f;
 
+float genericMenuScrollCurrent = 0.0f;
+float genericMenuVelocity = 0.0f;
+
 struct Particle {
   float x, y, speed;
   uint8_t size;
@@ -2070,17 +2073,20 @@ String formatTime(int seconds) {
 }
 
 void drawScrollableMenu(const char* items[], int numItems, int startY, int itemHeight, int itemGap) {
-  int visibleItems = (SCREEN_HEIGHT - startY) / (itemHeight + itemGap);
-  int menuScroll = 0;
+  int visibleItems = (SCREEN_HEIGHT - startY - 20) / (itemHeight + itemGap);
+  float targetScroll = 0;
 
   if (menuSelection >= visibleItems) {
-      menuScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
+      targetScroll = (menuSelection - visibleItems + 1) * (itemHeight + itemGap);
   }
 
-  for (int i = 0; i < numItems; i++) {
-    int y = startY + (i * (itemHeight + itemGap)) - menuScroll;
+  // Smooth Menu Scrolling
+  genericMenuScrollCurrent = custom_lerp(genericMenuScrollCurrent, targetScroll, 10.0f * deltaTime);
 
-    if (y < startY - itemHeight || y > SCREEN_HEIGHT) continue;
+  for (int i = 0; i < numItems; i++) {
+    int y = startY + (i * (itemHeight + itemGap)) - (int)genericMenuScrollCurrent;
+
+    if (y < startY - itemHeight || y > SCREEN_HEIGHT - 15) continue;
 
     if (i == menuSelection) {
       canvas.fillRoundRect(10, y, SCREEN_WIDTH - 20, itemHeight, 8, COLOR_PRIMARY);
@@ -6914,6 +6920,14 @@ void changeState(AppState newState) {
     transitionState = TRANSITION_OUT;
     transitionProgress = 0.0f;
     previousState = currentState;
+
+    // Reset Menu Scrolls
+    genericMenuScrollCurrent = 0.0f;
+    genericMenuVelocity = 0.0f;
+    prayerSettingsScroll = 0.0f;
+    prayerSettingsVelocity = 0.0f;
+    citySelectScroll = 0.0f;
+    citySelectVelocity = 0.0f;
   }
 }
 
@@ -7338,20 +7352,24 @@ void drawCitySelect() {
   canvas.print("CITY SELECTION");
 
   int listY = 50;
+  int itemHeight = 18;
+  int footerY = SCREEN_HEIGHT - 15;
+  int visibleHeight = footerY - listY;
   canvas.setTextSize(1);
 
-  // Smooth Highlight Bar
-  canvas.fillRoundRect(5, 48 + citySelectScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
+  // Calculate Viewport Scroll
+  float viewScroll = 0;
+  if (citySelectScroll > visibleHeight - itemHeight) {
+      viewScroll = citySelectScroll - (visibleHeight - itemHeight);
+  }
+
+  // Smooth Highlight Bar (relative to viewport)
+  canvas.fillRoundRect(5, (listY - 2) + citySelectScroll - viewScroll, SCREEN_WIDTH - 10, itemHeight, 4, COLOR_PRIMARY);
 
   for (int i = 0; i < cityCount; i++) {
-    int itemY = listY + (i * 18) - (citySelectScroll / 18.0f); // Minimal scroll effect on text if needed
-    // Actually keep text fixed but highlight moves, or vice versa?
-    // The current loop() logic moves the 'Scroll' variable.
-    // Let's make it so text scrolls too if many cities.
+    int drawY = listY + (i * itemHeight) - (int)viewScroll;
 
-    int drawY = listY + (i * 18);
-
-    if (drawY < 40 || drawY > SCREEN_HEIGHT - 20) continue;
+    if (drawY < listY - itemHeight || drawY > footerY) continue;
 
     if (i == citySelectCursor) {
       canvas.setTextColor(COLOR_BG);
@@ -7443,14 +7461,25 @@ void drawPrayerSettings() {
   canvas.setCursor(15, 20);
   canvas.print("PRAYER SETTINGS");
 
-  // Smooth Selection Highlight
-  canvas.fillRoundRect(5, 48 + prayerSettingsScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
-
   int listY = 50;
+  int itemHeight = 18;
+  int footerY = SCREEN_HEIGHT - 15;
+  int visibleHeight = footerY - listY;
   canvas.setTextSize(1);
 
+  // Calculate Viewport Scroll
+  float viewScroll = 0;
+  if (prayerSettingsScroll > visibleHeight - itemHeight) {
+      viewScroll = prayerSettingsScroll - (visibleHeight - itemHeight);
+  }
+
+  // Smooth Selection Highlight (relative to viewport)
+  canvas.fillRoundRect(5, (listY - 2) + prayerSettingsScroll - viewScroll, SCREEN_WIDTH - 10, itemHeight, 4, COLOR_PRIMARY);
+
   for (int i = 0; i < prayerSettingsCount; i++) {
-    int drawY = listY + (i * 18);
+    int drawY = listY + (i * itemHeight) - (int)viewScroll;
+
+    if (drawY < listY - itemHeight || drawY > footerY) continue;
 
     if (i == prayerSettingsCursor) {
       canvas.setTextColor(COLOR_BG);
