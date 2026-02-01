@@ -221,6 +221,11 @@ float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
 float menuVelocity = 0.0f;
 
+float prayerSettingsScroll = 0.0f;
+float prayerSettingsVelocity = 0.0f;
+float citySelectScroll = 0.0f;
+float citySelectVelocity = 0.0f;
+
 struct Particle {
   float x, y, speed;
   uint8_t size;
@@ -7277,26 +7282,29 @@ void drawCitySelect() {
   int y = 50;
   canvas.setTextSize(1);
 
-  // Show 6 cities at a time
-  int startIdx = (citySelectCursor >= 3) ? (citySelectCursor - 3) : 0;
-  if (startIdx + 6 > cityCount) startIdx = (cityCount > 6) ? (cityCount - 6) : 0;
+  // Draw selection highlight bar smoothly
+  canvas.fillRect(5, 50 + citySelectScroll - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
 
-  for (int i = startIdx; i < ( (startIdx + 6 < cityCount) ? (startIdx + 6) : cityCount ); i++) {
+  int startIdx = 0;
+  int listY = 50;
+
+  for (int i = 0; i < cityCount; i++) {
+    int itemY = listY + (i * 16);
+
+    // Only draw if on screen
+    if (itemY < 40 || itemY > SCREEN_HEIGHT - 20) continue;
+
     if (i == citySelectCursor) {
-      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
       canvas.setTextColor(COLOR_TEXT);
     }
 
-    canvas.setCursor(15, y);
+    canvas.setCursor(15, itemY);
     canvas.print(indonesianCities[i].name);
 
-    // Show coordinates on the right
-    canvas.setCursor(SCREEN_WIDTH - 120, y);
+    canvas.setCursor(SCREEN_WIDTH - 120, itemY);
     canvas.printf("%.4f, %.4f", indonesianCities[i].lat, indonesianCities[i].lon);
-
-    y += 16;
   }
 
   canvas.setTextColor(COLOR_DIM);
@@ -7313,16 +7321,19 @@ void handleCitySelectInput() {
     return;
   }
 
-  if (digitalRead(BTN_DOWN) == BTN_ACT) {
-    citySelectCursor = (citySelectCursor + 1) % cityCount;
-    ledQuickFlash();
-    delay(150);
-  }
+  static unsigned long lastMove = 0;
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
 
-  if (digitalRead(BTN_UP) == BTN_ACT) {
-    citySelectCursor = (citySelectCursor - 1 + cityCount) % cityCount;
-    ledQuickFlash();
-    delay(150);
+  if (btnDown || btnUp) {
+    if (millis() - lastMove > 150) {
+      if (btnDown) citySelectCursor = (citySelectCursor + 1) % cityCount;
+      else citySelectCursor = (citySelectCursor - 1 + cityCount) % cityCount;
+      ledQuickFlash();
+      lastMove = millis();
+    }
+  } else {
+    lastMove = 0;
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
@@ -7371,12 +7382,14 @@ void drawPrayerSettings() {
   canvas.setCursor(10, 20);
   canvas.println("PRAYER SETTINGS");
 
+  // Draw smooth selection bar
+  canvas.fillRect(5, 50 + prayerSettingsScroll - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
+
   int y = 50;
   canvas.setTextSize(1);
 
   for (int i = 0; i < prayerSettingsCount; i++) {
     if (i == prayerSettingsCursor) {
-      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
       canvas.setTextColor(COLOR_TEXT);
@@ -7414,16 +7427,19 @@ void handlePrayerSettingsInput() {
     return;
   }
 
-  if (digitalRead(BTN_DOWN) == BTN_ACT) {
-    prayerSettingsCursor = (prayerSettingsCursor + 1) % prayerSettingsCount;
-    ledQuickFlash();
-    delay(150);
-  }
+  static unsigned long lastMove = 0;
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
 
-  if (digitalRead(BTN_UP) == BTN_ACT) {
-    prayerSettingsCursor = (prayerSettingsCursor - 1 + prayerSettingsCount) % prayerSettingsCount;
-    ledQuickFlash();
-    delay(150);
+  if (btnDown || btnUp) {
+    if (millis() - lastMove > 150) {
+      if (btnDown) prayerSettingsCursor = (prayerSettingsCursor + 1) % prayerSettingsCount;
+      else prayerSettingsCursor = (prayerSettingsCursor - 1 + prayerSettingsCount) % prayerSettingsCount;
+      ledQuickFlash();
+      lastMove = millis();
+    }
+  } else {
+    lastMove = 0;
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
@@ -8464,6 +8480,36 @@ void loop() {
       }
   }
 
+  if (currentState == STATE_PRAYER_SETTINGS) {
+      float spring = 0.4f;
+      float damp = 0.6f;
+      float target = prayerSettingsCursor * 16.0f;
+      float diff = target - prayerSettingsScroll;
+      prayerSettingsVelocity += diff * spring;
+      prayerSettingsVelocity *= damp;
+      if (abs(diff) < 0.1f && abs(prayerSettingsVelocity) < 0.1f) {
+          prayerSettingsScroll = target;
+          prayerSettingsVelocity = 0.0f;
+      } else {
+          prayerSettingsScroll += prayerSettingsVelocity * dt * 50.0f;
+      }
+  }
+
+  if (currentState == STATE_PRAYER_CITY_SELECT) {
+      float spring = 0.4f;
+      float damp = 0.6f;
+      float target = citySelectCursor * 16.0f;
+      float diff = target - citySelectScroll;
+      citySelectVelocity += diff * spring;
+      citySelectVelocity *= damp;
+      if (abs(diff) < 0.1f && abs(citySelectVelocity) < 0.1f) {
+          citySelectScroll = target;
+          citySelectVelocity = 0.0f;
+      } else {
+          citySelectScroll += citySelectVelocity * dt * 50.0f;
+      }
+  }
+
   if (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f) {
       chatAnimProgress += 2.0f * dt; // Fast animation
       if (chatAnimProgress > 1.0f) chatAnimProgress = 1.0f;
@@ -8496,6 +8542,8 @@ void loop() {
     case STATE_KONSOL:
     case STATE_WIKI_VIEWER:
     case STATE_SYSTEM_MONITOR:
+    case STATE_PRAYER_SETTINGS:
+    case STATE_PRAYER_CITY_SELECT:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
