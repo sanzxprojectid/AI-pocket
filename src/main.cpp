@@ -215,6 +215,8 @@ int scrollOffset = 0;
 int menuSelection = 0;
 unsigned long lastDebounce = 0;
 const unsigned long debounceDelay = 150;
+bool emergencyActive = false;
+unsigned long emergencyEnd = 0;
 
 // ============ UI ANIMATION PHYSICS ============
 bool screenIsDirty = true; // Flag to request a screen redraw
@@ -653,6 +655,8 @@ struct Earthquake {
   String title;
   bool sig;              // significant earthquake
   float distance;        // Distance from user location (km)
+  String mmi;            // Modified Mercalli Intensity (BMKG)
+  String aiAnalysis;     // AI safety advice
   bool isValid;
 };
 
@@ -665,6 +669,7 @@ struct EarthquakeSettings {
   int maxRadiusKm;       // Radius from user location (0 = worldwide)
   bool autoRefresh;
   int refreshInterval;   // in minutes (5, 10, 15, 30)
+  int dataSource;        // 0: USGS, 1: BMKG
 };
 
 Earthquake earthquakes[MAX_EARTHQUAKES];
@@ -1376,6 +1381,8 @@ void showPrayerReminder(String prayerName, int minutes);
 void showPrayerAlert(String prayerName);
 void playAdzan();
 void fetchEarthquakeData();
+void fetchBMKGData();
+void analyzeEarthquakeAI();
 void parseEarthquakeData(Stream& stream);
 float calculateDistance(float lat1, float lon1, float lat2, float lon2);
 void sortEarthquakesByTime();
@@ -1724,9 +1731,94 @@ void playAdzan() {
 }
 
 // ===== EARTHQUAKE DATA FETCHING =====
+void fetchBMKGData() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  Serial.println("Fetching earthquake data from BMKG...");
+
+  // BMKG provides M5.0+ and Felt earthquakes.
+  // We'll use Felt earthquakes for more detailed info
+  String url = "https://data.bmkg.go.id/DataMKG/TEWS/gempadirasakan.json";
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(15000);
+
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      JsonArray list = doc["Infogempa"]["gempa"];
+      earthquakeCount = 0;
+
+      for (JsonObject item : list) {
+        if (earthquakeCount >= MAX_EARTHQUAKES) break;
+
+        Earthquake eq;
+        eq.id = item["DateTime"].as<String>();
+        eq.magnitude = item["Magnitude"].as<float>();
+        eq.place = item["Wilayah"].as<String>();
+
+        String coords = item["Coordinates"].as<String>();
+        int commaIndex = coords.indexOf(',');
+        if (commaIndex != -1) {
+          eq.latitude = coords.substring(0, commaIndex).toFloat();
+          eq.longitude = coords.substring(commaIndex + 1).toFloat();
+        }
+
+        String depthStr = item["Kedalaman"].as<String>();
+        eq.depth = depthStr.substring(0, depthStr.indexOf(' ')).toFloat();
+
+        // Parse DateTime: 2026-02-01T13:29:11+00:00
+        struct tm tm_struct;
+        strptime(item["DateTime"].as<const char*>(), "%Y-%m-%dT%H:%M:%S%z", &tm_struct);
+        eq.time = (uint64_t)mktime(&tm_struct) * 1000;
+
+        eq.tsunami = 0;
+        eq.magType = "M";
+        eq.title = item["Wilayah"].as<String>();
+        eq.sig = (eq.magnitude >= 5.0);
+        eq.mmi = item["Dirasakan"].as<String>();
+        eq.isValid = true;
+
+        if (userLocation.isValid) {
+          eq.distance = calculateDistance(userLocation.latitude, userLocation.longitude, eq.latitude, eq.longitude);
+        } else {
+          eq.distance = 0;
+        }
+
+        // Apply filters
+        bool passFilter = true;
+        if (eq.magnitude < eqSettings.minMagnitude) passFilter = false;
+
+        if (passFilter) {
+           earthquakes[earthquakeCount++] = eq;
+        }
+      }
+      sortEarthquakesByTime();
+      lastEarthquakeUpdate = millis();
+      earthquakeDataLoaded = true;
+      Serial.printf("Loaded %d quakes from BMKG\n", earthquakeCount);
+    }
+  } else {
+    Serial.printf("BMKG HTTP Error: %d\n", httpCode);
+  }
+  http.end();
+}
+
 void fetchEarthquakeData() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected, cannot fetch earthquake data");
+    return;
+  }
+
+  if (eqSettings.dataSource == 1) {
+    fetchBMKGData();
     return;
   }
 
@@ -5462,6 +5554,22 @@ void drawBatteryIcon() {
 
 
 void drawStatusBar() {
+  if (emergencyActive) {
+    if (millis() > emergencyEnd) {
+      emergencyActive = false;
+    } else {
+      if ((millis() / 500) % 2 == 0) {
+        canvas.fillRect(0, 0, SCREEN_WIDTH, 13, 0xF800);
+        canvas.setTextColor(0xFFFF);
+        canvas.setTextSize(1);
+        int16_t x1, y1; uint16_t w, h;
+        canvas.getTextBounds("!! EMERGENCY ALERT !!", 0, 0, &x1, &y1, &w, &h);
+        canvas.setCursor((SCREEN_WIDTH - w) / 2, 3);
+        canvas.print("!! EMERGENCY ALERT !!");
+        return;
+      }
+    }
+  }
   int prayerWidth = 0;
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
@@ -5712,6 +5820,27 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+void analyzeEarthquakeAI() {
+  if (earthquakeCount == 0) return;
+  Earthquake &eq = selectedEarthquake;
+
+  String prompt = "Berikan analisis risiko singkat dan saran keselamatan untuk gempa berikut:\n";
+  prompt += "Magnitudo: " + String(eq.magnitude, 1) + "\n";
+  prompt += "Lokasi: " + eq.place + "\n";
+  prompt += "Kedalaman: " + String(eq.depth, 1) + " km\n";
+  if (eq.mmi.length() > 0) prompt += "Dirasakan (MMI): " + eq.mmi + "\n";
+  prompt += "Jarak dari posisi saya: " + String(eq.distance, 1) + " km\n";
+  prompt += "Tanggapi dengan bahasa yang menenangkan dan instruksi yang jelas dalam Bahasa Indonesia.";
+
+  userInput = prompt;
+  changeState(STATE_LOADING);
+  if (currentAIMode == MODE_GROQ) {
+    sendToGroq();
+  } else {
+    sendToGemini();
+  }
+}
+
 // ===== EARTHQUAKE LIST SCREEN =====
 void drawEarthquakeMonitor() {
   canvas.fillScreen(COLOR_BG);
@@ -5724,7 +5853,7 @@ void drawEarthquakeMonitor() {
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
   canvas.setCursor(10, 20);
-  canvas.print("EARTHQUAKE MONITOR");
+  canvas.print(eqSettings.dataSource == 1 ? "BMKG MONITOR" : "USGS MONITOR");
 
   // Filter indicator
   String filter = "M" + String(eqSettings.minMagnitude, 1) + "+";
@@ -5794,7 +5923,13 @@ void drawEarthquakeMonitor() {
     canvas.setCursor(55, y + 13);
     canvas.setTextColor(COLOR_DIM);
     String sub = getRelativeTime(eq.time);
-    if (eq.distance > 0) sub += " | " + String((int)eq.distance) + "km away";
+    if (eq.distance > 0) sub += " | " + String((int)eq.distance) + "km";
+
+    if (eq.mmi.length() > 0) {
+      canvas.setTextColor(0x07FF); // Cyan for MMI
+      int spaceIdx = eq.mmi.indexOf(' ');
+      sub += " | MMI: " + (spaceIdx != -1 ? eq.mmi.substring(0, spaceIdx) : eq.mmi);
+    }
 
     if (eq.tsunami == 1) {
       canvas.setTextColor(0xF800); // Red
@@ -5883,6 +6018,25 @@ void drawEarthquakeDetail() {
   if (eq.distance > 0) canvas.printf("%.1f km", eq.distance);
   else canvas.print("Unknown");
 
+  if (eq.mmi.length() > 0) {
+    y += 18;
+    canvas.setTextColor(0x07FF);
+    canvas.setCursor(10, y);
+    canvas.print("DIRASAKAN:");
+    y += 10;
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setCursor(15, y);
+    String m = eq.mmi;
+    if (m.length() > 45) {
+      canvas.print(m.substring(0, 45));
+      y += 10;
+      canvas.setCursor(15, y);
+      canvas.print(m.substring(45, 90));
+    } else {
+      canvas.print(m);
+    }
+  }
+
   if (eq.tsunami == 1) {
     y += 18;
     canvas.fillRect(10, y, SCREEN_WIDTH - 20, 16, 0xF800);
@@ -5897,7 +6051,7 @@ void drawEarthquakeDetail() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, footerY + 4);
-  canvas.print("SELECT: Lihat Peta | L+R: Kembali");
+  canvas.print("SEL:Peta | UP:Tanya AI | L+R:Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5911,10 +6065,11 @@ const char* eqSettingsItems[] = {
   "Notify Min Mag",
   "Auto Refresh",
   "Refresh Interval",
+  "Data Source",
   "Refresh Now",
   "Back"
 };
-int eqSettingsCount = 9;
+int eqSettingsCount = 10;
 
 void drawEarthquakeMap() {
   canvas.fillScreen(COLOR_BG);
@@ -5932,33 +6087,53 @@ void drawEarthquakeMap() {
     return;
   }
 
-  // Draw simple world boundary
+  // Determine Map Zoom
+  bool zoomIndo = (eqSettings.dataSource == 1) || eqSettings.indonesiaOnly;
+
+  float minLon = -180.0, maxLon = 180.0;
+  float minLat = -90.0, maxLat = 90.0;
+
+  if (zoomIndo) {
+    minLon = 94.0; maxLon = 142.0;
+    minLat = -12.0; maxLat = 8.0;
+  }
+
+  // Draw simple boundary
   canvas.drawRect(10, 25, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 55, COLOR_BORDER);
 
-  // Longitude: -180 to 180 -> X: 10 to SCREEN_WIDTH - 10
-  // Latitude: 90 to -90 -> Y: 25 to SCREEN_HEIGHT - 30
-
-  auto getX = [](float lon) {
-    return 10 + (int)((lon + 180.0f) * (SCREEN_WIDTH - 20) / 360.0f);
+  auto getX = [&](float lon) -> int {
+    float xf = (lon - minLon) * (SCREEN_WIDTH - 20) / (maxLon - minLon);
+    return 10 + (int)xf;
   };
-  auto getY = [](float lat) {
-    return 25 + (int)((90.0f - lat) * (SCREEN_HEIGHT - 55) / 180.0f);
+  auto getY = [&](float lat) -> int {
+    float yf = (maxLat - lat) * (SCREEN_HEIGHT - 55) / (maxLat - minLat);
+    return 25 + (int)yf;
+  };
+  auto isInBounds = [&](float lat, float lon) -> bool {
+    return (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon);
   };
 
-  // Draw equator and prime meridian
-  canvas.drawFastHLine(10, getY(0), SCREEN_WIDTH - 20, 0x1082);
-  canvas.drawFastVLine(getX(0), 25, SCREEN_HEIGHT - 55, 0x1082);
+  // Draw coordinate grid
+  if (!zoomIndo) {
+    canvas.drawFastHLine(10, getY(0), SCREEN_WIDTH - 20, 0x1082);
+    canvas.drawFastVLine(getX(0), 25, SCREEN_HEIGHT - 55, 0x1082);
+  } else {
+    // Draw Indonesia equator
+    if (isInBounds(0, 0)) canvas.drawFastHLine(10, getY(0), SCREEN_WIDTH - 20, 0x1082);
+  }
 
   // Draw all earthquakes as small dots
   for (int i = 0; i < earthquakeCount; i++) {
-    int ex = getX(earthquakes[i].longitude);
-    int ey = getY(earthquakes[i].latitude);
-    uint16_t col = getMagnitudeColor(earthquakes[i].magnitude);
-    canvas.drawPixel(ex, ey, col);
+    if (isInBounds(earthquakes[i].latitude, earthquakes[i].longitude)) {
+      int ex = getX(earthquakes[i].longitude);
+      int ey = getY(earthquakes[i].latitude);
+      uint16_t col = getMagnitudeColor(earthquakes[i].magnitude);
+      canvas.drawPixel(ex, ey, col);
+    }
   }
 
   // Draw selected earthquake marker (blinking)
-  if ((millis() / 250) % 2 == 0) {
+  if (isInBounds(eq.latitude, eq.longitude) && (millis() / 250) % 2 == 0) {
     int sx = getX(eq.longitude);
     int sy = getY(eq.latitude);
     uint16_t col = getMagnitudeColor(eq.magnitude);
@@ -5967,7 +6142,7 @@ void drawEarthquakeMap() {
   }
 
   // Draw user location
-  if (userLocation.isValid) {
+  if (userLocation.isValid && isInBounds(userLocation.latitude, userLocation.longitude)) {
     int ux = getX(userLocation.longitude);
     int uy = getY(userLocation.latitude);
     canvas.fillRect(ux - 1, uy - 1, 3, 3, 0x07E0); // Green dot
@@ -6021,7 +6196,7 @@ void drawEarthquakeSettings() {
     canvas.print(eqSettingsItems[i]);
 
     // Show current values
-    if (i < 7) {
+    if (i < 8) {
       String val = "";
       switch (i) {
         case 0: // Min Magnitude
@@ -6046,6 +6221,9 @@ void drawEarthquakeSettings() {
           break;
         case 6: // Refresh Interval
           val = String(eqSettings.refreshInterval) + " m";
+          break;
+        case 7: // Data Source
+          val = (eqSettings.dataSource == 1) ? "BMKG" : "USGS";
           break;
       }
       int16_t x1, y1; uint16_t w, h;
@@ -7924,6 +8102,11 @@ void handleEarthquakeInput() {
 }
 
 void handleEarthquakeDetailInput() {
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    analyzeEarthquakeAI();
+    ledSuccess();
+  }
+
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
     changeState(STATE_EARTHQUAKE_MAP);
     ledSuccess();
@@ -8032,11 +8215,19 @@ void handleEarthquakeSettingsInput() {
         preferences.end();
         break;
 
-      case 7: // Refresh Now
+      case 7: // Data Source
+        eqSettings.dataSource = (eqSettings.dataSource == 1) ? 0 : 1;
+        preferences.begin("eq-data", false);
+        preferences.putInt("eqSource", eqSettings.dataSource);
+        preferences.end();
         fetchEarthquakeData();
         break;
 
-      case 8: // Back
+      case 8: // Refresh Now
+        fetchEarthquakeData();
+        break;
+
+      case 9: // Back
         changeState(STATE_EARTHQUAKE);
         break;
     }
@@ -8102,6 +8293,11 @@ void showEarthquakeAlert(Earthquake eq) {
 
   // Trigger NeoPixel effect
   triggerNeoPixelEffect(pixels.Color(255, 0, 0), 5000); // Red pulse
+
+  if (eq.magnitude >= 5.0 || eq.tsunami == 1) {
+    emergencyActive = true;
+    emergencyEnd = millis() + 30000; // 30 seconds of emergency mode
+  }
 }
 
 // ============ MENU HANDLERS ============
@@ -8995,6 +9191,7 @@ void setup() {
         eqSettings.notifyMinMag = preferences.getFloat("eqNotifyMag", 5.0);
         eqSettings.autoRefresh = preferences.getBool("eqAutoRefresh", true);
         eqSettings.refreshInterval = preferences.getInt("eqRefreshInt", 10);
+        eqSettings.dataSource = preferences.getInt("eqSource", 1); // Default to BMKG
         preferences.end();
 
         // Initial data fetch
@@ -9170,7 +9367,8 @@ void loop() {
 
   // Also set dirty flag during screen transitions or other specific animations
   if (transitionState != TRANSITION_NONE ||
-     (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f)) {
+     (currentState == STATE_ESPNOW_CHAT && chatAnimProgress < 1.0f) ||
+     emergencyActive) {
     screenIsDirty = true;
   }
   
