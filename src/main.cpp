@@ -1413,10 +1413,12 @@ void fetchUserLocation() {
     return;
   }
 
-  Serial.println("Fetching location from IP...");
+  Serial.println("Fetching location from IP (HTTPS)...");
 
+  WiFiClientSecure client;
+  client.setInsecure();
   HTTPClient http;
-  http.begin("http://ip-api.com/json/?fields=status,country,city,lat,lon");
+  http.begin(client, "https://ipwho.is/");
   http.setTimeout(10000);
 
   int httpCode = http.GET();
@@ -1428,11 +1430,11 @@ void fetchUserLocation() {
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
-      String status = doc["status"].as<String>();
+      bool success = doc["success"].as<bool>();
 
-      if (status == "success") {
-        userLocation.latitude = doc["lat"].as<float>();
-        userLocation.longitude = doc["lon"].as<float>();
+      if (success) {
+        userLocation.latitude = doc["latitude"].as<float>();
+        userLocation.longitude = doc["longitude"].as<float>();
         userLocation.city = doc["city"].as<String>();
         userLocation.country = doc["country"].as<String>();
         userLocation.isValid = true;
@@ -1493,16 +1495,18 @@ void fetchPrayerTimes() {
 
   prayerFetchFailed = false;
   prayerFetchError = "";
-  Serial.println("Fetching prayer times...");
+  Serial.println("Fetching prayer times (HTTPS)...");
 
   // Build URL
-  String url = "http://api.aladhan.com/v1/timings?";
+  String url = "https://api.aladhan.com/v1/timings?";
   url += "latitude=" + String(userLocation.latitude, 4);
   url += "&longitude=" + String(userLocation.longitude, 4);
   url += "&method=" + String(prayerSettings.calculationMethod);
 
+  WiFiClientSecure client;
+  client.setInsecure();
   HTTPClient http;
-  http.begin(url);
+  http.begin(client, url);
   http.setTimeout(15000);
 
   int httpCode = http.GET();
