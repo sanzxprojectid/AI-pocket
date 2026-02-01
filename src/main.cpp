@@ -159,7 +159,11 @@ enum AppState {
   STATE_SYSTEM_MONITOR,
   STATE_PRAYER_TIMES,
   STATE_PRAYER_SETTINGS,
-  STATE_PRAYER_CITY_SELECT
+  STATE_PRAYER_CITY_SELECT,
+  STATE_EARTHQUAKE,
+  STATE_EARTHQUAKE_DETAIL,
+  STATE_EARTHQUAKE_SETTINGS,
+  STATE_EARTHQUAKE_MAP
 };
 
 AppState currentState = STATE_BOOT;
@@ -619,6 +623,61 @@ const unsigned char icon_prayer[] PROGMEM = {
 0x3F, 0xFF, 0xFF, 0xFC, 0x1F, 0xFF, 0xFF, 0xF8, 0x0F, 0xFF, 0xFF, 0xF0, 0x03, 0xFF, 0xFF, 0xC0
 };
 
+const unsigned char icon_earthquake[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+0x00, 0x1F, 0xF8, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0xFF, 0xFF, 0x00,
+0x00, 0x7E, 0x7E, 0x00, 0x00, 0x3C, 0x3C, 0x00, 0x00, 0x18, 0x18, 0x00, 0x01, 0xFF, 0xFF, 0x80,
+0x03, 0xFF, 0xFF, 0xC0, 0x07, 0xFF, 0xFF, 0xE0, 0x0F, 0x7F, 0xFE, 0xF0, 0x1E, 0x3F, 0xFC, 0x78,
+0x3C, 0x1F, 0xF8, 0x3C, 0x78, 0x0F, 0xF0, 0x1E, 0xF0, 0x07, 0xE0, 0x0F, 0xE0, 0x03, 0xC0, 0x07,
+0xC0, 0x01, 0x80, 0x03, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// ===== EARTHQUAKE SYSTEM =====
+#define MAX_EARTHQUAKES 50
+
+struct Earthquake {
+  String id;
+  float magnitude;
+  String place;
+  float latitude;
+  float longitude;
+  float depth;           // in km
+  uint64_t time;         // Unix timestamp (ms)
+  int tsunami;           // 0 = no, 1 = yes
+  String magType;        // ml, mw, mb, etc
+  String title;
+  bool sig;              // significant earthquake
+  float distance;        // Distance from user location (km)
+  bool isValid;
+};
+
+struct EarthquakeSettings {
+  float minMagnitude;    // 2.5, 4.5, 6.0, or ALL (0.0)
+  int timeRange;         // 1 = 1 hour, 24 = 1 day, 168 = 1 week
+  bool indonesiaOnly;
+  bool notifyEnabled;
+  float notifyMinMag;    // Minimum magnitude for notifications
+  int maxRadiusKm;       // Radius from user location (0 = worldwide)
+  bool autoRefresh;
+  int refreshInterval;   // in minutes (5, 10, 15, 30)
+};
+
+Earthquake earthquakes[MAX_EARTHQUAKES];
+int earthquakeCount = 0;
+int earthquakeCursor = 0;
+int earthquakeScrollOffset = 0;
+unsigned long lastEarthquakeUpdate = 0;
+bool earthquakeDataLoaded = false;
+
+EarthquakeSettings eqSettings;
+Earthquake selectedEarthquake;  // For detail view
+
+// Alert tracking
+String lastAlertedEarthquakeId = "";
+unsigned long lastEarthquakeCheck = 0;
+
 const unsigned char icon_chat[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF, 0xC0, 0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8,
 0x3F, 0x00, 0x00, 0xFC, 0x7E, 0x00, 0x00, 0x7E, 0x7C, 0x00, 0x00, 0x3E, 0xF8, 0x0F, 0xF0, 0x1F,
@@ -782,7 +841,7 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -1313,6 +1372,23 @@ void fetchPrayerTimes();
 void showPrayerReminder(String prayerName, int minutes);
 void showPrayerAlert(String prayerName);
 void playAdzan();
+void fetchEarthquakeData();
+void parseEarthquakeData(Stream& stream);
+float calculateDistance(float lat1, float lon1, float lat2, float lon2);
+void sortEarthquakesByTime();
+uint16_t getMagnitudeColor(float mag);
+String getMagnitudeLabel(float mag);
+String getRelativeTime(unsigned long timestamp);
+void drawEarthquakeMonitor();
+void drawEarthquakeDetail();
+void drawEarthquakeMap();
+void drawEarthquakeSettings();
+void handleEarthquakeInput();
+void handleEarthquakeDetailInput();
+void handleEarthquakeMapInput();
+void handleEarthquakeSettingsInput();
+void checkEarthquakeAlerts();
+void showEarthquakeAlert(Earthquake eq);
 
 // ===== LOCATION DETECTION =====
 void fetchUserLocation() {
@@ -1609,6 +1685,195 @@ void playAdzan() {
     myDFPlayer.play(99); // Assuming adzan.mp3 is track 99
     Serial.println("Playing adzan...");
   }
+}
+
+// ===== EARTHQUAKE DATA FETCHING =====
+void fetchEarthquakeData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, cannot fetch earthquake data");
+    return;
+  }
+
+  Serial.println("Fetching earthquake data from USGS...");
+
+  // Build URL based on settings
+  String url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/";
+
+  if (eqSettings.minMagnitude >= 6.0) {
+    url += "significant_week.geojson";
+  } else if (eqSettings.minMagnitude >= 4.5) {
+    url += "4.5_day.geojson";
+  } else if (eqSettings.minMagnitude >= 2.5) {
+    url += "2.5_day.geojson";
+  } else {
+    url += "all_day.geojson";
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(15000);
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    parseEarthquakeData(http.getStream());
+    lastEarthquakeUpdate = millis();
+    earthquakeDataLoaded = true;
+    Serial.printf("Loaded %d earthquakes\n", earthquakeCount);
+  } else {
+    Serial.printf("HTTP GET failed: %d\n", httpCode);
+  }
+
+  http.end();
+}
+
+void parseEarthquakeData(Stream& stream) {
+  JsonDocument doc; // V7 auto-allocates
+  DeserializationError error = deserializeJson(doc, stream);
+
+  if (error) {
+    Serial.print("Earthquake JSON parsing failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  JsonArray features = doc["features"];
+  earthquakeCount = 0;
+
+  for (JsonObject feature : features) {
+    if (earthquakeCount >= MAX_EARTHQUAKES) break;
+
+    JsonObject properties = feature["properties"];
+    JsonObject geometry = feature["geometry"];
+    JsonArray coordinates = geometry["coordinates"];
+
+    Earthquake eq;
+    eq.id = feature["id"].as<String>();
+    eq.magnitude = properties["mag"].as<float>();
+    eq.place = properties["place"].as<String>();
+    eq.longitude = coordinates[0].as<float>();
+    eq.latitude = coordinates[1].as<float>();
+    eq.depth = coordinates[2].as<float>();
+    eq.time = properties["time"].as<unsigned long>();
+    eq.tsunami = properties["tsunami"].as<int>();
+    eq.magType = properties["magType"].as<String>();
+    eq.title = properties["title"].as<String>();
+    eq.sig = !properties["sig"].isNull();
+    eq.isValid = true;
+
+    // Calculate distance from user location
+    if (userLocation.isValid) {
+      eq.distance = calculateDistance(
+        userLocation.latitude, userLocation.longitude,
+        eq.latitude, eq.longitude
+      );
+    } else {
+      eq.distance = 0;
+    }
+
+    // Apply filters
+    bool passFilter = true;
+
+    // Magnitude filter
+    if (eq.magnitude < eqSettings.minMagnitude) {
+      passFilter = false;
+    }
+
+    // Indonesia filter (rough bounding box)
+    if (eqSettings.indonesiaOnly) {
+      if (eq.latitude < -11 || eq.latitude > 6 ||
+          eq.longitude < 95 || eq.longitude > 141) {
+        passFilter = false;
+      }
+    }
+
+    // Radius filter
+    if (eqSettings.maxRadiusKm > 0 && userLocation.isValid) {
+      if (eq.distance > eqSettings.maxRadiusKm) {
+        passFilter = false;
+      }
+    }
+
+    if (passFilter) {
+      earthquakes[earthquakeCount] = eq;
+      earthquakeCount++;
+    }
+  }
+
+  // Sort by time (newest first)
+  sortEarthquakesByTime();
+}
+
+// Haversine formula for distance calculation
+float calculateDistance(float lat1, float lon1, float lat2, float lon2) {
+  const float R = 6371.0; // Earth radius in km
+
+  float dLat = radians(lat2 - lat1);
+  float dLon = radians(lon2 - lon1);
+
+  float a = sin(dLat/2) * sin(dLat/2) +
+            cos(radians(lat1)) * cos(radians(lat2)) *
+            sin(dLon/2) * sin(dLon/2);
+
+  float c = 2 * atan2(sqrt(a), sqrt(1-a));
+
+  return R * c;
+}
+
+void sortEarthquakesByTime() {
+  // Bubble sort (simple for small arrays)
+  for (int i = 0; i < earthquakeCount - 1; i++) {
+    for (int j = 0; j < earthquakeCount - i - 1; j++) {
+      if (earthquakes[j].time < earthquakes[j + 1].time) {
+        Earthquake temp = earthquakes[j];
+        earthquakes[j] = earthquakes[j + 1];
+        earthquakes[j + 1] = temp;
+      }
+    }
+  }
+}
+
+// ===== MAGNITUDE VISUALIZATION =====
+uint16_t getMagnitudeColor(float mag) {
+  if (mag >= 7.0) return 0xF800;      // Red - Major
+  if (mag >= 6.0) return 0xFD20;      // Orange - Strong
+  if (mag >= 5.0) return 0xFFE0;      // Yellow - Moderate
+  if (mag >= 4.0) return 0x07FF;      // Cyan - Light
+  if (mag >= 3.0) return 0x07E0;      // Green - Minor
+  return 0xFFFF;                       // White - Micro
+}
+
+String getMagnitudeLabel(float mag) {
+  if (mag >= 8.0) return "Great";
+  if (mag >= 7.0) return "Major";
+  if (mag >= 6.0) return "Strong";
+  if (mag >= 5.0) return "Moderate";
+  if (mag >= 4.0) return "Light";
+  if (mag >= 3.0) return "Minor";
+  return "Micro";
+}
+
+String getRelativeTime(uint64_t timestamp) {
+  uint64_t current = (uint64_t)millis(); // Default fallback
+
+  // Get current timestamp from system time if available
+  time_t now_t;
+  time(&now_t);
+  if (now_t > 1000000000) { // Check if time is synced (after 2001)
+    current = (uint64_t)now_t * 1000;
+  }
+
+  long diff = (long)((int64_t)current - (int64_t)timestamp) / 1000; // to seconds
+
+  if (diff < 0) diff = 0; // Future timestamp (shouldn't happen)
+
+  if (diff < 60) return String(diff) + "s ago";
+  if (diff < 3600) return String(diff / 60) + "m ago";
+  if (diff < 86400) return String(diff / 3600) + "h ago";
+  return String(diff / 86400) + "d ago";
 }
 
 // ===== QIBLA CALCULATOR =====
@@ -5161,6 +5426,7 @@ void drawBatteryIcon() {
 
 
 void drawStatusBar() {
+  int prayerWidth = 0;
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
   if (cachedTimeStr.length() > 0) {
@@ -5184,8 +5450,7 @@ void drawStatusBar() {
     canvas.print("ESP:");
     canvas.print(espnowPeerCount);
   }
-  
-  int prayerWidth = 0;
+
   if (currentPrayer.isValid && currentState != STATE_PRAYER_TIMES) {
     NextPrayerInfo next = getNextPrayer();
     canvas.setTextSize(1);
@@ -5197,6 +5462,22 @@ void drawStatusBar() {
     canvas.setCursor(SCREEN_WIDTH - 105 - prayerWidth, 2);
     canvas.print("P:");
     canvas.print(countdown);
+  }
+
+  // Earthquake indicator (if recent significant quake)
+  if (earthquakeCount > 0 && earthquakes[0].magnitude >= 5.0) {
+    // Check if earthquake happened in the last hour
+    time_t now_t;
+    time(&now_t);
+    uint64_t currentMs = (now_t > 1000000000) ? (uint64_t)now_t * 1000 : (uint64_t)millis();
+
+    if (earthquakeDataLoaded && (currentMs - earthquakes[0].time < 3600000)) {
+        canvas.setTextSize(1);
+        canvas.setTextColor(0xF800); // Red
+        int eqX = SCREEN_WIDTH - 120 - prayerWidth - (showFPS ? 60 : 0);
+        canvas.setCursor(eqX, 2);
+        canvas.print("EQ!");
+    }
   }
 
   if (showFPS) {
@@ -5395,6 +5676,395 @@ void showProgressBar(String title, int percent) {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+// ===== EARTHQUAKE LIST SCREEN =====
+void drawEarthquakeMonitor() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 25);
+  canvas.print("Earthquakes");
+
+  // Filter indicator
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(10, 45);
+  canvas.print("M");
+  canvas.print(eqSettings.minMagnitude, 1);
+  canvas.print("+ ");
+
+  if (eqSettings.indonesiaOnly) {
+    canvas.print("Indonesia ");
+  } else if (eqSettings.maxRadiusKm > 0) {
+    canvas.print(eqSettings.maxRadiusKm);
+    canvas.print("km ");
+  } else {
+    canvas.print("Worldwide ");
+  }
+
+  if (!earthquakeDataLoaded) {
+    canvas.setTextSize(1);
+    canvas.setCursor(60, 80);
+    canvas.print("Loading data...");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  if (earthquakeCount == 0) {
+    canvas.setTextSize(1);
+    canvas.setCursor(40, 80);
+    canvas.print("No earthquakes found");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Earthquake list
+  int y = 60;
+  int visible = 0;
+  int maxVisible = 4;  // Reduced to 4 to fit SCREEN_HEIGHT 170
+
+  for (int i = earthquakeScrollOffset; i < earthquakeCount && visible < maxVisible; i++, visible++) {
+    Earthquake eq = earthquakes[i];
+
+    // Highlight selected
+    if (i == earthquakeCursor) {
+      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 22, COLOR_PANEL);
+      canvas.drawRect(5, y - 2, SCREEN_WIDTH - 10, 22, COLOR_PRIMARY);
+    }
+
+    // Magnitude badge
+    uint16_t magColor = getMagnitudeColor(eq.magnitude);
+    canvas.fillCircle(18, y + 8, 9, magColor);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setTextSize(1);
+    canvas.setCursor(10, y + 5);
+    // Center the magnitude text a bit better
+    if (eq.magnitude < 10.0f) canvas.setCursor(13, y + 5);
+    canvas.printf("%.1f", eq.magnitude);
+
+    // Location
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setTextSize(1);
+    canvas.setCursor(35, y);
+    String place = eq.place;
+    if (place.length() > 35) {
+      place = place.substring(0, 32) + "...";
+    }
+    canvas.print(place);
+
+    // Time & Distance
+    canvas.setCursor(35, y + 10);
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.print(getRelativeTime(eq.time));
+
+    if (eq.distance > 0) {
+      canvas.print(" | ");
+      canvas.print(int(eq.distance));
+      canvas.print("km away");
+    }
+
+    // Tsunami warning
+    if (eq.tsunami == 1) {
+      canvas.setTextColor(0xF800); // Red
+      canvas.print(" [TSUNAMI]");
+    }
+
+    y += 24;
+  }
+
+  // Footer
+  int footerY = SCREEN_HEIGHT - 15;
+  canvas.fillRect(0, footerY, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, footerY, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(5, footerY + 3);
+  canvas.printf("Total: %d | SEL=Detail | R=Settings | L=Refresh", earthquakeCount);
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawEarthquakeDetail() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  Earthquake eq = selectedEarthquake;
+
+  if (!eq.isValid) {
+    canvas.setCursor(50, 80);
+    canvas.print("No earthquake selected");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  int y = 20;
+
+  // Magnitude (big)
+  canvas.setTextSize(3);
+  uint16_t magColor = getMagnitudeColor(eq.magnitude);
+  canvas.setTextColor(magColor);
+  canvas.setCursor(10, y);
+  canvas.printf("%.1f", eq.magnitude);
+
+  canvas.setTextSize(1);
+  canvas.setCursor(70, y + 5);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.print(getMagnitudeLabel(eq.magnitude));
+
+  canvas.setCursor(70, y + 15);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.print("Type: " + eq.magType);
+
+  y += 30;
+  canvas.drawFastHLine(10, y, SCREEN_WIDTH - 20, COLOR_BORDER);
+  y += 10;
+
+  // Location
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(10, y);
+  canvas.print("LOCATION:");
+  y += 12;
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(15, y);
+  // Word wrap for long place names
+  String place = eq.place;
+  if (place.length() > 45) {
+    int breakPoint = place.lastIndexOf(' ', 45);
+    if (breakPoint == -1) breakPoint = 45;
+    canvas.print(place.substring(0, breakPoint));
+    y += 10;
+    canvas.setCursor(15, y);
+    canvas.print(place.substring(breakPoint + 1));
+  } else {
+    canvas.print(place);
+  }
+  y += 15;
+
+  // Coordinates & Depth
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(10, y);
+  canvas.printf("LAT: %.4f  LON: %.4f", eq.latitude, eq.longitude);
+  y += 12;
+  canvas.setCursor(10, y);
+  canvas.printf("DEPTH: %.1f km", eq.depth);
+  y += 15;
+
+  // Time
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(10, y);
+  canvas.print("TIME:");
+  y += 12;
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(15, y);
+
+  time_t t = eq.time / 1000;
+  struct tm* timeinfo = localtime(&t);
+  char timeStr[64];
+  strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
+  canvas.print(timeStr);
+  canvas.print(" (");
+  canvas.print(getRelativeTime(eq.time));
+  canvas.print(")");
+  y += 15;
+
+  // Distance from user
+  if (eq.distance > 0) {
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(10, y);
+    canvas.print("DISTANCE FROM YOU:");
+    y += 12;
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(15, y);
+    canvas.printf("%.1f km", eq.distance);
+    y += 15;
+  }
+
+  // Tsunami warning
+  if (eq.tsunami == 1) {
+    canvas.fillRect(10, y, SCREEN_WIDTH - 20, 18, 0xF800);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setCursor(20, y + 5);
+    canvas.print("!!! TSUNAMI WARNING !!!");
+  }
+
+  // Footer
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L+R = Back to List");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+int eqSettingsCursor = 0;
+const char* eqSettingsItems[] = {
+  "Min Magnitude",
+  "Indonesia Only",
+  "Max Radius",
+  "Notifications",
+  "Notify Min Mag",
+  "Auto Refresh",
+  "Refresh Interval",
+  "Refresh Now",
+  "Back"
+};
+int eqSettingsCount = 9;
+
+void drawEarthquakeMap() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  Earthquake eq = selectedEarthquake;
+  if (!eq.isValid && earthquakeCount > 0) {
+    eq = earthquakes[0];
+  }
+
+  if (!eq.isValid) {
+    canvas.setCursor(50, 80);
+    canvas.print("No data to map");
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Draw simple world boundary
+  canvas.drawRect(10, 25, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 55, COLOR_BORDER);
+
+  // Longitude: -180 to 180 -> X: 10 to SCREEN_WIDTH - 10
+  // Latitude: 90 to -90 -> Y: 25 to SCREEN_HEIGHT - 30
+
+  auto getX = [](float lon) {
+    return 10 + (int)((lon + 180.0f) * (SCREEN_WIDTH - 20) / 360.0f);
+  };
+  auto getY = [](float lat) {
+    return 25 + (int)((90.0f - lat) * (SCREEN_HEIGHT - 55) / 180.0f);
+  };
+
+  // Draw equator and prime meridian
+  canvas.drawFastHLine(10, getY(0), SCREEN_WIDTH - 20, 0x1082);
+  canvas.drawFastVLine(getX(0), 25, SCREEN_HEIGHT - 55, 0x1082);
+
+  // Draw all earthquakes as small dots
+  for (int i = 0; i < earthquakeCount; i++) {
+    int ex = getX(earthquakes[i].longitude);
+    int ey = getY(earthquakes[i].latitude);
+    uint16_t col = getMagnitudeColor(earthquakes[i].magnitude);
+    canvas.drawPixel(ex, ey, col);
+  }
+
+  // Draw selected earthquake marker (blinking)
+  if ((millis() / 250) % 2 == 0) {
+    int sx = getX(eq.longitude);
+    int sy = getY(eq.latitude);
+    uint16_t col = getMagnitudeColor(eq.magnitude);
+    canvas.drawCircle(sx, sy, 5, col);
+    canvas.drawCircle(sx, sy, 2, 0xFFFF);
+  }
+
+  // Draw user location
+  if (userLocation.isValid) {
+    int ux = getX(userLocation.longitude);
+    int uy = getY(userLocation.latitude);
+    canvas.fillRect(ux - 1, uy - 1, 3, 3, 0x07E0); // Green dot
+  }
+
+  // Legend/Info
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(15, SCREEN_HEIGHT - 25);
+  String info = "M" + String(eq.magnitude, 1) + " - " + eq.place;
+  if (info.length() > 45) info = info.substring(0, 42) + "...";
+  canvas.print(info);
+
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Cycle | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawEarthquakeSettings() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(15, 20);
+  canvas.println("EQ SETTINGS");
+
+  int listY = 50;
+  int itemHeight = 12;
+  canvas.setTextSize(1);
+
+  for (int i = 0; i < eqSettingsCount; i++) {
+    int y = listY + (i * itemHeight);
+
+    if (i == eqSettingsCursor) {
+      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, itemHeight, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(15, y);
+    canvas.print(eqSettingsItems[i]);
+
+    // Show current values
+    if (i < 7) {
+      String val = "";
+      switch (i) {
+        case 0: // Min Magnitude
+          if (eqSettings.minMagnitude == 0.0) val = "ALL";
+          else val = String(eqSettings.minMagnitude, 1) + "+";
+          break;
+        case 1: // Indonesia Only
+          val = eqSettings.indonesiaOnly ? "[X]" : "[ ]";
+          break;
+        case 2: // Max Radius
+          if (eqSettings.maxRadiusKm == 0) val = "World";
+          else val = String(eqSettings.maxRadiusKm) + " km";
+          break;
+        case 3: // Notifications
+          val = eqSettings.notifyEnabled ? "[ON]" : "[OFF]";
+          break;
+        case 4: // Notify Min Mag
+          val = String(eqSettings.notifyMinMag, 1) + "+";
+          break;
+        case 5: // Auto Refresh
+          val = eqSettings.autoRefresh ? "[ON]" : "[OFF]";
+          break;
+        case 6: // Refresh Interval
+          val = String(eqSettings.refreshInterval) + " m";
+          break;
+      }
+      int16_t x1, y1; uint16_t w, h;
+      canvas.getTextBounds(val, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor(SCREEN_WIDTH - 20 - w, y);
+      canvas.print(val);
+    }
+  }
+
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Nav | SELECT=Change | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 // ============ MAIN MENU (COOL VERTICAL) ============
 void drawMainMenuCool() {
     canvas.fillScreen(COLOR_BG);
@@ -5407,8 +6077,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA"};
-    int numItems = 15;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE"};
+    int numItems = 16;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -7176,6 +7846,239 @@ void handlePrayerSettingsInput() {
   }
 }
 
+// ===== EARTHQUAKE INPUT HANDLERS =====
+void handleEarthquakeInput() {
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    if (earthquakeCount > 0) {
+      earthquakeCursor++;
+      if (earthquakeCursor >= earthquakeCount) {
+        earthquakeCursor = earthquakeCount - 1;
+      }
+
+      // Auto-scroll
+      if (earthquakeCursor >= earthquakeScrollOffset + 4) {
+        earthquakeScrollOffset++;
+      }
+    }
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    earthquakeCursor--;
+    if (earthquakeCursor < 0) earthquakeCursor = 0;
+
+    // Auto-scroll
+    if (earthquakeCursor < earthquakeScrollOffset) {
+      earthquakeScrollOffset--;
+    }
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    // Show detail view
+    if (earthquakeCount > 0 && earthquakeCursor < earthquakeCount) {
+      selectedEarthquake = earthquakes[earthquakeCursor];
+      changeState(STATE_EARTHQUAKE_DETAIL);
+    }
+    ledSuccess();
+  }
+
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+    // Open settings
+    changeState(STATE_EARTHQUAKE_SETTINGS);
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_LEFT) == BTN_ACT) {
+    // Refresh data
+    fetchEarthquakeData();
+    earthquakeCursor = 0;
+    earthquakeScrollOffset = 0;
+    ledSuccess();
+  }
+}
+
+void handleEarthquakeDetailInput() {
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE_MAP);
+    ledSuccess();
+  }
+
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE);
+    ledQuickFlash();
+  }
+}
+
+void handleEarthquakeMapInput() {
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    earthquakeCursor = (earthquakeCursor + 1) % earthquakeCount;
+    selectedEarthquake = earthquakes[earthquakeCursor];
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    earthquakeCursor = (earthquakeCursor - 1 + earthquakeCount) % earthquakeCount;
+    selectedEarthquake = earthquakes[earthquakeCursor];
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE_DETAIL);
+    ledQuickFlash();
+  }
+}
+
+void handleEarthquakeSettingsInput() {
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    eqSettingsCursor = (eqSettingsCursor + 1) % eqSettingsCount;
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    eqSettingsCursor = (eqSettingsCursor - 1 + eqSettingsCount) % eqSettingsCount;
+    ledQuickFlash();
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    ledSuccess();
+    switch (eqSettingsCursor) {
+      case 0: // Min Magnitude - cycle through 0, 2.5, 4.5, 6.0
+        if (eqSettings.minMagnitude == 0.0) eqSettings.minMagnitude = 2.5;
+        else if (eqSettings.minMagnitude == 2.5) eqSettings.minMagnitude = 4.5;
+        else if (eqSettings.minMagnitude == 4.5) eqSettings.minMagnitude = 6.0;
+        else eqSettings.minMagnitude = 0.0;
+        preferences.begin("eq-data", false);
+        preferences.putFloat("eqMinMag", eqSettings.minMagnitude);
+        preferences.end();
+        break;
+
+      case 1: // Indonesia Only
+        eqSettings.indonesiaOnly = !eqSettings.indonesiaOnly;
+        if (eqSettings.indonesiaOnly) eqSettings.maxRadiusKm = 0; // Disable radius
+        preferences.begin("eq-data", false);
+        preferences.putBool("eqIndoOnly", eqSettings.indonesiaOnly);
+        preferences.end();
+        break;
+
+      case 2: // Max Radius - cycle 0, 500, 1000, 2000, 5000
+        if (eqSettings.maxRadiusKm == 0) eqSettings.maxRadiusKm = 500;
+        else if (eqSettings.maxRadiusKm == 500) eqSettings.maxRadiusKm = 1000;
+        else if (eqSettings.maxRadiusKm == 1000) eqSettings.maxRadiusKm = 2000;
+        else if (eqSettings.maxRadiusKm == 2000) eqSettings.maxRadiusKm = 5000;
+        else eqSettings.maxRadiusKm = 0;
+        if (eqSettings.maxRadiusKm > 0) eqSettings.indonesiaOnly = false;
+        preferences.begin("eq-data", false);
+        preferences.putInt("eqRadius", eqSettings.maxRadiusKm);
+        preferences.end();
+        break;
+
+      case 3: // Notifications
+        eqSettings.notifyEnabled = !eqSettings.notifyEnabled;
+        preferences.begin("eq-data", false);
+        preferences.putBool("eqNotify", eqSettings.notifyEnabled);
+        preferences.end();
+        break;
+
+      case 4: // Notify Min Mag - cycle 4.0, 5.0, 6.0, 7.0
+        if (eqSettings.notifyMinMag == 4.0) eqSettings.notifyMinMag = 5.0;
+        else if (eqSettings.notifyMinMag == 5.0) eqSettings.notifyMinMag = 6.0;
+        else if (eqSettings.notifyMinMag == 6.0) eqSettings.notifyMinMag = 7.0;
+        else eqSettings.notifyMinMag = 4.0;
+        preferences.begin("eq-data", false);
+        preferences.putFloat("eqNotifyMag", eqSettings.notifyMinMag);
+        preferences.end();
+        break;
+
+      case 5: // Auto Refresh
+        eqSettings.autoRefresh = !eqSettings.autoRefresh;
+        preferences.begin("eq-data", false);
+        preferences.putBool("eqAutoRefresh", eqSettings.autoRefresh);
+        preferences.end();
+        break;
+
+      case 6: // Refresh Interval - cycle 5, 10, 15, 30
+        if (eqSettings.refreshInterval == 5) eqSettings.refreshInterval = 10;
+        else if (eqSettings.refreshInterval == 10) eqSettings.refreshInterval = 15;
+        else if (eqSettings.refreshInterval == 15) eqSettings.refreshInterval = 30;
+        else eqSettings.refreshInterval = 5;
+        preferences.begin("eq-data", false);
+        preferences.putInt("eqRefreshInt", eqSettings.refreshInterval);
+        preferences.end();
+        break;
+
+      case 7: // Refresh Now
+        fetchEarthquakeData();
+        break;
+
+      case 8: // Back
+        changeState(STATE_EARTHQUAKE);
+        break;
+    }
+    delay(200);
+  }
+
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE);
+    ledQuickFlash();
+  }
+}
+
+// ===== EARTHQUAKE ALERTS =====
+void checkEarthquakeAlerts() {
+  // Check every 30 seconds
+  if (millis() - lastEarthquakeCheck < 30000) return;
+  lastEarthquakeCheck = millis();
+
+  if (!eqSettings.notifyEnabled || !earthquakeDataLoaded) return;
+
+  // Check for new significant earthquakes
+  for (int i = 0; i < min(5, earthquakeCount); i++) {
+    Earthquake eq = earthquakes[i];
+
+    // Check if magnitude exceeds notification threshold
+    if (eq.magnitude >= eqSettings.notifyMinMag) {
+      // Check if we haven't alerted for this one yet
+      if (eq.id != lastAlertedEarthquakeId) {
+        showEarthquakeAlert(eq);
+        lastAlertedEarthquakeId = eq.id;
+
+        // play alert sound via DFPlayer if available
+        if (isDFPlayerAvailable) {
+          myDFPlayer.play(98); // Earthquake alert sound (track 98)
+        }
+
+        break; // Only alert for one at a time
+      }
+    }
+  }
+
+  // Auto-refresh data if enabled
+  if (eqSettings.autoRefresh) {
+    unsigned long refreshMs = (unsigned long)eqSettings.refreshInterval * 60000;
+    if (millis() - lastEarthquakeUpdate > refreshMs) {
+      fetchEarthquakeData();
+    }
+  }
+}
+
+void showEarthquakeAlert(Earthquake eq) {
+  Serial.println("========= EARTHQUAKE ALERT =========");
+  Serial.printf("Magnitude: %.1f\n", eq.magnitude);
+  Serial.printf("Location: %s\n", eq.place.c_str());
+  Serial.printf("Time: %s\n", getRelativeTime(eq.time).c_str());
+  if (eq.distance > 0) {
+    Serial.printf("Distance: %.1f km\n", eq.distance);
+  }
+  if (eq.tsunami == 1) {
+    Serial.println("*** TSUNAMI WARNING ***");
+  }
+  Serial.println("====================================");
+
+  // Trigger NeoPixel effect
+  triggerNeoPixelEffect(pixels.Color(255, 0, 0), 5000); // Red pulse
+}
+
 // ============ MENU HANDLERS ============
 void handleMainMenuSelect() {
   switch(menuSelection) {
@@ -7250,6 +8153,9 @@ void handleMainMenuSelect() {
     case 14: // WIKIPEDIA
       wikiScrollOffset = 0;
       changeState(STATE_WIKI_VIEWER);
+      break;
+    case 15: // EARTHQUAKE
+      changeState(STATE_EARTHQUAKE);
       break;
   }
 }
@@ -7807,6 +8713,18 @@ void refreshCurrentScreen() {
     case STATE_PRAYER_CITY_SELECT:
       drawCitySelect();
       break;
+    case STATE_EARTHQUAKE:
+      drawEarthquakeMonitor();
+      break;
+    case STATE_EARTHQUAKE_DETAIL:
+      drawEarthquakeDetail();
+      break;
+    case STATE_EARTHQUAKE_SETTINGS:
+      drawEarthquakeSettings();
+      break;
+    case STATE_EARTHQUAKE_MAP:
+      drawEarthquakeMap();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -8038,6 +8956,25 @@ void setup() {
         } else {
           fetchPrayerTimes();
         }
+
+        // ===== EARTHQUAKE MONITOR INITIALIZATION =====
+        Serial.println("Initializing Earthquake Monitor...");
+
+        // Load settings
+        preferences.begin("eq-data", true);
+        eqSettings.minMagnitude = preferences.getFloat("eqMinMag", 4.5);
+        eqSettings.indonesiaOnly = preferences.getBool("eqIndoOnly", true);
+        eqSettings.maxRadiusKm = preferences.getInt("eqRadius", 0);
+        eqSettings.notifyEnabled = preferences.getBool("eqNotify", true);
+        eqSettings.notifyMinMag = preferences.getFloat("eqNotifyMag", 5.0);
+        eqSettings.autoRefresh = preferences.getBool("eqAutoRefresh", true);
+        eqSettings.refreshInterval = preferences.getInt("eqRefreshInt", 10);
+        preferences.end();
+
+        // Initial data fetch
+        fetchEarthquakeData();
+
+        Serial.println("Earthquake Monitor ready");
         } else {
             bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
         }
@@ -8195,6 +9132,9 @@ void loop() {
     case STATE_SYSTEM_MONITOR:
     case STATE_PRAYER_SETTINGS:
     case STATE_PRAYER_CITY_SELECT:
+    case STATE_EARTHQUAKE:
+    case STATE_EARTHQUAKE_SETTINGS:
+    case STATE_EARTHQUAKE_MAP:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
       break;
@@ -8260,6 +9200,18 @@ void loop() {
     else if (currentState == STATE_PRAYER_CITY_SELECT) {
       handleCitySelectInput();
     }
+    else if (currentState == STATE_EARTHQUAKE) {
+      handleEarthquakeInput();
+    }
+    else if (currentState == STATE_EARTHQUAKE_DETAIL) {
+      handleEarthquakeDetailInput();
+    }
+    else if (currentState == STATE_EARTHQUAKE_SETTINGS) {
+      handleEarthquakeSettingsInput();
+    }
+    else if (currentState == STATE_EARTHQUAKE_MAP) {
+      handleEarthquakeMapInput();
+    }
 
   // Backlight smoothing logic
   if (abs(targetBrightness - currentBrightness) > 0.5) {
@@ -8284,6 +9236,7 @@ void loop() {
 
   // Prayer times background tasks
   checkPrayerNotifications();
+  checkEarthquakeAlerts();
 
 
   // Screensaver check
@@ -8662,7 +9615,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 14) menuSelection++;
+          if (menuSelection < 15) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
