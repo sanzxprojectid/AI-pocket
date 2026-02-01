@@ -159,7 +159,9 @@ enum AppState {
   STATE_GAME_CONSOLE_LOGS,
   STATE_KONSOL,
   STATE_WIKI_VIEWER,
-  STATE_SYSTEM_MONITOR
+  STATE_SYSTEM_MONITOR,
+  STATE_PRAYER_TIMES,
+  STATE_PRAYER_SETTINGS
 };
 
 AppState currentState = STATE_BOOT;
@@ -608,7 +610,69 @@ struct ParallaxLayer {
 ParallaxLayer jumperStars[JUMPER_MAX_STARS];
 
 
+// ===== PRAYER TIMES SYSTEM =====
+struct PrayerTimes {
+  String fajr;
+  String sunrise;
+  String dhuhr;
+  String asr;
+  String maghrib;
+  String isha;
+  String gregorianDate;
+  String hijriDate;
+  String hijriMonth;
+  String hijriYear;
+  bool isValid;
+  unsigned long lastFetch;
+};
+
+struct LocationData {
+  float latitude;
+  float longitude;
+  String city;
+  String country;
+  bool isValid;
+};
+
+struct PrayerSettings {
+  bool notificationEnabled;
+  bool adzanSoundEnabled;
+  bool silentMode;
+  int reminderMinutes;  // 5, 10, 15, or 30
+  bool autoLocation;
+  int calculationMethod; // 20 for MUI Indonesia
+};
+
+struct NextPrayerInfo {
+  String name;
+  String time;
+  int remainingMinutes;
+  int index; // 0-4
+};
+
+PrayerTimes currentPrayer;
+LocationData userLocation;
+PrayerSettings prayerSettings;
+
+// Prayer notification tracking
+bool prayerNotified[5] = {false, false, false, false, false};
+String prayerNames[5] = {"Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"};
+int prayerScrollOffset = 0;
+unsigned long lastPrayerCheck = 0;
+bool isDFPlayerAvailable = false;
+
 // ============ ICONS (32x32) ============
+const unsigned char icon_prayer[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x07, 0xE0, 0x00,
+0x00, 0x0D, 0xB0, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x7F, 0xFE, 0x00,
+0x00, 0xFF, 0xFF, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xFF, 0xFF, 0xC0, 0x07, 0xFF, 0xFF, 0xE0,
+0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8, 0x3F, 0xFF, 0xFF, 0xFC, 0x7F, 0xFF, 0xFF, 0xFE,
+0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x00, 0x00, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E,
+0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E,
+0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7F, 0xFF, 0xFF, 0xFE,
+0x3F, 0xFF, 0xFF, 0xFC, 0x1F, 0xFF, 0xFF, 0xF8, 0x0F, 0xFF, 0xFF, 0xF0, 0x03, 0xFF, 0xFF, 0xC0
+};
+
 const unsigned char icon_chat[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF, 0xC0, 0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8,
 0x3F, 0x00, 0x00, 0xFC, 0x7E, 0x00, 0x00, 0x7E, 0x7C, 0x00, 0x00, 0x3E, 0xF8, 0x0F, 0xF0, 0x1F,
@@ -772,7 +836,7 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_gamehub, icon_wikipedia};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_gamehub, icon_wikipedia};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -1302,6 +1366,302 @@ void saveWikiBookmark();
 void drawWikiViewer();
 void updateSystemMetrics();
 void drawSystemMonitor();
+void fetchPrayerTimes();
+void showPrayerReminder(String prayerName, int minutes);
+void showPrayerAlert(String prayerName);
+void playAdzan();
+
+// ===== LOCATION DETECTION =====
+void fetchUserLocation() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, cannot fetch location");
+    return;
+  }
+
+  Serial.println("Fetching location from IP...");
+
+  HTTPClient http;
+  http.begin("http://ip-api.com/json/?fields=status,country,city,lat,lon");
+  http.setTimeout(10000);
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      String status = doc["status"].as<String>();
+
+      if (status == "success") {
+        userLocation.latitude = doc["lat"].as<float>();
+        userLocation.longitude = doc["lon"].as<float>();
+        userLocation.city = doc["city"].as<String>();
+        userLocation.country = doc["country"].as<String>();
+        userLocation.isValid = true;
+
+        // Save to preferences
+        preferences.begin("prayer-data", false);
+        preferences.putFloat("prayerLat", userLocation.latitude);
+        preferences.putFloat("prayerLon", userLocation.longitude);
+        preferences.putString("prayerCity", userLocation.city);
+        preferences.end();
+
+        Serial.printf("Location: %s, %s (%.4f, %.4f)\n",
+                     userLocation.city.c_str(),
+                     userLocation.country.c_str(),
+                     userLocation.latitude,
+                     userLocation.longitude);
+
+        // Fetch prayer times immediately
+        fetchPrayerTimes();
+      }
+    }
+  } else {
+    Serial.printf("HTTP GET failed: %d\n", httpCode);
+  }
+
+  http.end();
+}
+
+void loadLocationFromPreferences() {
+  preferences.begin("prayer-data", true);
+  userLocation.latitude = preferences.getFloat("prayerLat", 0.0);
+  userLocation.longitude = preferences.getFloat("prayerLon", 0.0);
+  userLocation.city = preferences.getString("prayerCity", "");
+  preferences.end();
+
+  if (userLocation.latitude != 0.0 && userLocation.longitude != 0.0) {
+    userLocation.isValid = true;
+    Serial.println("Location loaded from preferences");
+  } else {
+    userLocation.isValid = false;
+    Serial.println("No saved location, will fetch from IP");
+  }
+}
+
+// ===== FETCH PRAYER TIMES =====
+void fetchPrayerTimes() {
+  if (!userLocation.isValid) {
+    Serial.println("Location not available");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected");
+    return;
+  }
+
+  Serial.println("Fetching prayer times...");
+
+  // Build URL
+  String url = "http://api.aladhan.com/v1/timings?";
+  url += "latitude=" + String(userLocation.latitude, 4);
+  url += "&longitude=" + String(userLocation.longitude, 4);
+  url += "&method=" + String(prayerSettings.calculationMethod);
+
+  HTTPClient http;
+  http.begin(url);
+  http.setTimeout(15000);
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if (!error) {
+      JsonObject data = doc["data"];
+      JsonObject timings = data["timings"];
+      JsonObject date = data["date"];
+      JsonObject hijri = date["hijri"];
+
+      // Extract prayer times
+      currentPrayer.fajr = timings["Fajr"].as<String>().substring(0, 5);
+      currentPrayer.sunrise = timings["Sunrise"].as<String>().substring(0, 5);
+      currentPrayer.dhuhr = timings["Dhuhr"].as<String>().substring(0, 5);
+      currentPrayer.asr = timings["Asr"].as<String>().substring(0, 5);
+      currentPrayer.maghrib = timings["Maghrib"].as<String>().substring(0, 5);
+      currentPrayer.isha = timings["Isha"].as<String>().substring(0, 5);
+
+      // Extract dates
+      currentPrayer.gregorianDate = date["readable"].as<String>();
+      currentPrayer.hijriDate = hijri["day"].as<String>();
+      currentPrayer.hijriMonth = hijri["month"]["en"].as<String>();
+      currentPrayer.hijriYear = hijri["year"].as<String>();
+
+      currentPrayer.isValid = true;
+      currentPrayer.lastFetch = millis();
+
+      // Reset notification flags
+      for (int i = 0; i < 5; i++) {
+        prayerNotified[i] = false;
+      }
+
+      Serial.println("Prayer times updated successfully");
+      Serial.println("Fajr: " + currentPrayer.fajr);
+      Serial.println("Dhuhr: " + currentPrayer.dhuhr);
+      Serial.println("Asr: " + currentPrayer.asr);
+      Serial.println("Maghrib: " + currentPrayer.maghrib);
+      Serial.println("Isha: " + currentPrayer.isha);
+    } else {
+      Serial.println("JSON parsing failed");
+    }
+  } else {
+    Serial.printf("HTTP GET failed: %d\n", httpCode);
+  }
+
+  http.end();
+}
+
+// Convert "HH:MM" to minutes since midnight
+int timeToMinutes(String time) {
+  if (time.length() < 5) return -1;
+  int hours = time.substring(0, 2).toInt();
+  int minutes = time.substring(3, 5).toInt();
+  return hours * 60 + minutes;
+}
+
+// Get current time in minutes
+int getCurrentMinutes() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) return -1;
+  return timeinfo.tm_hour * 60 + timeinfo.tm_min;
+}
+
+// ===== NEXT PRAYER LOGIC =====
+NextPrayerInfo getNextPrayer() {
+  NextPrayerInfo result;
+  result.name = "N/A";
+  result.time = "--:--";
+  result.remainingMinutes = 0;
+  result.index = -1;
+
+  if (!currentPrayer.isValid) return result;
+
+  int currentMin = getCurrentMinutes();
+  if (currentMin == -1) return result;
+
+  // Prayer times in order
+  String times[5] = {
+    currentPrayer.fajr,
+    currentPrayer.dhuhr,
+    currentPrayer.asr,
+    currentPrayer.maghrib,
+    currentPrayer.isha
+  };
+
+  // Find next prayer
+  for (int i = 0; i < 5; i++) {
+    int prayerMin = timeToMinutes(times[i]);
+    if (prayerMin > currentMin) {
+      result.name = prayerNames[i];
+      result.time = times[i];
+      result.remainingMinutes = prayerMin - currentMin;
+      result.index = i;
+      return result;
+    }
+  }
+
+  // If no prayer left today, next is Fajr tomorrow
+  result.name = "Fajr";
+  result.time = currentPrayer.fajr;
+  result.remainingMinutes = (24 * 60 - currentMin) + timeToMinutes(currentPrayer.fajr);
+  result.index = 0;
+
+  return result;
+}
+
+String formatRemainingTime(int minutes) {
+  if (minutes < 60) {
+    return String(minutes) + "m";
+  } else {
+    int hours = minutes / 60;
+    int mins = minutes % 60;
+    return String(hours) + "h " + String(mins) + "m";
+  }
+}
+
+// ===== PRAYER NOTIFICATIONS =====
+void checkPrayerNotifications() {
+  // Check every minute
+  if (millis() - lastPrayerCheck < 60000) return;
+  lastPrayerCheck = millis();
+
+  if (!currentPrayer.isValid || !prayerSettings.notificationEnabled) return;
+
+  NextPrayerInfo next = getNextPrayer();
+
+  if (next.index == -1) return;
+
+  // Check for reminder (e.g., 5 minutes before)
+  if (next.remainingMinutes == prayerSettings.reminderMinutes) {
+    if (!prayerNotified[next.index]) {
+      showPrayerReminder(next.name, prayerSettings.reminderMinutes);
+      prayerNotified[next.index] = true;
+    }
+  }
+
+  // Check for adzan time (within 1 minute window)
+  if (next.remainingMinutes <= 1) {
+    if (prayerSettings.adzanSoundEnabled && !prayerSettings.silentMode) {
+      playAdzan();
+    }
+    showPrayerAlert(next.name);
+  }
+
+  // Auto-fetch new prayer times at midnight
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    if (timeinfo.tm_hour == 0 && timeinfo.tm_min == 1) {
+      // It's 00:01, fetch new prayer times
+      if (millis() - currentPrayer.lastFetch > 3600000) { // At least 1 hour gap
+        fetchPrayerTimes();
+      }
+    }
+  }
+}
+
+void showPrayerReminder(String prayerName, int minutes) {
+  Serial.printf("REMINDER: %s in %d minutes\n", prayerName.c_str(), minutes);
+  triggerNeoPixelEffect(pixels.Color(0, 255, 100), 3000);
+}
+
+void showPrayerAlert(String prayerName) {
+  Serial.printf("ALERT: Time for %s prayer!\n", prayerName.c_str());
+  triggerNeoPixelEffect(pixels.Color(255, 255, 255), 5000);
+}
+
+void playAdzan() {
+  if (isDFPlayerAvailable) {
+    myDFPlayer.play(99); // Assuming adzan.mp3 is track 99
+    Serial.println("Playing adzan...");
+  }
+}
+
+// ===== QIBLA CALCULATOR =====
+float calculateQibla(float lat, float lon) {
+  float kaabaLat = 21.4225;
+  float kaabaLon = 39.8262;
+
+  float latRad = lat * PI / 180.0;
+  float lonRad = lon * PI / 180.0;
+  float kLatRad = kaabaLat * PI / 180.0;
+  float kLonRad = kaabaLon * PI / 180.0;
+
+  float y = sin(kLonRad - lonRad);
+  float x = cos(latRad) * tan(kLatRad) - sin(latRad) * cos(kLonRad - lonRad);
+
+  float qiblaRad = atan2(y, x);
+  float qiblaDeg = qiblaRad * 180.0 / PI;
+
+  if (qiblaDeg < 0) qiblaDeg += 360.0;
+  return qiblaDeg;
+}
 
 // Helper function to convert 8-8-8 RGB to 5-6-5 RGB
 uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
@@ -1417,6 +1777,7 @@ void initMusicPlayer() {
     Serial.println(F("Initializing DFPlayer..."));
 
     if (myDFPlayer.begin(Serial2)) {
+        isDFPlayerAvailable = true;
         // Ambil volume terakhir dari Preferences agar tidak mengejutkan
         musicVol = preferences.getInt("musicVol", 15);
         myDFPlayer.volume(musicVol);
@@ -5182,6 +5543,19 @@ void drawStatusBar() {
     canvas.print(espnowPeerCount);
   }
   
+  if (currentPrayer.isValid && currentState != STATE_PRAYER_TIMES) {
+    NextPrayerInfo next = getNextPrayer();
+    canvas.setTextSize(1);
+    canvas.setTextColor(0x07E0); // Green
+
+    String countdown = formatRemainingTime(next.remainingMinutes);
+    int textWidth = (countdown.length() + 2) * 6;
+
+    canvas.setCursor(SCREEN_WIDTH - 75 - textWidth, 2);
+    canvas.print("P:");
+    canvas.print(countdown);
+  }
+
   if (showFPS) {
     uint16_t fpsColor = COLOR_SUCCESS;
     if (perfFPS < 100) fpsColor = 0xFFE0; // Yellow
@@ -5390,8 +5764,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "KONSOL", "WIKIPEDIA"};
-    int numItems = 15;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "KONSOL", "WIKIPEDIA"};
+    int numItems = 16;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -6698,6 +7072,251 @@ void drawWikiViewer() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+// ===== PRAYER TIMES UI =====
+void drawPrayerTimes() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  int y = 28;
+
+  if (!currentPrayer.isValid) {
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.setCursor(40, 70);
+    canvas.println("Loading...");
+
+    canvas.setTextSize(1);
+    canvas.setCursor(30, 100);
+    if (!userLocation.isValid) {
+      canvas.println("Detecting location via IP...");
+    } else {
+      canvas.println("Fetching prayer times...");
+    }
+
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    return;
+  }
+
+  // Header with Mosque Icon
+  canvas.drawBitmap(SCREEN_WIDTH - 40, 28, icon_prayer, 32, 32, COLOR_PRIMARY);
+
+  // Date headers
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, y);
+  canvas.print(currentPrayer.gregorianDate);
+  y += 12;
+
+  canvas.setCursor(10, y);
+  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth + " " + currentPrayer.hijriYear + " H");
+  y += 15;
+
+  // Divider
+  canvas.drawFastHLine(10, y, SCREEN_WIDTH - 20, COLOR_PANEL);
+  y += 10;
+
+  // Prayer times list
+  canvas.setTextSize(2);
+
+  String prayers[6] = {
+    "Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"
+  };
+  String times[6] = {
+    currentPrayer.fajr, currentPrayer.sunrise, currentPrayer.dhuhr,
+    currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha
+  };
+
+  NextPrayerInfo next = getNextPrayer();
+
+  for (int i = 0; i < 6; i++) {
+    bool isNext = (next.index != -1 && prayerNames[next.index] == prayers[i]);
+
+    if (isNext) {
+      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 18, 0x03E0); // Dark Green
+      canvas.setTextColor(COLOR_PRIMARY);
+    } else {
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(15, y);
+    canvas.print(prayers[i]);
+
+    canvas.setCursor(SCREEN_WIDTH - 85, y);
+    canvas.print(times[i]);
+
+    y += 20;
+  }
+
+  // Footer - Info & Countdown
+  y = SCREEN_HEIGHT - 32;
+  canvas.fillRect(0, y, SCREEN_WIDTH, 32, COLOR_PANEL);
+  canvas.drawFastHLine(0, y, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextColor(0x07E0); // Green
+  canvas.setTextSize(1);
+  canvas.setCursor(10, y + 5);
+  canvas.print("Next: ");
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.print(next.name);
+  canvas.print(" in ");
+  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.print(formatRemainingTime(next.remainingMinutes));
+
+  canvas.setCursor(10, y + 18);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.print(userLocation.city);
+  canvas.print(", Qibla: ");
+  canvas.print(calculateQibla(userLocation.latitude, userLocation.longitude), 1);
+  canvas.print(" deg");
+
+  canvas.setCursor(SCREEN_WIDTH - 110, y + 18);
+  canvas.print("HOLD SELECT=Settings");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handlePrayerTimesInput() {
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    unsigned long pressTime = millis();
+    while (digitalRead(BTN_SELECT) == BTN_ACT) {
+      if (millis() - pressTime > 1000) {
+        ledQuickFlash();
+        changeState(STATE_PRAYER_SETTINGS);
+        return;
+      }
+      delay(10);
+    }
+  }
+}
+
+// ===== PRAYER SETTINGS UI =====
+int prayerSettingsCursor = 0;
+const char* prayerSettingsItems[] = {
+  "Notifications",
+  "Adzan Sound",
+  "Silent Mode",
+  "Reminder Time",
+  "Auto Location",
+  "Refresh Data",
+  "Back"
+};
+int prayerSettingsCount = 7;
+
+void drawPrayerSettings() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 20);
+  canvas.println("PRAYER SETTINGS");
+
+  int y = 50;
+  canvas.setTextSize(1);
+
+  for (int i = 0; i < prayerSettingsCount; i++) {
+    if (i == prayerSettingsCursor) {
+      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    canvas.setCursor(15, y);
+
+    if (i == 0) canvas.print(prayerSettings.notificationEnabled ? "[X] " : "[ ] ");
+    else if (i == 1) canvas.print(prayerSettings.adzanSoundEnabled ? "[X] " : "[ ] ");
+    else if (i == 2) canvas.print(prayerSettings.silentMode ? "[X] " : "[ ] ");
+    else if (i == 3) {
+      canvas.print("Reminder: ");
+      canvas.print(prayerSettings.reminderMinutes);
+      canvas.print(" min before");
+      y += 16;
+      continue;
+    }
+    else if (i == 4) canvas.print(prayerSettings.autoLocation ? "[X] " : "[ ] ");
+
+    canvas.print(prayerSettingsItems[i]);
+    y += 16;
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("UP/DN=Select | SELECT=Change | L+R=Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handlePrayerSettingsInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_PRAYER_TIMES);
+    delay(200);
+    return;
+  }
+
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    prayerSettingsCursor = (prayerSettingsCursor + 1) % prayerSettingsCount;
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    prayerSettingsCursor = (prayerSettingsCursor - 1 + prayerSettingsCount) % prayerSettingsCount;
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    ledSuccess();
+    switch (prayerSettingsCursor) {
+      case 0:
+        prayerSettings.notificationEnabled = !prayerSettings.notificationEnabled;
+        preferences.begin("prayer-data", false);
+        preferences.putBool("prayerNotif", prayerSettings.notificationEnabled);
+        preferences.end();
+        break;
+      case 1:
+        prayerSettings.adzanSoundEnabled = !prayerSettings.adzanSoundEnabled;
+        preferences.begin("prayer-data", false);
+        preferences.putBool("prayerAdzan", prayerSettings.adzanSoundEnabled);
+        preferences.end();
+        break;
+      case 2:
+        prayerSettings.silentMode = !prayerSettings.silentMode;
+        preferences.begin("prayer-data", false);
+        preferences.putBool("prayerSilent", prayerSettings.silentMode);
+        preferences.end();
+        break;
+      case 3:
+        if (prayerSettings.reminderMinutes == 5) prayerSettings.reminderMinutes = 10;
+        else if (prayerSettings.reminderMinutes == 10) prayerSettings.reminderMinutes = 15;
+        else if (prayerSettings.reminderMinutes == 15) prayerSettings.reminderMinutes = 30;
+        else prayerSettings.reminderMinutes = 5;
+        preferences.begin("prayer-data", false);
+        preferences.putInt("prayerRemind", prayerSettings.reminderMinutes);
+        preferences.end();
+        break;
+      case 4:
+        prayerSettings.autoLocation = !prayerSettings.autoLocation;
+        preferences.begin("prayer-data", false);
+        preferences.putBool("prayerAutoLoc", prayerSettings.autoLocation);
+        preferences.end();
+        break;
+      case 5:
+        fetchUserLocation();
+        break;
+      case 6:
+        changeState(STATE_PRAYER_TIMES);
+        break;
+    }
+    delay(200);
+  }
+}
+
 // ============ MENU HANDLERS ============
 void handleMainMenuSelect() {
   switch(menuSelection) {
@@ -6766,11 +7385,14 @@ void handleMainMenuSelect() {
     case 12: // POMODORO
       changeState(STATE_POMODORO);
       break;
-    case 13: // KONSOL
+    case 13: // PRAYER
+      changeState(STATE_PRAYER_TIMES);
+      break;
+    case 14: // KONSOL
       if (!espnowInitialized) initESPNow();
       changeState(STATE_KONSOL);
       break;
-    case 14: // WIKIPEDIA
+    case 15: // WIKIPEDIA
       wikiScrollOffset = 0;
       changeState(STATE_WIKI_VIEWER);
       break;
@@ -7338,6 +7960,12 @@ void refreshCurrentScreen() {
     case STATE_SYSTEM_MONITOR:
       drawSystemMonitor();
       break;
+    case STATE_PRAYER_TIMES:
+      drawPrayerTimes();
+      break;
+    case STATE_PRAYER_SETTINGS:
+      drawPrayerSettings();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -7549,6 +8177,27 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
             bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
+
+        // Initial location/prayer times fetch
+        Serial.println("Initializing Prayer Times system...");
+
+        // Load settings from preferences
+        preferences.begin("prayer-data", true);
+        prayerSettings.notificationEnabled = preferences.getBool("prayerNotif", true);
+        prayerSettings.adzanSoundEnabled = preferences.getBool("prayerAdzan", true);
+        prayerSettings.silentMode = preferences.getBool("prayerSilent", false);
+        prayerSettings.reminderMinutes = preferences.getInt("prayerRemind", 5);
+        prayerSettings.autoLocation = preferences.getBool("prayerAutoLoc", true);
+        prayerSettings.calculationMethod = 20; // MUI Indonesia
+        preferences.end();
+
+        loadLocationFromPreferences();
+
+        if (!userLocation.isValid || prayerSettings.autoLocation) {
+          fetchUserLocation();
+        } else {
+          fetchPrayerTimes();
+        }
         } else {
             bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
         }
@@ -7737,6 +8386,12 @@ void loop() {
   if (currentState == STATE_GAME_PLATFORMER) {
     updatePlatformerLogic();
   }
+    else if (currentState == STATE_PRAYER_TIMES) {
+      handlePrayerTimesInput();
+    }
+    else if (currentState == STATE_PRAYER_SETTINGS) {
+      handlePrayerSettingsInput();
+    }
 
   // Backlight smoothing logic
   if (abs(targetBrightness - currentBrightness) > 0.5) {
@@ -7758,6 +8413,9 @@ void loop() {
     updatePomodoroLogic();
     screenIsDirty = true; // Keep the timer updated
   }
+
+  // Prayer times background tasks
+  checkPrayerNotifications();
 
   // Konsol connection watchdog
   if (hasRemoteKonsol) {
@@ -8145,7 +8803,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 14) menuSelection++;
+          if (menuSelection < 15) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -8567,6 +9225,8 @@ void loop() {
           break;
         case STATE_WIKI_VIEWER:
         case STATE_SYSTEM_MONITOR:
+      case STATE_PRAYER_TIMES:
+      case STATE_PRAYER_SETTINGS:
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_KEYBOARD:
