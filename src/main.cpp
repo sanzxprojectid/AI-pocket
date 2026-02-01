@@ -226,6 +226,9 @@ float menuVelocity = 0.0f;
 
 float prayerSettingsScroll = 0.0f;
 float prayerSettingsVelocity = 0.0f;
+float eqTextScroll = 0.0f;
+float eqSettingsScroll = 0.0f;
+float eqSettingsVelocity = 0.0f;
 float citySelectScroll = 0.0f;
 float citySelectVelocity = 0.0f;
 
@@ -1377,6 +1380,8 @@ void drawWikiViewer();
 void updateSystemMetrics();
 void drawSystemMonitor();
 void fetchPrayerTimes();
+void savePrayerConfig();
+void loadPrayerConfig();
 void showPrayerReminder(String prayerName, int minutes);
 void showPrayerAlert(String prayerName);
 void playAdzan();
@@ -1434,12 +1439,8 @@ void fetchUserLocation() {
         userLocation.country = doc["country"].as<String>();
         userLocation.isValid = true;
 
-        // Save to preferences
-        preferences.begin("prayer-data", false);
-        preferences.putFloat("prayerLat", userLocation.latitude);
-        preferences.putFloat("prayerLon", userLocation.longitude);
-        preferences.putString("prayerCity", userLocation.city);
-        preferences.end();
+        // Save to JSON storage
+        savePrayerConfig();
 
         Serial.printf("Location: %s, %s (%.4f, %.4f)\n",
                      userLocation.city.c_str(),
@@ -1468,21 +1469,6 @@ void fetchUserLocation() {
   http.end();
 }
 
-void loadLocationFromPreferences() {
-  preferences.begin("prayer-data", true);
-  userLocation.latitude = preferences.getFloat("prayerLat", 0.0);
-  userLocation.longitude = preferences.getFloat("prayerLon", 0.0);
-  userLocation.city = preferences.getString("prayerCity", "");
-  preferences.end();
-
-  if (userLocation.latitude != 0.0 && userLocation.longitude != 0.0) {
-    userLocation.isValid = true;
-    Serial.println("Location loaded from preferences");
-  } else {
-    userLocation.isValid = false;
-    Serial.println("No saved location, will fetch from IP");
-  }
-}
 
 // ===== FETCH PRAYER TIMES =====
 void fetchPrayerTimes() {
@@ -2780,7 +2766,6 @@ void drawESPNowChat() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT=Type | UP/DN=Scroll | L+R=Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2898,7 +2883,7 @@ void drawSystemMonitor() {
   int m = (sec % 3600) / 60;
   int s = sec % 60;
   char uptimeStr[32];
-  sprintf(uptimeStr, "Uptime: %02dh %02dm %02ds | L+R=Back", h, m, s);
+  sprintf(uptimeStr, "Uptime: %02dh %02dm %02ds", h, m, s);
 
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
@@ -2944,11 +2929,6 @@ void drawWifiInfo() {
     canvas.print("WiFi is not connected.");
   }
 
-  // Footer
-  canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R = Back");
-
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -2981,11 +2961,6 @@ void drawStorageInfo() {
     canvas.setCursor(20, y + 10);
     canvas.print("SD Card not mounted.");
   }
-
-  // Footer
-  canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R = Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3025,12 +3000,6 @@ void drawBrightnessMenu() {
   canvas.setCursor((SCREEN_WIDTH - w) / 2, barY + barH + 15);
   canvas.print(brightness_text);
 
-
-  // Footer
-  canvas.setTextColor(COLOR_DIM);
-  canvas.setTextSize(1);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("LEFT/RIGHT = Adjust | L+R = Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3111,9 +3080,6 @@ void drawSnakeGame() {
     canvas.print("GAME OVER");
 
     canvas.setTextSize(1);
-    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, (SCREEN_HEIGHT + h) / 2 + 10);
-    canvas.print("SELECT to Restart");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -3231,7 +3197,7 @@ void drawDeauthAttack() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("ATTACKING... | L+R to Stop");
+  canvas.print("ATTACKING...");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3298,7 +3264,6 @@ void drawDeauthSelect() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Select | SELECT=Attack | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3413,7 +3378,6 @@ void drawStarfield() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, 10);
-  canvas.print("UP/DN=Speed | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3470,7 +3434,6 @@ void drawGameOfLife() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, 10);
-  canvas.print("SEL=Reset | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3527,7 +3490,6 @@ void drawFireEffect() {
 
   canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(10, 10);
-  canvas.print("DOOM FIRE | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3938,7 +3900,6 @@ void drawPlatformerGame() {
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_DIM);
     canvas.setCursor(10, SCREEN_HEIGHT - 12);
-    canvas.print("LEFT/RIGHT to Move | L+R to Exit");
   }
 
   // --- Draw Game Over Screen ---
@@ -3963,7 +3924,6 @@ void drawPlatformerGame() {
 
     canvas.getTextBounds("SELECT to Restart | L+R to Exit", 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 + 20);
-    canvas.print("SELECT to Restart | L+R to Exit");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -4293,16 +4253,12 @@ void drawPongGame() {
 
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R=Back");
 
   if (!pongRunning) {
       canvas.fillRoundRect(50, 60, 220, 50, 8, COLOR_PANEL);
       canvas.drawRoundRect(50, 60, 220, 50, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_PRIMARY);
       canvas.setTextSize(2);
-      canvas.setCursor(65, 78);
-      canvas.print("READY? PRESS SELECT");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -4657,7 +4613,6 @@ void drawESPNowPeerList() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT=Chat | LEFT=Rename | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4713,7 +4668,7 @@ void drawSniffer() {
   canvas.print(" | MAX: "); canvas.print(maxVal);
 
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("Scanning... L+R=Back");
+  canvas.print("Scanning...");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4768,7 +4723,7 @@ void drawNetScan() {
 
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("Scanning... L+R=Back");
+  canvas.print("Scanning...");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4842,8 +4797,6 @@ void drawFileManager() {
   }
 
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Scroll | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4888,7 +4841,6 @@ void drawAboutScreen() {
   // Footer
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R = Back to Main Menu");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4946,7 +4898,7 @@ void drawWiFiSonar() {
   canvas.setCursor(10, 45);
   canvas.print("Target: "); canvas.print(WiFi.SSID());
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("RSSI Delta Graph | L+R = Back");
+  canvas.print("RSSI Delta Graph");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5367,6 +5319,99 @@ void loadConfig() {
   myPet.isSleeping = sysConfig.petSleep;
 
   Serial.println("Config loaded from NVS");
+}
+
+void savePrayerConfig() {
+    JsonDocument doc;
+    doc["notif"] = prayerSettings.notificationEnabled;
+    doc["adzan"] = prayerSettings.adzanSoundEnabled;
+    doc["silent"] = prayerSettings.silentMode;
+    doc["remind"] = prayerSettings.reminderMinutes;
+    doc["autoLoc"] = prayerSettings.autoLocation;
+    doc["calc"] = prayerSettings.calculationMethod;
+    doc["hijri"] = prayerSettings.hijriAdjustment;
+    doc["lat"] = userLocation.latitude;
+    doc["lon"] = userLocation.longitude;
+    doc["city"] = userLocation.city;
+
+    const char* filename = "/prayer_settings.json";
+
+    if (sdCardMounted && beginSD()) {
+        File file = SD.open(filename, FILE_WRITE);
+        if (file) {
+            serializeJson(doc, file);
+            file.close();
+            Serial.println("Prayer settings saved to SD card.");
+        }
+        endSD();
+    } else {
+        File file = LittleFS.open(filename, FILE_WRITE);
+        if (file) {
+            serializeJson(doc, file);
+            file.close();
+            Serial.println("Prayer settings saved to LittleFS.");
+        }
+    }
+}
+
+void loadPrayerConfig() {
+    const char* filename = "/prayer_settings.json";
+    JsonDocument doc;
+    bool loaded = false;
+
+    if (sdCardMounted && beginSD()) {
+        if (SD.exists(filename)) {
+            File file = SD.open(filename, FILE_READ);
+            if (file) {
+                DeserializationError error = deserializeJson(doc, file);
+                if (!error) {
+                    loaded = true;
+                    Serial.println("Prayer settings loaded from SD card.");
+                }
+                file.close();
+            }
+        }
+        endSD();
+    }
+
+    if (!loaded) {
+        if (LittleFS.exists(filename)) {
+            File file = LittleFS.open(filename, FILE_READ);
+            if (file) {
+                DeserializationError error = deserializeJson(doc, file);
+                if (!error) {
+                    loaded = true;
+                    Serial.println("Prayer settings loaded from LittleFS.");
+                }
+                file.close();
+            }
+        }
+    }
+
+    if (loaded) {
+        prayerSettings.notificationEnabled = doc["notif"] | true;
+        prayerSettings.adzanSoundEnabled = doc["adzan"] | true;
+        prayerSettings.silentMode = doc["silent"] | false;
+        prayerSettings.reminderMinutes = doc["remind"] | 5;
+        prayerSettings.autoLocation = doc["autoLoc"] | true;
+        prayerSettings.calculationMethod = doc["calc"] | 20;
+        prayerSettings.hijriAdjustment = doc["hijri"] | 0;
+        userLocation.latitude = doc["lat"] | 0.0f;
+        userLocation.longitude = doc["lon"] | 0.0f;
+        userLocation.city = doc["city"].as<String>();
+        if (userLocation.latitude != 0.0f && userLocation.longitude != 0.0f) {
+            userLocation.isValid = true;
+        }
+    } else {
+        Serial.println("Using default prayer settings.");
+        prayerSettings.notificationEnabled = true;
+        prayerSettings.adzanSoundEnabled = true;
+        prayerSettings.silentMode = false;
+        prayerSettings.reminderMinutes = 5;
+        prayerSettings.autoLocation = true;
+        prayerSettings.calculationMethod = 20;
+        prayerSettings.hijriAdjustment = 0;
+    }
 }
 
 void saveConfig() {
@@ -5916,8 +5961,16 @@ void drawEarthquakeMonitor() {
     canvas.setTextSize(1);
     canvas.setCursor(55, y + 2);
     String place = eq.place;
-    if (place.length() > 38) place = place.substring(0, 35) + "...";
-    canvas.print(place);
+    if (i == earthquakeCursor && place.length() > 38) {
+      String padded = place + "    ";
+      int totalChars = padded.length();
+      int charOffset = ((int)(eqTextScroll / 10)) % totalChars;
+      String displayPlace = (padded + padded).substring(charOffset, charOffset + 38);
+      canvas.print(displayPlace);
+    } else {
+      if (place.length() > 38) place = place.substring(0, 35) + "...";
+      canvas.print(place);
+    }
 
     // Time & Distance
     canvas.setCursor(55, y + 13);
@@ -5945,7 +5998,7 @@ void drawEarthquakeMonitor() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, footerY + 4);
-  canvas.printf("%d results | SEL:Detail | R:Set | L:Ref", earthquakeCount);
+  canvas.printf("%d results", earthquakeCount);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6051,7 +6104,6 @@ void drawEarthquakeDetail() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, footerY + 4);
-  canvas.print("SEL:Peta | UP:Tanya AI | L+R:Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6160,7 +6212,6 @@ void drawEarthquakeMap() {
   canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Cycle | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6179,20 +6230,32 @@ void drawEarthquakeSettings() {
   canvas.println("EQ SETTINGS");
 
   int listY = 50;
-  int itemHeight = 12;
+  int itemHeight = 16;
+  int footerY = SCREEN_HEIGHT - 15;
+  int visibleHeight = footerY - listY;
   canvas.setTextSize(1);
 
+  // Calculate Viewport Scroll
+  float viewScroll = 0;
+  if (eqSettingsScroll > visibleHeight - itemHeight) {
+      viewScroll = eqSettingsScroll - (visibleHeight - itemHeight);
+  }
+
+  // Selection Highlight (relative to viewport)
+  canvas.fillRoundRect(5, (listY - 2) + eqSettingsScroll - viewScroll, SCREEN_WIDTH - 10, itemHeight, 4, COLOR_PRIMARY);
+
   for (int i = 0; i < eqSettingsCount; i++) {
-    int y = listY + (i * itemHeight);
+    int drawY = listY + (i * itemHeight) - (int)viewScroll;
+
+    if (drawY < listY - itemHeight || drawY > footerY) continue;
 
     if (i == eqSettingsCursor) {
-      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, itemHeight, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_BG);
     } else {
       canvas.setTextColor(COLOR_TEXT);
     }
 
-    canvas.setCursor(15, y);
+    canvas.setCursor(15, drawY + 4);
     canvas.print(eqSettingsItems[i]);
 
     // Show current values
@@ -6228,7 +6291,7 @@ void drawEarthquakeSettings() {
       }
       int16_t x1, y1; uint16_t w, h;
       canvas.getTextBounds(val, 0, 0, &x1, &y1, &w, &h);
-      canvas.setCursor(SCREEN_WIDTH - 20 - w, y);
+      canvas.setCursor(SCREEN_WIDTH - 20 - w, drawY + 4);
       canvas.print(val);
     }
   }
@@ -6237,7 +6300,6 @@ void drawEarthquakeSettings() {
   canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Nav | SELECT=Change | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6362,7 +6424,6 @@ void drawGroqModelSelect() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Select | SELECT=OK | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6414,7 +6475,6 @@ void showAIModeSelection(int x_offset) {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DOWN=Select | SELECT=OK | L+R=Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6660,7 +6720,6 @@ void drawKeyboard(int x_offset) {
   canvas.print(currentKeyboardMode == MODE_LOWER ? "abc" : (currentKeyboardMode == MODE_UPPER ? "ABC" : "123"));
   
   canvas.setCursor(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 10);
-  canvas.print("L+R = Back");
   
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6795,7 +6854,6 @@ void drawDeviceInfo(int x_offset) {
   // Footer
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT = Clear Chat History | L+R = Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -6870,7 +6928,6 @@ void drawCourierTool() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("SELECT = Track Again | L+R = Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7360,6 +7417,8 @@ void changeState(AppState newState) {
     prayerSettingsVelocity = 0.0f;
     citySelectScroll = 0.0f;
     citySelectVelocity = 0.0f;
+    eqSettingsScroll = 0.0f;
+    eqSettingsVelocity = 0.0f;
   }
 }
 
@@ -7565,7 +7624,6 @@ void drawWikiViewer() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(5, SCREEN_HEIGHT - 12);
-  canvas.print("SEL=New | HOLD SEL=Save | UP/DN=Scroll");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7737,15 +7795,13 @@ void drawPrayerTimes() {
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
 
-  // Hijri Date moved to Top Card
   String hijriStr = currentPrayer.hijriDate + " " + currentPrayer.hijriMonth;
-  canvas.getTextBounds(hijriStr, 0, 0, &tx1, &ty1, &tw, &th);
-  canvas.setCursor(SCREEN_WIDTH - 15 - tw, nextY + 8);
+  canvas.setCursor(15, footerY + 2);
   canvas.print(hijriStr);
 
   String qiblaStr = "Kiblat: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 0) + "°";
   canvas.getTextBounds(qiblaStr, 0, 0, &tx1, &ty1, &tw, &th);
-  canvas.setCursor((SCREEN_WIDTH - tw) / 2, footerY + 2);
+  canvas.setCursor(SCREEN_WIDTH - 15 - tw, footerY + 2);
   canvas.print(qiblaStr);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -7880,13 +7936,8 @@ void handleCitySelectInput() {
     // Disable auto location
     prayerSettings.autoLocation = false;
 
-    // Save to preferences
-    preferences.begin("prayer-data", false);
-    preferences.putFloat("prayerLat", userLocation.latitude);
-    preferences.putFloat("prayerLon", userLocation.longitude);
-    preferences.putString("prayerCity", userLocation.city);
-    preferences.putBool("prayerAutoLoc", prayerSettings.autoLocation);
-    preferences.end();
+    // Save to JSON storage
+    savePrayerConfig();
 
     Serial.printf("Manual Location: %s (%.4f, %.4f)\n",
                   userLocation.city.c_str(), userLocation.latitude, userLocation.longitude);
@@ -7993,43 +8044,31 @@ void handlePrayerSettingsInput() {
     switch (prayerSettingsCursor) {
       case 0:
         prayerSettings.notificationEnabled = !prayerSettings.notificationEnabled;
-        preferences.begin("prayer-data", false);
-        preferences.putBool("prayerNotif", prayerSettings.notificationEnabled);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 1:
         prayerSettings.adzanSoundEnabled = !prayerSettings.adzanSoundEnabled;
-        preferences.begin("prayer-data", false);
-        preferences.putBool("prayerAdzan", prayerSettings.adzanSoundEnabled);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 2:
         prayerSettings.silentMode = !prayerSettings.silentMode;
-        preferences.begin("prayer-data", false);
-        preferences.putBool("prayerSilent", prayerSettings.silentMode);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 3:
         if (prayerSettings.reminderMinutes == 5) prayerSettings.reminderMinutes = 10;
         else if (prayerSettings.reminderMinutes == 10) prayerSettings.reminderMinutes = 15;
         else if (prayerSettings.reminderMinutes == 15) prayerSettings.reminderMinutes = 30;
         else prayerSettings.reminderMinutes = 5;
-        preferences.begin("prayer-data", false);
-        preferences.putInt("prayerRemind", prayerSettings.reminderMinutes);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 4:
         prayerSettings.hijriAdjustment++;
         if (prayerSettings.hijriAdjustment > 2) prayerSettings.hijriAdjustment = -2;
-        preferences.begin("prayer-data", false);
-        preferences.putInt("prayerHijri", prayerSettings.hijriAdjustment);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 5:
         prayerSettings.autoLocation = !prayerSettings.autoLocation;
-        preferences.begin("prayer-data", false);
-        preferences.putBool("prayerAutoLoc", prayerSettings.autoLocation);
-        preferences.end();
+        savePrayerConfig();
         break;
       case 6:
         changeState(STATE_PRAYER_CITY_SELECT);
@@ -8062,6 +8101,7 @@ void handleEarthquakeInput() {
       if (earthquakeCursor >= earthquakeScrollOffset + 4) {
         earthquakeScrollOffset++;
       }
+      eqTextScroll = 0;
     }
     ledQuickFlash();
   }
@@ -8074,6 +8114,7 @@ void handleEarthquakeInput() {
     if (earthquakeCursor < earthquakeScrollOffset) {
       earthquakeScrollOffset--;
     }
+    eqTextScroll = 0;
     ledQuickFlash();
   }
 
@@ -8097,6 +8138,7 @@ void handleEarthquakeInput() {
     fetchEarthquakeData();
     earthquakeCursor = 0;
     earthquakeScrollOffset = 0;
+    eqTextScroll = 0;
     ledSuccess();
   }
 }
@@ -8966,7 +9008,6 @@ void drawGenericToolScreen(const char* title) {
   canvas.print("UI Not Implemented");
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L+R to Go Back");
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -9033,8 +9074,6 @@ void drawFileViewer() {
   }
 
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Scroll | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -9160,18 +9199,8 @@ void setup() {
         // Initial location/prayer times fetch
         Serial.println("Initializing Prayer Times system...");
 
-        // Load settings from preferences
-        preferences.begin("prayer-data", true);
-        prayerSettings.notificationEnabled = preferences.getBool("prayerNotif", true);
-        prayerSettings.adzanSoundEnabled = preferences.getBool("prayerAdzan", true);
-        prayerSettings.silentMode = preferences.getBool("prayerSilent", false);
-        prayerSettings.reminderMinutes = preferences.getInt("prayerRemind", 5);
-        prayerSettings.autoLocation = preferences.getBool("prayerAutoLoc", true);
-        prayerSettings.calculationMethod = preferences.getInt("prayerCalc", 20); // Default 20 for Kemenag RI
-        prayerSettings.hijriAdjustment = preferences.getInt("prayerHijri", 0);
-        preferences.end();
-
-        loadLocationFromPreferences();
+        // Load settings from JSON storage (SD/LittleFS)
+        loadPrayerConfig();
 
         if (!userLocation.isValid || prayerSettings.autoLocation) {
           fetchUserLocation();
@@ -9327,6 +9356,25 @@ void loop() {
       if (chatAnimProgress > 1.0f) chatAnimProgress = 1.0f;
   }
 
+  if (currentState == STATE_EARTHQUAKE) {
+      eqTextScroll += 30.0f * dt; // Scroll speed
+  }
+
+  if (currentState == STATE_EARTHQUAKE_SETTINGS) {
+      float spring = 0.3f;
+      float damp = 0.7f;
+      float target = eqSettingsCursor * 16.0f;
+      float diff = target - eqSettingsScroll;
+      eqSettingsVelocity += diff * spring;
+      eqSettingsVelocity *= damp;
+      if (abs(diff) < 0.1f && abs(eqSettingsVelocity) < 0.1f) {
+          eqSettingsScroll = target;
+          eqSettingsVelocity = 0.0f;
+      } else {
+          eqSettingsScroll += eqSettingsVelocity * dt * 50.0f;
+      }
+  }
+
   updateNeoPixel();
   updateStatusBarData();
   
@@ -9340,6 +9388,8 @@ void loop() {
   // Force redraw for states that are always animating
   switch (currentState) {
     case STATE_MAIN_MENU: // For smooth scrolling
+    case STATE_EARTHQUAKE: // For scrolling text
+    case STATE_EARTHQUAKE_SETTINGS: // For smooth scrolling
     case STATE_LOADING:
     case STATE_VIS_STARFIELD:
     case STATE_VIS_LIFE:
@@ -9355,8 +9405,6 @@ void loop() {
     case STATE_SYSTEM_MONITOR:
     case STATE_PRAYER_SETTINGS:
     case STATE_PRAYER_CITY_SELECT:
-    case STATE_EARTHQUAKE:
-    case STATE_EARTHQUAKE_SETTINGS:
     case STATE_EARTHQUAKE_MAP:
     // case STATE_SCREENSAVER: // For blinking colon and starfield
       screenIsDirty = true;
@@ -10438,7 +10486,6 @@ void drawPomodoroTimer() {
     canvas.setTextColor(COLOR_DIM);
     canvas.setTextSize(1);
     canvas.setCursor(5, footerY + 2);
-    canvas.print("SEL:Start/Pause | L/R:Track | HOLD L/R:Reset/Shuffle");
 
   // Shuffle Icon
   if (pomoMusicShuffle) {
