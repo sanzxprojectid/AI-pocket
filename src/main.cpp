@@ -3575,11 +3575,17 @@ void updateRacingLogic() {
 
     // --- Physics ---
     playerCar.z += playerCar.speed * dt * 5.0f; // Scale speed to Z movement
+
+    // Lap Counter
     if (playerCar.z >= totalTrackLength) {
         playerCar.z -= totalTrackLength;
+        playerCar.lap++;
+        ledSuccess();
+        triggerNeoPixelEffect(pixels.Color(0, 255, 255), 1000); // Lap celebration
     }
-    if (playerCar.z < 0) { // In case of reversing past the start line
+    if (playerCar.z < 0) {
         playerCar.z += totalTrackLength;
+        if (playerCar.lap > 0) playerCar.lap--;
     }
 
 
@@ -3597,10 +3603,14 @@ void updateRacingLogic() {
     float centrifugal = playerSegment.curvature * speedPercent * speedPercent * 1.5f;
     playerCar.x -= centrifugal * dt * 2.0f; // Reduced centrifugal force
 
-    // Player steering input
+    // Player steering input - scaled by speed
     float steerForce = 0;
-    if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -6.0f; // Increased steering power
-    if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = 6.0f; // Increased steering power
+    // Harder to turn at high speed, easier at low speed
+    float steerSensitivity = 4.0f + (playerCar.speed / 50.0f);
+    if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -steerSensitivity;
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = steerSensitivity;
+
+    // Centrifugal effect increases with speed squared
     playerCar.x += steerForce * dt;
 
 
@@ -3930,188 +3940,170 @@ void drawPlatformerGame() {
 
 
 void drawRacingGame() {
-    // --- Sky Gradient ---
+    // --- Sky & Horizon ---
     for(int y=0; y < SCREEN_HEIGHT/2; y++) {
-        uint8_t r = 30 + (y * 50) / (SCREEN_HEIGHT/2);
-        uint8_t g = 30 + (y * 100) / (SCREEN_HEIGHT/2);
-        uint8_t b = 150 + (y * 105) / (SCREEN_HEIGHT/2);
+        uint8_t r = 20 + (y * 60) / (SCREEN_HEIGHT/2);
+        uint8_t g = 20 + (y * 80) / (SCREEN_HEIGHT/2);
+        uint8_t b = 100 + (y * 120) / (SCREEN_HEIGHT/2);
         canvas.drawFastHLine(0, y, SCREEN_WIDTH, color565(r, g, b));
     }
+    canvas.drawFastHLine(0, SCREEN_HEIGHT/2, SCREEN_WIDTH, 0x1082); // Horizon line
 
-    // --- Draw Parallax Background (Mountains & Clouds) ---
-    // Distant Clouds
+    // --- Draw Parallax Background ---
     for(int i=0; i<3; i++) {
-        int cloudX = (int)(i * 160 - camera.z * 0.01f) % (SCREEN_WIDTH + 100) - 50;
-        canvas.fillCircle(cloudX, 30 + i*15, 20, 0xFFFF);
-        canvas.fillCircle(cloudX + 15, 35 + i*15, 15, 0xFFFF);
-        canvas.fillCircle(cloudX - 15, 35 + i*15, 15, 0xFFFF);
+        int cloudX = (int)(i * 160 - camera.z * 0.005f) % (SCREEN_WIDTH + 100) - 50;
+        canvas.fillCircle(cloudX, 25 + i*10, 15, 0xFFFF);
+        canvas.fillCircle(cloudX + 10, 30 + i*10, 12, 0xFFFF);
     }
 
-    // Distant Mountains (Darker)
+    // Static distant mountains
     for(int i=0; i<SCREEN_WIDTH; i++) {
-        float mountainHeight = sin((i * 0.04f + camera.z * 0.0003f)) * 25 + sin(i * 0.02f + camera.z * 0.0001f) * 10 + 30;
-        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, mountainHeight, 0x18C3); // Very Dark Gray/Blue
+        float m1 = sin(i * 0.05f + camera.z * 0.0002f) * 15 + 20;
+        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - m1, m1, 0x2124);
     }
 
-    // Closer Mountains
-    for(int i=0; i<SCREEN_WIDTH; i++) {
-        float mountainHeight = sin((i * 0.08f + camera.z * 0.0008f)) * 15 + sin(i * 0.04f + camera.z * 0.0004f) * 5 + 15;
-        canvas.drawFastVLine(i, SCREEN_HEIGHT/2 - mountainHeight, mountainHeight, 0x3A2E); // Brownish Gray
-    }
-
-    // --- Draw Road ---
+    // --- Road Parameters ---
     float camX = camera.x;
     float camY = camera.y;
     float camZ = camera.z;
 
-    float roadX = 0;
-    float roadY = 0;
-
-    int currentSegment = 0;
-    int segmentBaseZ = 0;
+    // Hyperbolic Projection Constants
+    const float roadDepth = 2000.0f;
+    const float segmentLength = 200.0f;
 
     if (totalSegments <= 0) return;
 
-    // Find starting segment
-    while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < camZ) {
-        segmentBaseZ += track[currentSegment].length * SEGMENT_STEP_LENGTH;
-        currentSegment = (currentSegment + 1) % totalSegments;
+    // --- Draw Road ---
+    uint16_t* buffer = canvas.getBuffer();
+    float x = 0, dx = 0;
+
+    // Pre-calculate track curvature accumulation up to camera position
+    float startX = 0;
+    int currentSeg = 0;
+    float currentSegZ = 0;
+    while(currentSegZ < camZ && currentSeg < totalSegments) {
+        startX += track[currentSeg].curvature * (min(camZ - currentSegZ, (float)track[currentSeg].length * SEGMENT_STEP_LENGTH) / SEGMENT_STEP_LENGTH);
+        currentSegZ += track[currentSeg].length * SEGMENT_STEP_LENGTH;
+        currentSeg++;
     }
 
-    // Draw from bottom to top (foreground to horizon)
-    uint16_t* buffer = canvas.getBuffer();
     for (int y = SCREEN_HEIGHT - 1; y >= SCREEN_HEIGHT / 2; y--) {
-        float perspective = (float)(y - SCREEN_HEIGHT/2) / (SCREEN_HEIGHT / 2.0f);
-        float roadWidth = 30 + perspective * 800;
-        float lineZ = camZ + (SCREEN_HEIGHT - y) * 20;
+        // Perspective factor (0 at horizon, 1 at bottom)
+        float p = (float)(y - SCREEN_HEIGHT/2) / (SCREEN_HEIGHT / 2.0f);
+        if (p < 0.01f) p = 0.01f;
 
-        // Find which segment we are in for this line
-        while (segmentBaseZ + track[currentSegment].length * SEGMENT_STEP_LENGTH < lineZ) {
-            segmentBaseZ += track[currentSegment].length * SEGMENT_STEP_LENGTH;
-            currentSegment = (currentSegment + 1) % totalSegments;
+        float lineZ = camZ + (1.0f / p) * 100.0f; // Hyperbolic projection
+        float roadWidth = p * 400.0f;
+
+        // Find segment for this lineZ
+        int segIdx = 0;
+        float segZ = 0;
+        float segAccumX = 0;
+        while(segIdx < totalSegments - 1 && segZ + track[segIdx].length * SEGMENT_STEP_LENGTH < lineZ) {
+            segAccumX += track[segIdx].curvature * track[segIdx].length;
+            segZ += track[segIdx].length * SEGMENT_STEP_LENGTH;
+            segIdx++;
         }
+        float relativeZ = (lineZ - segZ) / SEGMENT_STEP_LENGTH;
+        float currentX = segAccumX + track[segIdx].curvature * relativeZ;
 
-        RoadSegment segment = track[currentSegment];
-        roadX += segment.curvature;
-        roadY += segment.hill;
+        float screenX = SCREEN_WIDTH/2 + (currentX - startX - camX/1000.0f) * roadWidth;
 
-        float screenX = SCREEN_WIDTH/2 + (roadX - camX) * perspective * 200.0f;
-
-        uint16_t grassColor = ( (int)(lineZ / 400) % 2 == 0) ? C_DGREEN : C_GREEN;
+        uint16_t grassColor = ( (int)(lineZ / 500) % 2 == 0) ? 0x05E0 : 0x03E0;
         uint16_t rumbleColor = ( (int)(lineZ / 200) % 2 == 0) ? C_RED : C_WHITE;
+        uint16_t roadColor = ( (int)(lineZ / 200) % 2 == 0) ? 0x3186 : 0x2104;
 
         int roadHalf = roadWidth / 2;
-        int kerbWidth = roadWidth * 0.05;
+        int kerbWidth = roadWidth * 0.12;
         int rStart = screenX - roadHalf;
         int rEnd = screenX + roadHalf;
-        int k1Start = rStart - kerbWidth;
-        int k2End = rEnd + kerbWidth;
 
         uint16_t* row = &buffer[y * SCREEN_WIDTH];
-        for (int x = 0; x < SCREEN_WIDTH; x++) {
-            if (x < k1Start || x >= k2End) {
-                row[x] = grassColor;
-            } else if (x >= rStart && x < rEnd) {
-                // Dashed center line
-                if (((int)(lineZ / 100) % 2 == 0) && (x >= screenX - roadWidth * 0.015 && x <= screenX + roadWidth * 0.015)) {
-                    row[x] = C_YELLOW;
+        for (int i = 0; i < SCREEN_WIDTH; i++) {
+            if (i < rStart - kerbWidth || i >= rEnd + kerbWidth) {
+                row[i] = grassColor;
+            } else if (i >= rStart && i < rEnd) {
+                // Lane divider
+                if (((int)(lineZ / 300) % 2 == 0) && abs(i - screenX) < max(1.0f, roadWidth * 0.02f)) {
+                    row[i] = C_WHITE;
                 } else {
-                    row[x] = C_DGREY;
+                    row[i] = roadColor;
                 }
             } else {
-                row[x] = rumbleColor;
+                row[i] = rumbleColor;
             }
         }
     }
 
-    // --- Draw Scenery ---
-    for(int i = 0; i < sceneryCount; i++) {
+    // --- Draw Scenery (Back-to-Front) ---
+    for(int i = sceneryCount - 1; i >= 0; i--) {
         float dz = scenery[i].z - camZ;
-        if (dz < 100) continue;
+        if (dz < 100 || dz > 4000) continue;
 
-        float scale = 500.0f / dz;
-        float screenX = SCREEN_WIDTH/2 + scale * (scenery[i].x * 2000.0f - camX);
-        float screenY = SCREEN_HEIGHT/2 + scale * ( -camY) + SCREEN_HEIGHT/2; // Simplified height
+        float p = 150.0f / dz;
+        float screenX = SCREEN_WIDTH/2 + (scenery[i].x * 200.0f - camX/10.0f) * p * 100.0f;
+        float screenY = SCREEN_HEIGHT/2 + p * 200.0f;
 
-        if (screenX > 0 && screenX < SCREEN_WIDTH) {
+        if (screenX > -20 && screenX < SCREEN_WIDTH + 20) {
+            float scale = p * 10.0f;
             switch(scenery[i].type) {
-                case TREE:
-                    drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_tree, 16, 16, scale);
-                    break;
-                case BUSH:
-                    drawScaledColorBitmap(screenX - 8*scale, screenY - 8*scale, sprite_bush, 16, 8, scale);
-                    break;
-                case SIGN:
-                    drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_sign_left, 16, 16, scale);
-                    break;
+                case TREE: drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_tree, 16, 16, scale); break;
+                case BUSH: drawScaledColorBitmap(screenX - 8*scale, screenY - 8*scale, sprite_bush, 16, 8, scale); break;
+                case SIGN: drawScaledColorBitmap(screenX - 8*scale, screenY - 16*scale, sprite_sign_left, 16, 16, scale); break;
             }
         }
     }
 
-    // --- Draw Cars ---
-    // Player Car
-    drawScaledColorBitmap(SCREEN_WIDTH/2 - 32, SCREEN_HEIGHT - 64, sprite_car_player, 32, 16, 2.0);
-
-    // AI Car
-    float dx_ai = aiCar.x * 2000.0f - camX;
-    float dz_ai = aiCar.z - camZ;
-    if (dz_ai > 0) { // Only draw if in front of camera
-        float scale = 1500.0f / dz_ai;
-        float screenX = SCREEN_WIDTH/2 + scale * dx_ai;
-        float screenY = SCREEN_HEIGHT + scale * 200; // Simplified Y projection
-        drawScaledColorBitmap(screenX - 16*scale, screenY - 16*scale, sprite_car_opponent, 32, 16, scale);
-    }
-
-    // Opponent Car (Multiplayer)
-    if (opponentPresent) {
-        float dx_op = opponentCar.x * 2000.0f - camX;
-        float dz_op = opponentCar.z - camZ;
-        if (dz_op > 0) {
-            float scale = 1500.0f / dz_op;
-            float screenX = SCREEN_WIDTH/2 + scale * dx_op;
-            float screenY = SCREEN_HEIGHT + scale * 200;
-            drawScaledColorBitmap(screenX - 16*scale, screenY - 16*scale, sprite_car_opponent, 32, 16, scale);
+    // --- Draw AI & Opponents ---
+    auto drawCar = [&](Car& c, uint16_t const* sprite) {
+        float dz = c.z - camZ;
+        if (dz < 0) dz += totalSegments * SEGMENT_STEP_LENGTH; // Handle wrap
+        if (dz > 100 && dz < 4000) {
+            float p = 150.0f / dz;
+            float screenX = SCREEN_WIDTH/2 + (c.x * 200.0f - camX/10.0f) * p * 100.0f;
+            float screenY = SCREEN_HEIGHT/2 + p * 200.0f;
+            float scale = p * 15.0f;
+            drawScaledColorBitmap(screenX - 16*scale, screenY - 16*scale, sprite, 32, 16, scale);
         }
-    }
+    };
+    drawCar(aiCar, sprite_car_opponent);
+    if (opponentPresent) drawCar(opponentCar, sprite_car_opponent);
 
-    // --- Draw HUD ---
-    // Speedometer (Bottom Left)
-    canvas.fillRoundRect(5, SCREEN_HEIGHT - 45, 85, 40, 5, COLOR_PANEL);
-    canvas.drawRoundRect(5, SCREEN_HEIGHT - 45, 85, 40, 5, COLOR_BORDER);
+    // --- Draw Player Car ---
+    drawScaledColorBitmap(SCREEN_WIDTH/2 - 48, SCREEN_HEIGHT - 60, sprite_car_player, 32, 16, 3.0);
+
+    // --- HUD REDESIGN ---
+    // Digital Speedometer (Bottom Left)
+    uint16_t speedColor = (playerCar.speed > 200) ? 0xF800 : (playerCar.speed > 100) ? 0xFFE0 : 0x07E0;
+    canvas.fillRoundRect(10, SCREEN_HEIGHT - 50, 90, 40, 5, 0x1082);
+    canvas.drawRoundRect(10, SCREEN_HEIGHT - 50, 90, 40, 5, speedColor);
+
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(20, SCREEN_HEIGHT - 43);
+    canvas.print("VELOCITY");
+
+    canvas.setTextSize(3);
     canvas.setTextColor(COLOR_PRIMARY);
-    canvas.setTextSize(1);
-    canvas.setCursor(15, SCREEN_HEIGHT - 38);
-    canvas.print("SPEED");
-    canvas.setTextSize(2);
-    canvas.setCursor(15, SCREEN_HEIGHT - 28);
+    canvas.setCursor(20, SCREEN_HEIGHT - 32);
     canvas.print((int)playerCar.speed);
+
     canvas.setTextSize(1);
-    canvas.print(" KM/H");
+    canvas.setTextColor(speedColor);
+    canvas.print(" km/h");
 
-    // Distance/Progress Bar (Top Center)
-    int barW = 160;
-    int barX = (SCREEN_WIDTH - barW) / 2;
-    int barY = 10;
-    canvas.fillRoundRect(barX - 4, barY - 4, barW + 8, 14, 4, COLOR_PANEL);
-    canvas.drawRoundRect(barX - 4, barY - 4, barW + 8, 14, 4, COLOR_BORDER);
+    // Track Progress (Top)
+    int totalLen = 0; for(int i=0; i<totalSegments; i++) totalLen += track[i].length * SEGMENT_STEP_LENGTH;
+    float prog = playerCar.z / (float)totalLen;
+    canvas.drawRect(50, 10, SCREEN_WIDTH - 100, 6, 0x4208);
+    canvas.fillRect(50, 10, (SCREEN_WIDTH - 100) * prog, 6, 0x07FF);
 
-    // Calculate total track length
-    int totalTrackLength = 0;
-    for(int i = 0; i < totalSegments; i++) {
-        totalTrackLength += track[i].length * SEGMENT_STEP_LENGTH;
-    }
-    float progress = (totalTrackLength > 0) ? (playerCar.z / totalTrackLength) : 0;
-    if (progress > 1.0f) progress = 1.0f;
-    canvas.fillRect(barX, barY, (int)(barW * progress), 6, COLOR_SUCCESS);
-
-    // FPS Display (Top Right)
     canvas.setTextSize(1);
-    canvas.setTextColor(0x7BEF); // Dim white/gray
-    canvas.setCursor(SCREEN_WIDTH - 50, 10);
-    canvas.print("FPS:");
-    canvas.print(perfFPS);
+    canvas.setTextColor(COLOR_PRIMARY);
+    canvas.setCursor(50, 18);
+    canvas.print("LAP: "); canvas.print(playerCar.lap + 1);
 
-    // Apply Screen Shake
+    // Screen Shake
     int sx = 0, sy = 0;
     if (screenShake > 0) {
         sx = random(-(int)screenShake, (int)screenShake + 1);
@@ -7117,116 +7109,161 @@ void drawWikiViewer() {
 }
 
 // ===== PRAYER TIMES UI =====
+void drawPrayerIcon(int x, int y, int type) {
+  switch(type) {
+    case 0: // Fajr - Morning Horizon
+      canvas.drawLine(x, y + 8, x + 16, y + 8, COLOR_ACCENT);
+      canvas.drawCircle(x + 8, y + 8, 4, COLOR_ACCENT);
+      canvas.fillRect(x, y + 9, 16, 4, COLOR_BG);
+      break;
+    case 1: // Sunrise
+      canvas.drawCircle(x + 8, y + 10, 5, 0xFDA0); // Orange
+      canvas.fillRect(x, y + 11, 16, 5, COLOR_BG);
+      canvas.drawLine(x + 2, y + 11, x + 14, y + 11, 0xFDA0);
+      break;
+    case 2: // Dhuhr - Sun
+      canvas.drawCircle(x + 8, y + 8, 4, 0xFFE0); // Yellow
+      for(int i=0; i<8; i++) {
+        float a = i * PI / 4;
+        canvas.drawLine(x+8+cos(a)*5, y+8+sin(a)*5, x+8+cos(a)*7, y+8+sin(a)*7, 0xFFE0);
+      }
+      break;
+    case 3: // Asr - Afternoon Sun
+      canvas.drawCircle(x + 8, y + 8, 4, 0xFE60); // Golden
+      canvas.drawLine(x + 1, y + 1, x + 4, y + 4, 0xFE60);
+      break;
+    case 4: // Maghrib - Sunset
+      canvas.drawCircle(x + 8, y + 10, 5, 0xF800); // Red
+      canvas.fillRect(x, y + 11, 16, 5, COLOR_BG);
+      canvas.drawLine(x, y + 11, x + 16, y + 11, 0xF800);
+      break;
+    case 5: // Isha - Moon
+      canvas.drawCircle(x + 8, y + 8, 5, 0xCE7F); // Whitish Blue
+      canvas.fillCircle(x + 11, y + 6, 4, COLOR_BG);
+      break;
+  }
+}
+
 void drawPrayerTimes() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  int y = 28;
-
   if (!currentPrayer.isValid) {
     canvas.setTextSize(2);
     canvas.setTextColor(prayerFetchFailed ? 0xF800 : COLOR_TEXT);
-    canvas.setCursor(40, 70);
-    if (prayerFetchFailed) {
-      canvas.println("Fetch Failed!");
-    } else {
-      canvas.println("Loading...");
-    }
+    int16_t x1, y1; uint16_t w, h;
+    String msg = prayerFetchFailed ? "FETCH FAILED" : "LOADING...";
+    canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor((SCREEN_WIDTH - w) / 2, 70);
+    canvas.print(msg);
 
     canvas.setTextSize(1);
-    canvas.setCursor(30, 100);
     if (prayerFetchFailed) {
       canvas.setTextColor(COLOR_DIM);
+      canvas.getTextBounds(prayerFetchError, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor((SCREEN_WIDTH - w) / 2, 100);
       canvas.println(prayerFetchError);
-      canvas.setCursor(30, 120);
       canvas.setTextColor(COLOR_PRIMARY);
+      canvas.setCursor(SCREEN_WIDTH/2 - 50, 125);
       canvas.println("Press SELECT to retry");
     } else {
-      if (!userLocation.isValid) {
-        canvas.println("Detecting location via IP...");
-      } else {
-        canvas.println("Fetching prayer times...");
-      }
+      canvas.setTextColor(COLOR_DIM);
+      String loadMsg = !userLocation.isValid ? "Locating via IP..." : "Fetching timings...";
+      canvas.getTextBounds(loadMsg, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor((SCREEN_WIDTH - w) / 2, 100);
+      canvas.print(loadMsg);
     }
-
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     return;
   }
 
-  // Header with Mosque Icon
-  canvas.drawBitmap(SCREEN_WIDTH - 40, 28, icon_prayer, 32, 32, COLOR_PRIMARY);
-
-  // Date headers
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, y);
-  canvas.print(currentPrayer.gregorianDate);
-  y += 12;
-
-  canvas.setCursor(10, y);
-  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth + " " + currentPrayer.hijriYear + " H");
-  y += 15;
-
-  // Divider
-  canvas.drawFastHLine(10, y, SCREEN_WIDTH - 20, COLOR_PANEL);
-  y += 10;
-
-  // Prayer times list
-  canvas.setTextSize(2);
-
-  String prayers[6] = {
-    "Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"
-  };
-  String times[6] = {
-    currentPrayer.fajr, currentPrayer.sunrise, currentPrayer.dhuhr,
-    currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha
-  };
-
+  // --- TOP CARD: NEXT PRAYER ---
   NextPrayerInfo next = getNextPrayer();
+  int cardH = 65;
+  canvas.fillRoundRect(10, 20, SCREEN_WIDTH - 20, cardH, 10, COLOR_PANEL);
+  canvas.drawRoundRect(10, 20, SCREEN_WIDTH - 20, cardH, 10, COLOR_BORDER);
 
+  // Gradient decoration on the card
+  for(int i=0; i<cardH-4; i++) {
+    uint8_t alpha = map(i, 0, cardH-4, 40, 10);
+    canvas.drawFastHLine(12, 22 + i, SCREEN_WIDTH - 24, color565(alpha, alpha, alpha + 10));
+  }
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setTextSize(1);
+  canvas.setCursor(20, 30);
+  canvas.print("NEXT PRAYER");
+
+  canvas.setTextColor(0x07FF); // Cyan
+  canvas.setTextSize(3);
+  canvas.setCursor(20, 45);
+  canvas.print(next.name);
+
+  // Countdown
+  String countdown = formatRemainingTime(next.remainingMinutes);
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(SCREEN_WIDTH - 110, 30);
+  canvas.print("COMMENCING IN");
+
+  canvas.setTextSize(3);
+  canvas.setTextColor(0xFFE0); // Yellow
+  int16_t x1, y1; uint16_t w, h;
+  canvas.getTextBounds(countdown, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH - 20 - w, 45);
+  canvas.print(countdown);
+
+  // Mini progress bar in card
+  int pBarW = SCREEN_WIDTH - 40;
+  canvas.fillRect(20, 75, pBarW, 3, 0x2104);
+  // Assuming a period of 4 hours (240 mins) for visual progress if we don't have exact prev prayer
+  float pPercent = constrain(1.0f - (float)next.remainingMinutes / 240.0f, 0.0f, 1.0f);
+  canvas.fillRect(20, 75, (int)(pBarW * pPercent), 3, 0x07E0);
+
+  // --- MIDDLE: PRAYER LIST ---
+  int listY = 95;
+  String prayers[6] = {"Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"};
+  String times[6] = {currentPrayer.fajr, currentPrayer.sunrise, currentPrayer.dhuhr, currentPrayer.asr, currentPrayer.maghrib, currentPrayer.isha};
+
+  canvas.setTextSize(1);
   for (int i = 0; i < 6; i++) {
+    int rowY = listY + (i * 12);
     bool isNext = (next.index != -1 && prayerNames[next.index] == prayers[i]);
 
     if (isNext) {
-      canvas.fillRect(5, y - 2, SCREEN_WIDTH - 10, 18, 0x03E0); // Dark Green
+      canvas.fillRect(10, rowY - 1, SCREEN_WIDTH - 20, 11, 0x1305); // Very dark blue/green
       canvas.setTextColor(COLOR_PRIMARY);
     } else {
-      canvas.setTextColor(COLOR_TEXT);
+      canvas.setTextColor(0xBDD7); // Light Gray
     }
 
-    canvas.setCursor(15, y);
+    drawPrayerIcon(15, rowY - 2, i);
+    canvas.setCursor(38, rowY);
     canvas.print(prayers[i]);
 
-    canvas.setCursor(SCREEN_WIDTH - 85, y);
+    canvas.setCursor(SCREEN_WIDTH - 60, rowY);
     canvas.print(times[i]);
-
-    y += 20;
   }
 
-  // Footer - Info & Countdown
-  y = SCREEN_HEIGHT - 32;
-  canvas.fillRect(0, y, SCREEN_WIDTH, 32, COLOR_PANEL);
-  canvas.drawFastHLine(0, y, SCREEN_WIDTH, COLOR_BORDER);
+  // --- BOTTOM: INFO & DATE ---
+  int footerY = SCREEN_HEIGHT - 32;
+  canvas.drawFastHLine(10, footerY, SCREEN_WIDTH - 20, COLOR_BORDER);
 
-  canvas.setTextColor(0x07E0); // Green
   canvas.setTextSize(1);
-  canvas.setCursor(10, y + 5);
-  canvas.print("Next: ");
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.print(next.name);
-  canvas.print(" in ");
-  canvas.setTextColor(0xFFE0); // Yellow
-  canvas.print(formatRemainingTime(next.remainingMinutes));
-
-  canvas.setCursor(10, y + 18);
   canvas.setTextColor(COLOR_DIM);
-  canvas.print(userLocation.city);
-  canvas.print(", Qibla: ");
-  canvas.print(calculateQibla(userLocation.latitude, userLocation.longitude), 1);
-  canvas.print(" deg");
+  canvas.setCursor(15, footerY + 6);
+  canvas.print(currentPrayer.hijriDate + " " + currentPrayer.hijriMonth + " " + currentPrayer.hijriYear + " H");
 
-  canvas.setCursor(SCREEN_WIDTH - 110, y + 18);
-  canvas.print("HOLD SELECT=Settings");
+  canvas.setCursor(15, footerY + 18);
+  canvas.print(userLocation.city);
+
+  canvas.setTextColor(COLOR_SECONDARY);
+  String qiblaStr = "Qibla: " + String(calculateQibla(userLocation.latitude, userLocation.longitude), 1) + "°";
+  canvas.getTextBounds(qiblaStr, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH - 15 - w, footerY + 18);
+  canvas.print(qiblaStr);
+
+  canvas.drawBitmap(SCREEN_WIDTH - 45, footerY - 50, icon_prayer, 32, 32, 0x4208); // Faded background icon
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7270,29 +7307,30 @@ void drawCitySelect() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x1082); // Darker blue panel
   canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
 
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, 20);
-  canvas.println("SELECT CITY");
+  canvas.setCursor(15, 20);
+  canvas.print("CITY SELECTION");
 
-  int y = 50;
+  int listY = 50;
   canvas.setTextSize(1);
 
-  // Draw selection highlight bar smoothly
-  canvas.fillRect(5, 50 + citySelectScroll - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
-
-  int startIdx = 0;
-  int listY = 50;
+  // Smooth Highlight Bar
+  canvas.fillRoundRect(5, 48 + citySelectScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
 
   for (int i = 0; i < cityCount; i++) {
-    int itemY = listY + (i * 16);
+    int itemY = listY + (i * 18) - (citySelectScroll / 18.0f); // Minimal scroll effect on text if needed
+    // Actually keep text fixed but highlight moves, or vice versa?
+    // The current loop() logic moves the 'Scroll' variable.
+    // Let's make it so text scrolls too if many cities.
 
-    // Only draw if on screen
-    if (itemY < 40 || itemY > SCREEN_HEIGHT - 20) continue;
+    int drawY = listY + (i * 18);
+
+    if (drawY < 40 || drawY > SCREEN_HEIGHT - 20) continue;
 
     if (i == citySelectCursor) {
       canvas.setTextColor(COLOR_BG);
@@ -7300,16 +7338,18 @@ void drawCitySelect() {
       canvas.setTextColor(COLOR_TEXT);
     }
 
-    canvas.setCursor(15, itemY);
+    canvas.setCursor(20, drawY + 4);
     canvas.print(indonesianCities[i].name);
 
-    canvas.setCursor(SCREEN_WIDTH - 120, itemY);
-    canvas.printf("%.4f, %.4f", indonesianCities[i].lat, indonesianCities[i].lon);
+    canvas.setCursor(SCREEN_WIDTH - 130, drawY + 4);
+    canvas.printf("Lat:%.2f Lon:%.2f", indonesianCities[i].lat, indonesianCities[i].lon);
   }
 
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Scroll | SELECT=Confirm | L+R=Back");
+  canvas.print("UP/DN=Navigate | SELECT=Apply | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -7373,49 +7413,54 @@ void drawPrayerSettings() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x2104);
   canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
 
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, 20);
-  canvas.println("PRAYER SETTINGS");
+  canvas.setCursor(15, 20);
+  canvas.print("PRAYER SETTINGS");
 
-  // Draw smooth selection bar
-  canvas.fillRect(5, 50 + prayerSettingsScroll - 2, SCREEN_WIDTH - 10, 14, COLOR_PRIMARY);
+  // Smooth Selection Highlight
+  canvas.fillRoundRect(5, 48 + prayerSettingsScroll, SCREEN_WIDTH - 10, 18, 4, COLOR_PRIMARY);
 
-  int y = 50;
+  int listY = 50;
   canvas.setTextSize(1);
 
   for (int i = 0; i < prayerSettingsCount; i++) {
+    int drawY = listY + (i * 18);
+
     if (i == prayerSettingsCursor) {
       canvas.setTextColor(COLOR_BG);
     } else {
       canvas.setTextColor(COLOR_TEXT);
     }
 
-    canvas.setCursor(15, y);
+    canvas.setCursor(20, drawY + 4);
 
-    if (i == 0) canvas.print(prayerSettings.notificationEnabled ? "[X] " : "[ ] ");
-    else if (i == 1) canvas.print(prayerSettings.adzanSoundEnabled ? "[X] " : "[ ] ");
-    else if (i == 2) canvas.print(prayerSettings.silentMode ? "[X] " : "[ ] ");
-    else if (i == 3) {
-      canvas.print("Reminder: ");
-      canvas.print(prayerSettings.reminderMinutes);
-      canvas.print(" min before");
-      y += 16;
-      continue;
-    }
-    else if (i == 4) canvas.print(prayerSettings.autoLocation ? "[X] " : "[ ] ");
+    String status = "";
+    if (i == 0) status = prayerSettings.notificationEnabled ? "[ON]" : "[OFF]";
+    else if (i == 1) status = prayerSettings.adzanSoundEnabled ? "[ON]" : "[OFF]";
+    else if (i == 2) status = prayerSettings.silentMode ? "[ON]" : "[OFF]";
+    else if (i == 3) status = String(prayerSettings.reminderMinutes) + " mins";
+    else if (i == 4) status = prayerSettings.autoLocation ? "[AUTO]" : "[MANUAL]";
 
     canvas.print(prayerSettingsItems[i]);
-    y += 16;
+
+    if (status != "") {
+      int16_t x1, y1; uint16_t w, h;
+      canvas.getTextBounds(status, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor(SCREEN_WIDTH - 20 - w, drawY + 4);
+      canvas.print(status);
+    }
   }
 
+  canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("UP/DN=Select | SELECT=Change | L+R=Back");
+  canvas.print("UP/DN=Select | SELECT=Toggle | L+R=Back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -8481,9 +8526,9 @@ void loop() {
   }
 
   if (currentState == STATE_PRAYER_SETTINGS) {
-      float spring = 0.4f;
-      float damp = 0.6f;
-      float target = prayerSettingsCursor * 16.0f;
+      float spring = 0.3f; // Softer spring
+      float damp = 0.7f;   // More dampening
+      float target = prayerSettingsCursor * 18.0f; // Matching new item height
       float diff = target - prayerSettingsScroll;
       prayerSettingsVelocity += diff * spring;
       prayerSettingsVelocity *= damp;
@@ -8496,9 +8541,9 @@ void loop() {
   }
 
   if (currentState == STATE_PRAYER_CITY_SELECT) {
-      float spring = 0.4f;
-      float damp = 0.6f;
-      float target = citySelectCursor * 16.0f;
+      float spring = 0.3f;
+      float damp = 0.7f;
+      float target = citySelectCursor * 18.0f;
       float diff = target - citySelectScroll;
       citySelectVelocity += diff * spring;
       citySelectVelocity *= damp;
