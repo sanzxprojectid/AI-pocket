@@ -3551,12 +3551,12 @@ void updateRacingLogic() {
     // Apply curvature force (centrifugal)
     float speedPercent = playerCar.speed / 250.0f;
     float centrifugal = playerSegment.curvature * speedPercent * speedPercent * 1.5f;
-    playerCar.x -= centrifugal * dt * 10.0f;
+    playerCar.x -= centrifugal * dt * 2.0f; // Reduced centrifugal force
 
     // Player steering input
     float steerForce = 0;
-    if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -3.0f;
-    if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = 3.0f;
+    if (digitalRead(BTN_LEFT) == BTN_ACT) steerForce = -6.0f; // Increased steering power
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) steerForce = 6.0f; // Increased steering power
     playerCar.x += steerForce * dt;
 
 
@@ -3565,7 +3565,7 @@ void updateRacingLogic() {
 
     // Off-road penalty & Collision Detection
     if (abs(playerCar.x) > 1.0f) {
-        playerCar.speed *= 0.98; // More gradual slowdown
+        playerCar.speed *= 0.99; // Gentler off-road penalty
         if (playerCar.speed > 30) screenShake = max(screenShake, 1.5f);
 
         // Check for collision with scenery
