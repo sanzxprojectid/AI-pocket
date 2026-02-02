@@ -341,6 +341,14 @@ bool snakeGameOver;
 int snakeScore;
 unsigned long lastSnakeUpdate = 0;
 
+struct SnakeParticle {
+  float x, y, vx, vy;
+  int life;
+  uint16_t color;
+};
+#define MAX_SNAKE_PARTICLES 15
+SnakeParticle snakeParticles[MAX_SNAKE_PARTICLES];
+
 // ============ GAME: RACING V3 ============
 #define RACE_MODE_SINGLE 0
 #define RACE_MODE_MULTI 1
@@ -3198,16 +3206,63 @@ void drawScreensaver() {
 
 void drawSnakeGame() {
   canvas.fillScreen(COLOR_BG);
+
+  // Draw subtle grid
+  for (int x = 0; x <= SNAKE_GRID_WIDTH; x++) {
+    canvas.drawFastVLine(x * SNAKE_GRID_SIZE, 0, SCREEN_HEIGHT, color565(30, 30, 30));
+  }
+  for (int y = 0; y <= SNAKE_GRID_HEIGHT; y++) {
+    canvas.drawFastHLine(0, y * SNAKE_GRID_SIZE, SCREEN_WIDTH, color565(30, 30, 30));
+  }
+
   drawStatusBar();
 
   // Draw snake body
   for (int i = 0; i < snakeLength; i++) {
-    uint16_t color = (i == 0) ? 0x07E0 : 0x05E0; // Head is brighter green
-    canvas.fillRect(snakeBody[i].x * SNAKE_GRID_SIZE, snakeBody[i].y * SNAKE_GRID_SIZE, SNAKE_GRID_SIZE - 1, SNAKE_GRID_SIZE - 1, color);
+    uint16_t color;
+    if (i == 0) {
+      color = 0x07E0; // Bright Green
+    } else {
+      // Gradient: Green to Cyan/Blue
+      uint8_t g = 255 - (i * 150 / snakeLength);
+      uint8_t b = (i * 255 / snakeLength);
+      color = color565(0, g, b);
+    }
+    int hx = snakeBody[i].x * SNAKE_GRID_SIZE;
+    int hy = snakeBody[i].y * SNAKE_GRID_SIZE;
+    canvas.fillRoundRect(hx + 1, hy + 1, SNAKE_GRID_SIZE - 2, SNAKE_GRID_SIZE - 2, 3, color);
+
+    // Draw eyes on head
+    if (i == 0) {
+      int eyeSize = 2;
+      int ex1, ey1, ex2, ey2;
+      if (snakeDir == SNAKE_UP || snakeDir == SNAKE_DOWN) {
+        ey1 = (snakeDir == SNAKE_UP) ? hy + 2 : hy + SNAKE_GRID_SIZE - 4;
+        ey2 = ey1;
+        ex1 = hx + 2;
+        ex2 = hx + SNAKE_GRID_SIZE - 4;
+      } else {
+        ex1 = (snakeDir == SNAKE_LEFT) ? hx + 2 : hx + SNAKE_GRID_SIZE - 4;
+        ex2 = ex1;
+        ey1 = hy + 2;
+        ey2 = hy + SNAKE_GRID_SIZE - 4;
+      }
+      canvas.fillRect(ex1, ey1, eyeSize, eyeSize, 0xFFFF);
+      canvas.fillRect(ex2, ey2, eyeSize, eyeSize, 0xFFFF);
+    }
   }
 
-  // Draw food
-  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 1, 0xF800); // Red
+  // Draw food (pulsing)
+  float pulse = sin(millis() * 0.01f) * 1.5f;
+  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 1 + pulse, 0xF800); // Red
+  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 3 + pulse, 0xFFE0); // Yellow core
+
+  // Draw particles
+  for (int i = 0; i < MAX_SNAKE_PARTICLES; i++) {
+    if (snakeParticles[i].life > 0) {
+      canvas.drawPixel(snakeParticles[i].x, snakeParticles[i].y, snakeParticles[i].color);
+    }
+  }
 
   // Draw score
   canvas.setTextSize(1);
@@ -4450,6 +4505,7 @@ void drawPongGame() {
 
 // ============ SNAKE GAME LOGIC ============
 void initSnakeGame() {
+  for (int i = 0; i < MAX_SNAKE_PARTICLES; i++) snakeParticles[i].life = 0;
   snakeLength = 3;
   snakeBody[0] = {SNAKE_GRID_WIDTH / 2, SNAKE_GRID_HEIGHT / 2};
   snakeBody[1] = {SNAKE_GRID_WIDTH / 2 - 1, SNAKE_GRID_HEIGHT / 2};
@@ -4483,7 +4539,8 @@ void updateSnakeLogic() {
     return;
   }
 
-  if (millis() - lastSnakeUpdate < 100) { // Game speed
+  int snakeDelay = max(40, 100 - (snakeScore / 20) * 5);
+  if (millis() - lastSnakeUpdate < snakeDelay) { // Dynamic speed
     return;
   }
   lastSnakeUpdate = millis();
@@ -4499,13 +4556,18 @@ void updateSnakeLogic() {
   if (snakeDir == SNAKE_LEFT) snakeBody[0].x--;
   if (snakeDir == SNAKE_RIGHT) snakeBody[0].x++;
 
-  // Wall collision
-  if (snakeBody[0].x < 0 || snakeBody[0].x >= SNAKE_GRID_WIDTH ||
-      snakeBody[0].y < 0 || snakeBody[0].y >= SNAKE_GRID_HEIGHT) {
-    snakeGameOver = true;
-    if (snakeScore > sysConfig.snakeBest) {
-        sysConfig.snakeBest = snakeScore;
-        saveConfig();
+  // Wall wrapping
+  if (snakeBody[0].x < 0) snakeBody[0].x = SNAKE_GRID_WIDTH - 1;
+  else if (snakeBody[0].x >= SNAKE_GRID_WIDTH) snakeBody[0].x = 0;
+  if (snakeBody[0].y < 0) snakeBody[0].y = SNAKE_GRID_HEIGHT - 1;
+  else if (snakeBody[0].y >= SNAKE_GRID_HEIGHT) snakeBody[0].y = 0;
+
+  // Update particles
+  for (int i = 0; i < MAX_SNAKE_PARTICLES; i++) {
+    if (snakeParticles[i].life > 0) {
+      snakeParticles[i].x += snakeParticles[i].vx;
+      snakeParticles[i].y += snakeParticles[i].vy;
+      snakeParticles[i].life--;
     }
   }
 
@@ -4513,6 +4575,7 @@ void updateSnakeLogic() {
   for (int i = 1; i < snakeLength; i++) {
     if (snakeBody[0].x == snakeBody[i].x && snakeBody[0].y == snakeBody[i].y) {
       snakeGameOver = true;
+      if (isDFPlayerAvailable) myDFPlayer.play(97);
       if (snakeScore > sysConfig.snakeBest) {
           sysConfig.snakeBest = snakeScore;
           saveConfig();
@@ -4522,6 +4585,16 @@ void updateSnakeLogic() {
 
   // Food collision
   if (snakeBody[0].x == food.x && snakeBody[0].y == food.y) {
+    if (isDFPlayerAvailable) myDFPlayer.play(95);
+    // Particle burst
+    for (int i = 0; i < MAX_SNAKE_PARTICLES; i++) {
+      snakeParticles[i].x = food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2;
+      snakeParticles[i].y = food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2;
+      snakeParticles[i].vx = random(-30, 31) / 10.0f;
+      snakeParticles[i].vy = random(-30, 31) / 10.0f;
+      snakeParticles[i].life = random(10, 20);
+      snakeParticles[i].color = (random(0, 2) == 0) ? 0xF800 : 0xFFE0;
+    }
     snakeScore += 10;
     if (snakeLength < MAX_SNAKE_LENGTH) {
       snakeLength++;
