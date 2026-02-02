@@ -136,6 +136,8 @@ enum AppState {
   STATE_GAME_SNAKE,
   STATE_GAME_RACING,
   STATE_GAME_PLATFORMER,
+  STATE_GAME_FLAPPY,
+  STATE_GAME_BREAKOUT,
   STATE_PIN_LOCK,
   STATE_CHANGE_PIN,
   STATE_RACING_MODE_SELECT,
@@ -539,6 +541,51 @@ struct ParallaxLayer {
 
 #define JUMPER_MAX_STARS 50
 ParallaxLayer jumperStars[JUMPER_MAX_STARS];
+
+// ============ GAME: FLAPPY ESP ============
+struct FlappyBird {
+  float y;
+  float vy;
+  int score;
+};
+
+struct FlappyPipe {
+  float x;
+  float gapY;
+  bool active;
+  bool passed;
+};
+
+#define FLAPPY_MAX_PIPES 4
+FlappyBird flappyBird;
+FlappyPipe flappyPipes[FLAPPY_MAX_PIPES];
+bool flappyGameActive = false;
+
+// ============ GAME: BREAKOUT ============
+struct BreakoutBall {
+  float x, y;
+  float vx, vy;
+};
+
+struct BreakoutPaddle {
+  float x;
+};
+
+struct BreakoutBrick {
+  bool active;
+  uint16_t color;
+};
+
+#define BREAKOUT_COLS 8
+#define BREAKOUT_ROWS 5
+#define BREAKOUT_BRICK_W 36
+#define BREAKOUT_BRICK_H 10
+
+BreakoutBall breakoutBall;
+BreakoutPaddle breakoutPaddle;
+BreakoutBrick breakoutBricks[BREAKOUT_ROWS][BREAKOUT_COLS];
+bool breakoutGameActive = false;
+int breakoutScore = 0;
 
 
 // ===== PRAYER TIMES SYSTEM =====
@@ -1342,6 +1389,12 @@ void updateAndDrawPongParticles();
 void triggerPongParticles(float x, float y);
 void drawSnakeGame();
 void updateSnakeLogic();
+void initFlappyGame();
+void updateFlappyLogic();
+void drawFlappyGame();
+void initBreakoutGame();
+void updateBreakoutLogic();
+void drawBreakoutGame();
 void initPlatformerGame();
 void updatePlatformerLogic();
 void drawPlatformerGame();
@@ -3330,8 +3383,8 @@ void drawGameHubMenu() {
   canvas.setCursor(45, 7);
   canvas.print("Game Hub");
 
-  const char* items[] = {"Racing", "Pong", "Snake", "Jumper", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
-  drawScrollableMenu(items, 8, 45, 22, 2);
+  const char* items[] = {"Racing", "Pong", "Snake", "Jumper", "Flappy ESP", "Breakout", "Starfield Warp", "Game of Life", "Doom Fire", "Back"};
+  drawScrollableMenu(items, 10, 45, 22, 2);
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -3826,6 +3879,18 @@ void updatePlatformerLogic() {
     jumperGameActive = false;
   }
 
+  // --- Update Parallax Stars ---
+  for (int i = 0; i < JUMPER_MAX_STARS; i++) {
+    float starScreenY = jumperStars[i].y - (jumperCameraY * jumperStars[i].speed);
+    if (starScreenY > SCREEN_HEIGHT) {
+      jumperStars[i].y -= SCREEN_HEIGHT;
+      jumperStars[i].x = random(0, SCREEN_WIDTH);
+    } else if (starScreenY < 0) {
+      jumperStars[i].y += SCREEN_HEIGHT;
+      jumperStars[i].x = random(0, SCREEN_WIDTH);
+    }
+  }
+
   // --- Update Particles ---
   for (int i = 0; i < JUMPER_MAX_PARTICLES; i++) {
     if (jumperParticles[i].life > 0) {
@@ -3853,7 +3918,6 @@ void drawPlatformerGame() {
       starScreenY += SCREEN_HEIGHT;
       jumperStars[i].x = random(0, SCREEN_WIDTH);
     }
-    jumperStars[i].y = starScreenY + (jumperCameraY * jumperStars[i].speed); // Update real Y
 
     canvas.fillCircle(jumperStars[i].x, (int)starScreenY, jumperStars[i].size, jumperStars[i].color);
   }
@@ -4214,11 +4278,10 @@ void updatePongLogic() {
     resetPongBall();
   }
 
-  // AI Logic - a bit slower and less perfect
-  float aiSpeed = 2.8f * dt;
+  // AI Logic - Improved responsiveness
+  float aiLerpFactor = 10.0f * dt;
   float targetY = pongBall.y - PADDLE_HEIGHT / 2;
-  // Add a small delay/lag to the AI's reaction
-  player2.y += (targetY - player2.y) * aiSpeed * 0.8f;
+  player2.y += (targetY - player2.y) * aiLerpFactor;
   player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
 
 }
@@ -4256,6 +4319,8 @@ void drawPongGame() {
       canvas.drawRoundRect(50, 60, 220, 50, 8, COLOR_PRIMARY);
       canvas.setTextColor(COLOR_PRIMARY);
       canvas.setTextSize(2);
+      canvas.setCursor(75, 78);
+      canvas.print("Press SELECT");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -4272,8 +4337,18 @@ void initSnakeGame() {
   snakeScore = 0;
 
   // Place food
-  food.x = random(0, SNAKE_GRID_WIDTH);
-  food.y = random(0, SNAKE_GRID_HEIGHT);
+  bool foodOnSnake;
+  do {
+    foodOnSnake = false;
+    food.x = random(0, SNAKE_GRID_WIDTH);
+    food.y = random(0, SNAKE_GRID_HEIGHT);
+    for (int i = 0; i < snakeLength; i++) {
+      if (snakeBody[i].x == food.x && snakeBody[i].y == food.y) {
+        foodOnSnake = true;
+        break;
+      }
+    }
+  } while (foodOnSnake);
 
   lastSnakeUpdate = 0;
 }
@@ -4322,11 +4397,237 @@ void updateSnakeLogic() {
       snakeLength++;
     }
     // New food
-    food.x = random(0, SNAKE_GRID_WIDTH);
-    food.y = random(0, SNAKE_GRID_HEIGHT);
+    bool foodOnSnake;
+    do {
+      foodOnSnake = false;
+      food.x = random(0, SNAKE_GRID_WIDTH);
+      food.y = random(0, SNAKE_GRID_HEIGHT);
+      for (int i = 0; i < snakeLength; i++) {
+        if (snakeBody[i].x == food.x && snakeBody[i].y == food.y) {
+          foodOnSnake = true;
+          break;
+        }
+      }
+    } while (foodOnSnake);
   }
 }
 
+
+// ============ FLAPPY ESP GAME LOGIC ============
+void initFlappyGame() {
+  flappyBird.y = SCREEN_HEIGHT / 2;
+  flappyBird.vy = 0;
+  flappyBird.score = 0;
+  flappyGameActive = true;
+
+  for (int i = 0; i < FLAPPY_MAX_PIPES; i++) {
+    flappyPipes[i].x = SCREEN_WIDTH + 50 + i * 120;
+    flappyPipes[i].gapY = random(20, SCREEN_HEIGHT - 85);
+    flappyPipes[i].active = true;
+    flappyPipes[i].passed = false;
+  }
+}
+
+void updateFlappyLogic() {
+  if (!flappyGameActive) {
+    if (digitalRead(BTN_SELECT) == BTN_ACT) {
+      initFlappyGame();
+    }
+    return;
+  }
+
+  float dt = deltaTime;
+  const float gravity = 450.0f;
+  const float pipeSpeed = 120.0f;
+  const int pipeGap = 65;
+  const int pipeWidth = 35;
+
+  // Handle Input
+  static bool lastSelect = false;
+  bool currentSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
+  if (currentSelect && !lastSelect) {
+    flappyBird.vy = -180.0f;
+  }
+  lastSelect = currentSelect;
+
+  flappyBird.vy += gravity * dt;
+  flappyBird.y += flappyBird.vy * dt;
+
+  if (flappyBird.y < 0 || flappyBird.y > SCREEN_HEIGHT - 12) {
+    flappyGameActive = false;
+    ledError();
+  }
+
+  for (int i = 0; i < FLAPPY_MAX_PIPES; i++) {
+    flappyPipes[i].x -= pipeSpeed * dt;
+
+    if (flappyPipes[i].x < -pipeWidth) {
+      float maxX = 0;
+      for (int j = 0; j < FLAPPY_MAX_PIPES; j++) {
+        if (flappyPipes[j].x > maxX) maxX = flappyPipes[j].x;
+      }
+      flappyPipes[i].x = maxX + 120;
+      flappyPipes[i].gapY = random(20, SCREEN_HEIGHT - pipeGap - 20);
+      flappyPipes[i].passed = false;
+    }
+
+    if (!flappyPipes[i].passed && flappyPipes[i].x < 50) {
+      flappyBird.score++;
+      flappyPipes[i].passed = true;
+      ledSuccess();
+    }
+
+    if (flappyPipes[i].x < 50 + 14 && flappyPipes[i].x + pipeWidth > 50) {
+      if (flappyBird.y < flappyPipes[i].gapY || flappyBird.y + 10 > flappyPipes[i].gapY + pipeGap) {
+        flappyGameActive = false;
+        ledError();
+      }
+    }
+  }
+}
+
+void drawFlappyGame() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  for (int i = 0; i < FLAPPY_MAX_PIPES; i++) {
+    int pipeWidth = 35;
+    int pipeGap = 65;
+    canvas.fillRect(flappyPipes[i].x, 15, pipeWidth, flappyPipes[i].gapY - 15, 0x07E0);
+    canvas.drawRect(flappyPipes[i].x, 15, pipeWidth, flappyPipes[i].gapY - 15, COLOR_BORDER);
+    canvas.fillRect(flappyPipes[i].x, flappyPipes[i].gapY + pipeGap, pipeWidth, SCREEN_HEIGHT - (flappyPipes[i].gapY + pipeGap), 0x07E0);
+    canvas.drawRect(flappyPipes[i].x, flappyPipes[i].gapY + pipeGap, pipeWidth, SCREEN_HEIGHT - (flappyPipes[i].gapY + pipeGap), COLOR_BORDER);
+  }
+
+  canvas.fillRect(50, flappyBird.y, 14, 10, 0xFFE0);
+  canvas.fillRect(58, flappyBird.y + 2, 3, 3, COLOR_BG);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 20);
+  canvas.print(flappyBird.score);
+
+  if (!flappyGameActive) {
+    canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
+    canvas.drawRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_BORDER);
+    canvas.setTextColor(0xF800);
+    canvas.setTextSize(2);
+    int16_t x1, y1; uint16_t w, h;
+    canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 - 15);
+    canvas.print("GAME OVER");
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 + 10);
+    canvas.print("SELECT to Restart");
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ============ BREAKOUT GAME LOGIC ============
+void initBreakoutGame() {
+  breakoutBall.x = SCREEN_WIDTH / 2;
+  breakoutBall.y = SCREEN_HEIGHT - 60;
+  breakoutBall.vx = (random(0, 2) == 0 ? 1 : -1) * 120.0f;
+  breakoutBall.vy = -120.0f;
+  breakoutPaddle.x = SCREEN_WIDTH / 2 - 25;
+  breakoutScore = 0;
+  breakoutGameActive = true;
+  uint16_t rowColors[] = {0xF800, 0xFD20, 0xFFE0, 0x07E0, 0x001F};
+  for (int r = 0; r < BREAKOUT_ROWS; r++) {
+    for (int c = 0; c < BREAKOUT_COLS; c++) {
+      breakoutBricks[r][c].active = true;
+      breakoutBricks[r][c].color = rowColors[r % 5];
+    }
+  }
+}
+
+void updateBreakoutLogic() {
+  if (!breakoutGameActive) {
+    if (digitalRead(BTN_SELECT) == BTN_ACT) initBreakoutGame();
+    return;
+  }
+  float dt = deltaTime;
+  const int ballRadius = 3;
+  const int paddleW = 50;
+  const float paddleSpeed = 200.0f;
+
+  // Handle Input
+  if (digitalRead(BTN_LEFT) == BTN_ACT) breakoutPaddle.x -= paddleSpeed * dt;
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) breakoutPaddle.x += paddleSpeed * dt;
+  breakoutPaddle.x = constrain(breakoutPaddle.x, 0, SCREEN_WIDTH - paddleW);
+
+  breakoutBall.x += breakoutBall.vx * dt;
+  breakoutBall.y += breakoutBall.vy * dt;
+  if (breakoutBall.x < ballRadius) { breakoutBall.x = ballRadius; breakoutBall.vx *= -1; }
+  if (breakoutBall.x > SCREEN_WIDTH - ballRadius) { breakoutBall.x = SCREEN_WIDTH - ballRadius; breakoutBall.vx *= -1; }
+  if (breakoutBall.y < ballRadius + 15) { breakoutBall.y = ballRadius + 15; breakoutBall.vy *= -1; }
+  if (breakoutBall.vy > 0 && breakoutBall.y > SCREEN_HEIGHT - 20 - ballRadius) {
+    if (breakoutBall.x > breakoutPaddle.x && breakoutBall.x < breakoutPaddle.x + paddleW) {
+      breakoutBall.vy *= -1.05;
+      breakoutBall.vx += (breakoutBall.x - (breakoutPaddle.x + paddleW / 2)) * 4.0f;
+      breakoutBall.y = SCREEN_HEIGHT - 20 - ballRadius;
+      ledSuccess();
+    }
+  }
+  if (breakoutBall.y > SCREEN_HEIGHT) { breakoutGameActive = false; ledError(); }
+  int brickAreaY = 40;
+  for (int r = 0; r < BREAKOUT_ROWS; r++) {
+    for (int c = 0; c < BREAKOUT_COLS; c++) {
+      if (breakoutBricks[r][c].active) {
+        int bx = 10 + c * (BREAKOUT_BRICK_W + 2);
+        int by = brickAreaY + r * (BREAKOUT_BRICK_H + 2);
+        if (breakoutBall.x + ballRadius > bx && breakoutBall.x - ballRadius < bx + BREAKOUT_BRICK_W &&
+            breakoutBall.y + ballRadius > by && breakoutBall.y - ballRadius < by + BREAKOUT_BRICK_H) {
+          breakoutBricks[r][c].active = false;
+          breakoutBall.vy *= -1;
+          breakoutScore += 10;
+          ledSuccess();
+          return;
+        }
+      }
+    }
+  }
+}
+
+void drawBreakoutGame() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  int paddleW = 50;
+  int paddleH = 6;
+  canvas.fillRect(breakoutPaddle.x, SCREEN_HEIGHT - 20, paddleW, paddleH, COLOR_PRIMARY);
+  canvas.fillCircle(breakoutBall.x, breakoutBall.y, 3, 0xFFFF);
+  int brickAreaY = 40;
+  for (int r = 0; r < BREAKOUT_ROWS; r++) {
+    for (int c = 0; c < BREAKOUT_COLS; c++) {
+      if (breakoutBricks[r][c].active) {
+        canvas.fillRect(10 + c * (BREAKOUT_BRICK_W + 2), brickAreaY + r * (BREAKOUT_BRICK_H + 2), BREAKOUT_BRICK_W, BREAKOUT_BRICK_H, breakoutBricks[r][c].color);
+      }
+    }
+  }
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 20);
+  canvas.print(breakoutScore);
+  if (!breakoutGameActive) {
+    canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
+    canvas.drawRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_BORDER);
+    canvas.setTextColor(0xF800);
+    canvas.setTextSize(2);
+    int16_t x1, y1; uint16_t w, h;
+    canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 - 15);
+    canvas.print("GAME OVER");
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_TEXT);
+    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 + 10);
+    canvas.print("SELECT to Restart");
+  }
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
 
 // ============ VIRTUAL PET LOGIC & DRAWING ============
 void loadPetData() {
@@ -8664,15 +8965,23 @@ void handleGameHubMenuSelect() {
       changeState(STATE_GAME_PLATFORMER);
       break;
     case 4:
-      changeState(STATE_VIS_STARFIELD);
+      initFlappyGame();
+      changeState(STATE_GAME_FLAPPY);
       break;
     case 5:
-      changeState(STATE_VIS_LIFE);
+      initBreakoutGame();
+      changeState(STATE_GAME_BREAKOUT);
       break;
     case 6:
-      changeState(STATE_VIS_FIRE);
+      changeState(STATE_VIS_STARFIELD);
       break;
     case 7:
+      changeState(STATE_VIS_LIFE);
+      break;
+    case 8:
+      changeState(STATE_VIS_FIRE);
+      break;
+    case 9:
       menuSelection = 0;
       changeState(STATE_MAIN_MENU);
       break;
@@ -8968,6 +9277,12 @@ void refreshCurrentScreen() {
       break;
     case STATE_GAME_PLATFORMER:
       drawPlatformerGame();
+      break;
+    case STATE_GAME_FLAPPY:
+      drawFlappyGame();
+      break;
+    case STATE_GAME_BREAKOUT:
+      drawBreakoutGame();
       break;
     case STATE_GAME_RACING:
       drawRacingGame();
@@ -9429,6 +9744,8 @@ void loop() {
     case STATE_VIS_FIRE:
     case STATE_GAME_PONG:
     case STATE_GAME_SNAKE:
+    case STATE_GAME_FLAPPY:
+    case STATE_GAME_BREAKOUT:
     case STATE_GAME_RACING:
     case STATE_TOOL_SNIFFER:
     case STATE_TOOL_WIFI_SONAR:
@@ -9495,6 +9812,14 @@ void loop() {
 
   if (currentState == STATE_GAME_PLATFORMER) {
     updatePlatformerLogic();
+  }
+
+  if (currentState == STATE_GAME_FLAPPY) {
+    updateFlappyLogic();
+  }
+
+  if (currentState == STATE_GAME_BREAKOUT) {
+    updateBreakoutLogic();
   }
     else if (currentState == STATE_PRAYER_TIMES) {
       handlePrayerTimesInput();
@@ -9964,7 +10289,7 @@ void loop() {
           }
           break;
         case STATE_GAME_HUB:
-          if (menuSelection < 7) menuSelection++;
+          if (menuSelection < 9) menuSelection++;
           break;
         case STATE_ESPNOW_CHAT:
           if (espnowScrollIndex < espnowMessageCount - 1) {
@@ -10302,6 +10627,8 @@ void loop() {
           changeState(STATE_SYSTEM_INFO_MENU);
           break;
         case STATE_GAME_RACING:
+        case STATE_GAME_FLAPPY:
+        case STATE_GAME_BREAKOUT:
         case STATE_VIS_STARFIELD:
         case STATE_VIS_LIFE:
         case STATE_VIS_FIRE:
