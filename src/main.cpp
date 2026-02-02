@@ -206,9 +206,16 @@ struct SystemConfig {
   int musicVol;
   int lastTrack;
   int lastTime;
+  // High Scores
+  int racingBest;
+  int pongBest;
+  int snakeBest;
+  int jumperBest;
+  int flappyBest;
+  int breakoutBest;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 0, 0, 0, 0, 0, 0};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -1387,6 +1394,7 @@ void drawHackerToolsMenu();
 void handleHackerToolsMenuSelect();
 void drawSystemMenu();
 void drawBrightnessMenu();
+void saveConfig();
 void handleSystemMenuSelect();
 void drawSystemInfoMenu();
 void handleSystemInfoMenuInput();
@@ -3207,6 +3215,9 @@ void drawSnakeGame() {
   canvas.setCursor(5, SCREEN_HEIGHT - 10);
   canvas.print("Score: ");
   canvas.print(snakeScore);
+  canvas.setCursor(SCREEN_WIDTH - 80, SCREEN_HEIGHT - 10);
+  canvas.print("Best: ");
+  canvas.print(sysConfig.snakeBest);
 
   if (snakeGameOver) {
     canvas.setTextSize(2);
@@ -3711,6 +3722,10 @@ void updateRacingLogic() {
     if (playerCar.z >= totalTrackLength) {
         playerCar.z -= totalTrackLength;
         playerCar.lap++;
+        if (playerCar.lap > sysConfig.racingBest) {
+            sysConfig.racingBest = playerCar.lap;
+            saveConfig();
+        }
         ledSuccess();
         triggerNeoPixelEffect(pixels.Color(0, 255, 255), 1000); // Lap celebration
     }
@@ -3965,6 +3980,10 @@ void updatePlatformerLogic() {
   // --- Game Over Check ---
   if (jumperPlayer.y > jumperCameraY + SCREEN_HEIGHT) {
     jumperGameActive = false;
+    if (jumperScore > sysConfig.jumperBest) {
+        sysConfig.jumperBest = jumperScore;
+        saveConfig();
+    }
   }
 
   // --- Update Parallax Stars ---
@@ -4043,6 +4062,9 @@ void drawPlatformerGame() {
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setCursor(10, 10);
   canvas.print(jumperScore);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 28);
+  canvas.print("BEST: "); canvas.print(sysConfig.jumperBest);
 
   // Tampilkan instruksi selama permainan
   if (jumperGameActive) {
@@ -4242,6 +4264,8 @@ void drawRacingGame() {
     canvas.setTextColor(COLOR_PRIMARY);
     canvas.setCursor(50, 18);
     canvas.print("LAP: "); canvas.print(playerCar.lap + 1);
+    canvas.setCursor(SCREEN_WIDTH - 80, 18);
+    canvas.print("BEST: "); canvas.print(sysConfig.racingBest);
 
     // Screen Shake
     int sx = 0, sy = 0;
@@ -4363,6 +4387,10 @@ void updatePongLogic() {
   }
   if (pongBall.x > SCREEN_WIDTH) {
     player1.score++;
+    if (player1.score > sysConfig.pongBest) {
+        sysConfig.pongBest = player1.score;
+        saveConfig();
+    }
     resetPongBall();
   }
 
@@ -4391,6 +4419,12 @@ void drawPongGame() {
   canvas.print(player1.score);
   canvas.setCursor(SCREEN_WIDTH / 2 + 30, 10);
   canvas.print(player2.score);
+
+  // Best Score
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, 20);
+  canvas.print("BEST: "); canvas.print(sysConfig.pongBest);
 
   // Paddles
   canvas.fillRect(5, player1.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_PRIMARY);
@@ -4469,12 +4503,20 @@ void updateSnakeLogic() {
   if (snakeBody[0].x < 0 || snakeBody[0].x >= SNAKE_GRID_WIDTH ||
       snakeBody[0].y < 0 || snakeBody[0].y >= SNAKE_GRID_HEIGHT) {
     snakeGameOver = true;
+    if (snakeScore > sysConfig.snakeBest) {
+        sysConfig.snakeBest = snakeScore;
+        saveConfig();
+    }
   }
 
   // Self collision
   for (int i = 1; i < snakeLength; i++) {
     if (snakeBody[0].x == snakeBody[i].x && snakeBody[0].y == snakeBody[i].y) {
       snakeGameOver = true;
+      if (snakeScore > sysConfig.snakeBest) {
+          sysConfig.snakeBest = snakeScore;
+          saveConfig();
+      }
     }
   }
 
@@ -4543,6 +4585,10 @@ void updateFlappyLogic() {
 
   if (flappyBird.y < 0 || flappyBird.y > SCREEN_HEIGHT - 12) {
     flappyGameActive = false;
+    if (flappyBird.score > sysConfig.flappyBest) {
+        sysConfig.flappyBest = flappyBird.score;
+        saveConfig();
+    }
     ledError();
   }
 
@@ -4568,6 +4614,10 @@ void updateFlappyLogic() {
     if (flappyPipes[i].x < 50 + 14 && flappyPipes[i].x + pipeWidth > 50) {
       if (flappyBird.y < flappyPipes[i].gapY || flappyBird.y + 10 > flappyPipes[i].gapY + pipeGap) {
         flappyGameActive = false;
+        if (flappyBird.score > sysConfig.flappyBest) {
+            sysConfig.flappyBest = flappyBird.score;
+            saveConfig();
+        }
         ledError();
       }
     }
@@ -4594,6 +4644,9 @@ void drawFlappyGame() {
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setCursor(10, 20);
   canvas.print(flappyBird.score);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 40);
+  canvas.print("BEST: "); canvas.print(sysConfig.flappyBest);
 
   if (!flappyGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
@@ -4660,7 +4713,14 @@ void updateBreakoutLogic() {
       ledSuccess();
     }
   }
-  if (breakoutBall.y > SCREEN_HEIGHT) { breakoutGameActive = false; ledError(); }
+  if (breakoutBall.y > SCREEN_HEIGHT) {
+    breakoutGameActive = false;
+    if (breakoutScore > sysConfig.breakoutBest) {
+        sysConfig.breakoutBest = breakoutScore;
+        saveConfig();
+    }
+    ledError();
+  }
   int brickAreaY = 40;
   for (int r = 0; r < BREAKOUT_ROWS; r++) {
     for (int c = 0; c < BREAKOUT_COLS; c++) {
@@ -4699,6 +4759,9 @@ void drawBreakoutGame() {
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setCursor(10, 20);
   canvas.print(breakoutScore);
+  canvas.setTextSize(1);
+  canvas.setCursor(10, 40);
+  canvas.print("BEST: "); canvas.print(sysConfig.breakoutBest);
   if (!breakoutGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
     canvas.drawRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_BORDER);
@@ -5737,6 +5800,12 @@ void loadConfig() {
     sysConfig.musicVol = doc["music"]["vol"] | 15;
     sysConfig.lastTrack = doc["music"]["track"] | 1;
     sysConfig.lastTime = doc["music"]["time"] | 0;
+    sysConfig.racingBest = doc["scores"]["racing"] | 0;
+    sysConfig.pongBest = doc["scores"]["pong"] | 0;
+    sysConfig.snakeBest = doc["scores"]["snake"] | 0;
+    sysConfig.jumperBest = doc["scores"]["jumper"] | 0;
+    sysConfig.flappyBest = doc["scores"]["flappy"] | 0;
+    sysConfig.breakoutBest = doc["scores"]["breakout"] | 0;
     Serial.println("Config loaded from JSON");
   } else {
     // Fallback to NVS
@@ -5750,6 +5819,12 @@ void loadConfig() {
     sysConfig.musicVol = preferences.getInt("musicVol", 15);
     sysConfig.lastTrack = preferences.getInt("musicTrack", 1);
     sysConfig.lastTime = preferences.getInt("musicTime", 0);
+    sysConfig.racingBest = preferences.getInt("racingBest", 0);
+    sysConfig.pongBest = preferences.getInt("pongBest", 0);
+    sysConfig.snakeBest = preferences.getInt("snakeBest", 0);
+    sysConfig.jumperBest = preferences.getInt("jumperBest", 0);
+    sysConfig.flappyBest = preferences.getInt("flappyBest", 0);
+    sysConfig.breakoutBest = preferences.getInt("breakoutBest", 0);
     preferences.end();
 
     preferences.begin("pet-data", true);
@@ -5903,6 +5978,12 @@ void saveConfig() {
   doc["music"]["vol"] = sysConfig.musicVol;
   doc["music"]["track"] = sysConfig.lastTrack;
   doc["music"]["time"] = sysConfig.lastTime;
+  doc["scores"]["racing"] = sysConfig.racingBest;
+  doc["scores"]["pong"] = sysConfig.pongBest;
+  doc["scores"]["snake"] = sysConfig.snakeBest;
+  doc["scores"]["jumper"] = sysConfig.jumperBest;
+  doc["scores"]["flappy"] = sysConfig.flappyBest;
+  doc["scores"]["breakout"] = sysConfig.breakoutBest;
 
   saveToJSON(CONFIG_FILE, doc);
 
@@ -5917,6 +5998,12 @@ void saveConfig() {
   preferences.putInt("musicVol", sysConfig.musicVol);
   preferences.putInt("musicTrack", sysConfig.lastTrack);
   preferences.putInt("musicTime", sysConfig.lastTime);
+  preferences.putInt("racingBest", sysConfig.racingBest);
+  preferences.putInt("pongBest", sysConfig.pongBest);
+  preferences.putInt("snakeBest", sysConfig.snakeBest);
+  preferences.putInt("jumperBest", sysConfig.jumperBest);
+  preferences.putInt("flappyBest", sysConfig.flappyBest);
+  preferences.putInt("breakoutBest", sysConfig.breakoutBest);
   preferences.end();
 
   preferences.begin("pet-data", false);
