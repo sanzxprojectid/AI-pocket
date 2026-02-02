@@ -9360,6 +9360,13 @@ void handlePrayerSettingsInput() {
 
 // ===== EARTHQUAKE INPUT HANDLERS =====
 void handleEarthquakeInput() {
+  if ((digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) || digitalRead(BTN_BACK) == BTN_ACT) {
+    changeState(STATE_MAIN_MENU);
+    ledQuickFlash();
+    delay(200);
+    return;
+  }
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     if (earthquakeCount > 0) {
       earthquakeCursor++;
@@ -9374,6 +9381,7 @@ void handleEarthquakeInput() {
       eqTextScroll = 0;
     }
     ledQuickFlash();
+    delay(150);
   }
 
   if (digitalRead(BTN_UP) == BTN_ACT) {
@@ -9386,6 +9394,7 @@ void handleEarthquakeInput() {
     }
     eqTextScroll = 0;
     ledQuickFlash();
+    delay(150);
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
@@ -9395,12 +9404,14 @@ void handleEarthquakeInput() {
       changeState(STATE_EARTHQUAKE_DETAIL);
     }
     ledSuccess();
+    delay(200);
   }
 
   if (digitalRead(BTN_RIGHT) == BTN_ACT) {
     // Open settings
     changeState(STATE_EARTHQUAKE_SETTINGS);
     ledQuickFlash();
+    delay(200);
   }
 
   if (digitalRead(BTN_LEFT) == BTN_ACT) {
@@ -9410,54 +9421,72 @@ void handleEarthquakeInput() {
     earthquakeScrollOffset = 0;
     eqTextScroll = 0;
     ledSuccess();
+    delay(200);
   }
 }
 
 void handleEarthquakeDetailInput() {
+  if ((digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) || digitalRead(BTN_BACK) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE);
+    ledQuickFlash();
+    delay(200);
+    return;
+  }
+
   if (digitalRead(BTN_UP) == BTN_ACT) {
     analyzeEarthquakeAI();
     ledSuccess();
+    delay(200);
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
     changeState(STATE_EARTHQUAKE_MAP);
     ledSuccess();
-  }
-
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE);
-    ledQuickFlash();
+    delay(200);
   }
 }
 
 void handleEarthquakeMapInput() {
+  if ((digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) || digitalRead(BTN_BACK) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE_DETAIL);
+    ledQuickFlash();
+    delay(200);
+    return;
+  }
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     earthquakeCursor = (earthquakeCursor + 1) % earthquakeCount;
     selectedEarthquake = earthquakes[earthquakeCursor];
     ledQuickFlash();
+    delay(150);
   }
 
   if (digitalRead(BTN_UP) == BTN_ACT) {
     earthquakeCursor = (earthquakeCursor - 1 + earthquakeCount) % earthquakeCount;
     selectedEarthquake = earthquakes[earthquakeCursor];
     ledQuickFlash();
-  }
-
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE_DETAIL);
-    ledQuickFlash();
+    delay(150);
   }
 }
 
 void handleEarthquakeSettingsInput() {
+  if ((digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) || digitalRead(BTN_BACK) == BTN_ACT) {
+    changeState(STATE_EARTHQUAKE);
+    ledQuickFlash();
+    delay(200);
+    return;
+  }
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     eqSettingsCursor = (eqSettingsCursor + 1) % eqSettingsCount;
     ledQuickFlash();
+    delay(150);
   }
 
   if (digitalRead(BTN_UP) == BTN_ACT) {
     eqSettingsCursor = (eqSettingsCursor - 1 + eqSettingsCount) % eqSettingsCount;
     ledQuickFlash();
+    delay(150);
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
@@ -9530,10 +9559,6 @@ void handleEarthquakeSettingsInput() {
     delay(200);
   }
 
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE);
-    ledQuickFlash();
-  }
 }
 
 // ===== EARTHQUAKE ALERTS =====
