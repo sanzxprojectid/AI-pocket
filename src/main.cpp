@@ -196,9 +196,14 @@ struct SystemConfig {
   float petEnergy;
   bool petSleep;
   int screenBrightness;
+  bool pinLockEnabled;
+  String currentPin;
+  int musicVol;
+  int lastTrack;
+  int lastTime;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -1382,6 +1387,10 @@ void drawSystemMonitor();
 void fetchPrayerTimes();
 void savePrayerConfig();
 void loadPrayerConfig();
+void saveEQConfig();
+void loadEQConfig();
+bool saveToJSON(const char* filename, const JsonDocument& doc);
+bool loadFromJSON(const char* filename, JsonDocument& doc);
 void showPrayerReminder(String prayerName, int minutes);
 void showPrayerAlert(String prayerName);
 void playAdzan();
@@ -2125,8 +2134,8 @@ void initMusicPlayer() {
 
     if (myDFPlayer.begin(Serial2)) {
         isDFPlayerAvailable = true;
-        // Ambil volume terakhir dari Preferences agar tidak mengejutkan
-        musicVol = preferences.getInt("musicVol", 15);
+        // Ambil volume terakhir dari sysConfig agar tidak mengejutkan
+        musicVol = sysConfig.musicVol;
         myDFPlayer.volume(musicVol);
 
         // Hitung total lagu di SD Card
@@ -2136,8 +2145,8 @@ void initMusicPlayer() {
         loadMusicMetadata();
 
         // --- Load Last Session ---
-        int lastTrack = preferences.getInt("musicTrack", 1);
-        int lastTime = preferences.getInt("musicTime", 0);
+        int lastTrack = sysConfig.lastTrack;
+        int lastTime = sysConfig.lastTime;
         if (lastTrack > 0 && lastTrack <= totalTracks) {
           currentTrackIdx = lastTrack;
           // Play the track and then seek. This is more reliable.
@@ -4333,15 +4342,32 @@ void updateSnakeLogic() {
 
 // ============ VIRTUAL PET LOGIC & DRAWING ============
 void loadPetData() {
-  preferences.begin("pet-data", true);
-  myPet.hunger = preferences.getFloat("hunger", 80.0f);
-  myPet.happiness = preferences.getFloat("happy", 80.0f);
-  myPet.energy = preferences.getFloat("energy", 80.0f);
-  myPet.isSleeping = preferences.getBool("sleep", false);
-  preferences.end();
+  JsonDocument doc;
+  if (loadFromJSON("/pet_data.json", doc)) {
+    myPet.hunger = doc["hunger"] | 80.0f;
+    myPet.happiness = doc["happy"] | 80.0f;
+    myPet.energy = doc["energy"] | 80.0f;
+    myPet.isSleeping = doc["sleep"] | false;
+    Serial.println("Pet data loaded from JSON");
+  } else {
+    preferences.begin("pet-data", true);
+    myPet.hunger = preferences.getFloat("hunger", 80.0f);
+    myPet.happiness = preferences.getFloat("happy", 80.0f);
+    myPet.energy = preferences.getFloat("energy", 80.0f);
+    myPet.isSleeping = preferences.getBool("sleep", false);
+    preferences.end();
+    Serial.println("Pet data loaded from NVS fallback");
+  }
 }
 
 void savePetData() {
+  JsonDocument doc;
+  doc["hunger"] = myPet.hunger;
+  doc["happy"] = myPet.happiness;
+  doc["energy"] = myPet.energy;
+  doc["sleep"] = myPet.isSleeping;
+  saveToJSON("/pet_data.json", doc);
+
   preferences.begin("pet-data", false);
   preferences.putFloat("hunger", myPet.hunger);
   preferences.putFloat("happy", myPet.happiness);
@@ -5253,62 +5279,110 @@ String getRecentChatContext(int maxMessages) {
   return context;
 }
 
+// ============ UNIFIED STORAGE HELPER ============
+bool saveToJSON(const char* filename, const JsonDocument& doc) {
+    bool success = false;
+    // Always save to LittleFS
+    File fileLF = LittleFS.open(filename, FILE_WRITE);
+    if (fileLF) {
+        if (serializeJson(doc, fileLF) > 0) {
+            success = true;
+        }
+        fileLF.close();
+        Serial.printf("Settings saved to LittleFS: %s\n", filename);
+    }
+
+    // Save to SD if mounted
+    if (sdCardMounted && beginSD()) {
+        File fileSD = SD.open(filename, FILE_WRITE);
+        if (fileSD) {
+            if (serializeJson(doc, fileSD) > 0) {
+                success = true;
+            }
+            fileSD.close();
+            Serial.printf("Settings saved to SD: %s\n", filename);
+        }
+        endSD();
+    }
+    return success;
+}
+
+bool loadFromJSON(const char* filename, JsonDocument& doc) {
+    // Try SD first
+    if (sdCardMounted && beginSD()) {
+        if (SD.exists(filename)) {
+            File fileSD = SD.open(filename, FILE_READ);
+            if (fileSD) {
+                DeserializationError error = deserializeJson(doc, fileSD);
+                fileSD.close();
+                endSD();
+                if (!error) {
+                    Serial.printf("Settings loaded from SD: %s\n", filename);
+                    return true;
+                }
+            }
+        }
+        endSD();
+    }
+
+    // Try LittleFS
+    if (LittleFS.exists(filename)) {
+        File fileLF = LittleFS.open(filename, FILE_READ);
+        if (fileLF) {
+            DeserializationError error = deserializeJson(doc, fileLF);
+            fileLF.close();
+            if (!error) {
+                Serial.printf("Settings loaded from LittleFS: %s\n", filename);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ============ CONFIGURATION SYSTEM (SD .aip) ============
 void loadConfig() {
-  // Try SD first
-  if (sdCardMounted && beginSD()) {
-    if (SD.exists(CONFIG_FILE)) {
-      File file = SD.open(CONFIG_FILE, FILE_READ);
-      if (file) {
-        JsonDocument doc;
-      DeserializationError error = deserializeJson(doc, file);
-      if (!error) {
-        sysConfig.ssid = doc["wifi"]["ssid"] | "";
-        sysConfig.password = doc["wifi"]["pass"] | "";
-        sysConfig.espnowNick = doc["sys"]["nick"] | "ESP32";
-        sysConfig.showFPS = doc["sys"]["fps"] | false;
-        sysConfig.petHunger = doc["pet"]["hgr"] | 80.0f;
-        sysConfig.petHappiness = doc["pet"]["hap"] | 80.0f;
-        sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
-        sysConfig.petSleep = doc["pet"]["slp"] | false;
-        sysConfig.screenBrightness = doc["sys"]["brightness"] | 255;
+  JsonDocument doc;
+  bool loaded = loadFromJSON(CONFIG_FILE, doc);
 
-        // Sync to legacy globals if needed
-        myNickname = sysConfig.espnowNick;
-        showFPS = sysConfig.showFPS;
-        myPet.hunger = sysConfig.petHunger;
-        myPet.happiness = sysConfig.petHappiness;
-        myPet.energy = sysConfig.petEnergy;
-        myPet.isSleeping = sysConfig.petSleep;
-        screenBrightness = sysConfig.screenBrightness;
-        currentBrightness = sysConfig.screenBrightness;
-        targetBrightness = sysConfig.screenBrightness;
+  if (loaded) {
+    sysConfig.ssid = doc["wifi"]["ssid"] | "";
+    sysConfig.password = doc["wifi"]["pass"] | "";
+    sysConfig.espnowNick = doc["sys"]["nick"] | "ESP32";
+    sysConfig.showFPS = doc["sys"]["fps"] | false;
+    sysConfig.petHunger = doc["pet"]["hgr"] | 80.0f;
+    sysConfig.petHappiness = doc["pet"]["hap"] | 80.0f;
+    sysConfig.petEnergy = doc["pet"]["eng"] | 80.0f;
+    sysConfig.petSleep = doc["pet"]["slp"] | false;
+    sysConfig.screenBrightness = doc["sys"]["brightness"] | 255;
+    sysConfig.pinLockEnabled = doc["sys"]["pinLock"] | false;
+    sysConfig.currentPin = doc["sys"]["pinCode"] | "1234";
+    sysConfig.musicVol = doc["music"]["vol"] | 15;
+    sysConfig.lastTrack = doc["music"]["track"] | 1;
+    sysConfig.lastTime = doc["music"]["time"] | 0;
+    Serial.println("Config loaded from JSON");
+  } else {
+    // Fallback to NVS
+    preferences.begin("app-config", true);
+    sysConfig.ssid = preferences.getString("ssid", "");
+    sysConfig.password = preferences.getString("password", "");
+    sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
+    sysConfig.showFPS = preferences.getBool("showFPS", false);
+    sysConfig.pinLockEnabled = preferences.getBool("pinLock", false);
+    sysConfig.currentPin = preferences.getString("pinCode", "1234");
+    sysConfig.musicVol = preferences.getInt("musicVol", 15);
+    sysConfig.lastTrack = preferences.getInt("musicTrack", 1);
+    sysConfig.lastTime = preferences.getInt("musicTime", 0);
+    preferences.end();
 
-        Serial.println("Config loaded from SD (.aip)");
-        file.close();
-        endSD();
-        return;
-      }
-      file.close();
-    }
-    }
-    endSD();
+    preferences.begin("pet-data", true);
+    sysConfig.petHunger = preferences.getFloat("hunger", 80.0f);
+    sysConfig.petHappiness = preferences.getFloat("happy", 80.0f);
+    sysConfig.petEnergy = preferences.getFloat("energy", 80.0f);
+    sysConfig.petSleep = preferences.getBool("sleep", false);
+    preferences.end();
+    Serial.println("Config loaded from NVS");
   }
-
-  // Fallback to NVS
-  preferences.begin("app-config", true);
-  sysConfig.ssid = preferences.getString("ssid", "");
-  sysConfig.password = preferences.getString("password", "");
-  sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
-  sysConfig.showFPS = preferences.getBool("showFPS", false);
-  preferences.end();
-
-  preferences.begin("pet-data", true);
-  sysConfig.petHunger = preferences.getFloat("hunger", 80.0f);
-  sysConfig.petHappiness = preferences.getFloat("happy", 80.0f);
-  sysConfig.petEnergy = preferences.getFloat("energy", 80.0f);
-  sysConfig.petSleep = preferences.getBool("sleep", false);
-  preferences.end();
 
   // Sync
   myNickname = sysConfig.espnowNick;
@@ -5317,8 +5391,12 @@ void loadConfig() {
   myPet.happiness = sysConfig.petHappiness;
   myPet.energy = sysConfig.petEnergy;
   myPet.isSleeping = sysConfig.petSleep;
-
-  Serial.println("Config loaded from NVS");
+  screenBrightness = sysConfig.screenBrightness;
+  currentBrightness = sysConfig.screenBrightness;
+  targetBrightness = sysConfig.screenBrightness;
+  pinLockEnabled = sysConfig.pinLockEnabled;
+  currentPin = sysConfig.currentPin;
+  musicVol = sysConfig.musicVol;
 }
 
 void savePrayerConfig() {
@@ -5334,59 +5412,64 @@ void savePrayerConfig() {
     doc["lon"] = userLocation.longitude;
     doc["city"] = userLocation.city;
 
-    const char* filename = "/prayer_settings.json";
+    saveToJSON("/prayer_settings.json", doc);
+}
 
-    if (sdCardMounted && beginSD()) {
-        File file = SD.open(filename, FILE_WRITE);
-        if (file) {
-            serializeJson(doc, file);
-            file.close();
-            Serial.println("Prayer settings saved to SD card.");
-        }
-        endSD();
+void loadEQConfig() {
+    JsonDocument doc;
+    if (loadFromJSON("/eq_settings.json", doc)) {
+        eqSettings.minMagnitude = doc["minMag"] | 4.5f;
+        eqSettings.indonesiaOnly = doc["indoOnly"] | true;
+        eqSettings.maxRadiusKm = doc["radius"] | 0;
+        eqSettings.notifyEnabled = doc["notify"] | true;
+        eqSettings.notifyMinMag = doc["notifyMag"] | 5.0f;
+        eqSettings.autoRefresh = doc["autoRef"] | true;
+        eqSettings.refreshInterval = doc["refInt"] | 10;
+        eqSettings.dataSource = doc["source"] | 1;
+        Serial.println("EQ settings loaded from JSON");
     } else {
-        File file = LittleFS.open(filename, FILE_WRITE);
-        if (file) {
-            serializeJson(doc, file);
-            file.close();
-            Serial.println("Prayer settings saved to LittleFS.");
-        }
+        preferences.begin("eq-data", true);
+        eqSettings.minMagnitude = preferences.getFloat("eqMinMag", 4.5);
+        eqSettings.indonesiaOnly = preferences.getBool("eqIndoOnly", true);
+        eqSettings.maxRadiusKm = preferences.getInt("eqRadius", 0);
+        eqSettings.notifyEnabled = preferences.getBool("eqNotify", true);
+        eqSettings.notifyMinMag = preferences.getFloat("eqNotifyMag", 5.0);
+        eqSettings.autoRefresh = preferences.getBool("eqAutoRefresh", true);
+        eqSettings.refreshInterval = preferences.getInt("eqRefreshInt", 10);
+        eqSettings.dataSource = preferences.getInt("eqSource", 1);
+        preferences.end();
+        Serial.println("EQ settings loaded from NVS fallback");
     }
+}
+
+void saveEQConfig() {
+    JsonDocument doc;
+    doc["minMag"] = eqSettings.minMagnitude;
+    doc["indoOnly"] = eqSettings.indonesiaOnly;
+    doc["radius"] = eqSettings.maxRadiusKm;
+    doc["notify"] = eqSettings.notifyEnabled;
+    doc["notifyMag"] = eqSettings.notifyMinMag;
+    doc["autoRef"] = eqSettings.autoRefresh;
+    doc["refInt"] = eqSettings.refreshInterval;
+    doc["source"] = eqSettings.dataSource;
+    saveToJSON("/eq_settings.json", doc);
+
+    preferences.begin("eq-data", false);
+    preferences.putFloat("eqMinMag", eqSettings.minMagnitude);
+    preferences.putBool("eqIndoOnly", eqSettings.indonesiaOnly);
+    preferences.putInt("eqRadius", eqSettings.maxRadiusKm);
+    preferences.putBool("eqNotify", eqSettings.notifyEnabled);
+    preferences.putFloat("eqNotifyMag", eqSettings.notifyMinMag);
+    preferences.putBool("eqAutoRefresh", eqSettings.autoRefresh);
+    preferences.putInt("eqRefreshInt", eqSettings.refreshInterval);
+    preferences.putInt("eqSource", eqSettings.dataSource);
+    preferences.end();
 }
 
 void loadPrayerConfig() {
     const char* filename = "/prayer_settings.json";
     JsonDocument doc;
-    bool loaded = false;
-
-    if (sdCardMounted && beginSD()) {
-        if (SD.exists(filename)) {
-            File file = SD.open(filename, FILE_READ);
-            if (file) {
-                DeserializationError error = deserializeJson(doc, file);
-                if (!error) {
-                    loaded = true;
-                    Serial.println("Prayer settings loaded from SD card.");
-                }
-                file.close();
-            }
-        }
-        endSD();
-    }
-
-    if (!loaded) {
-        if (LittleFS.exists(filename)) {
-            File file = LittleFS.open(filename, FILE_READ);
-            if (file) {
-                DeserializationError error = deserializeJson(doc, file);
-                if (!error) {
-                    loaded = true;
-                    Serial.println("Prayer settings loaded from LittleFS.");
-                }
-                file.close();
-            }
-        }
-    }
+    bool loaded = loadFromJSON(filename, doc);
 
     if (loaded) {
         prayerSettings.notificationEnabled = doc["notif"] | true;
@@ -5423,28 +5506,28 @@ void saveConfig() {
   sysConfig.petEnergy = myPet.energy;
   sysConfig.petSleep = myPet.isSleeping;
   sysConfig.screenBrightness = screenBrightness;
+  sysConfig.pinLockEnabled = pinLockEnabled;
+  sysConfig.currentPin = currentPin;
+  sysConfig.musicVol = musicVol;
   // ssid/pass are updated directly
 
-  if (sdCardMounted && beginSD()) {
-    JsonDocument doc;
-    doc["wifi"]["ssid"] = sysConfig.ssid;
-    doc["wifi"]["pass"] = sysConfig.password;
-    doc["sys"]["nick"] = sysConfig.espnowNick;
-    doc["sys"]["fps"] = sysConfig.showFPS;
-    doc["pet"]["hgr"] = sysConfig.petHunger;
-    doc["pet"]["hap"] = sysConfig.petHappiness;
-    doc["pet"]["eng"] = sysConfig.petEnergy;
-    doc["pet"]["slp"] = sysConfig.petSleep;
-    doc["sys"]["brightness"] = sysConfig.screenBrightness;
+  JsonDocument doc;
+  doc["wifi"]["ssid"] = sysConfig.ssid;
+  doc["wifi"]["pass"] = sysConfig.password;
+  doc["sys"]["nick"] = sysConfig.espnowNick;
+  doc["sys"]["fps"] = sysConfig.showFPS;
+  doc["pet"]["hgr"] = sysConfig.petHunger;
+  doc["pet"]["hap"] = sysConfig.petHappiness;
+  doc["pet"]["eng"] = sysConfig.petEnergy;
+  doc["pet"]["slp"] = sysConfig.petSleep;
+  doc["sys"]["brightness"] = sysConfig.screenBrightness;
+  doc["sys"]["pinLock"] = sysConfig.pinLockEnabled;
+  doc["sys"]["pinCode"] = sysConfig.currentPin;
+  doc["music"]["vol"] = sysConfig.musicVol;
+  doc["music"]["track"] = sysConfig.lastTrack;
+  doc["music"]["time"] = sysConfig.lastTime;
 
-    File file = SD.open(CONFIG_FILE, FILE_WRITE);
-    if (file) {
-      serializeJson(doc, file);
-      file.close();
-      Serial.println("Config saved to SD (.aip)");
-    }
-    endSD();
-  }
+  saveToJSON(CONFIG_FILE, doc);
 
   // Always backup to NVS for robustness
   preferences.begin("app-config", false);
@@ -5452,6 +5535,11 @@ void saveConfig() {
   preferences.putString("password", sysConfig.password);
   preferences.putString("espnow_nick", sysConfig.espnowNick);
   preferences.putBool("showFPS", sysConfig.showFPS);
+  preferences.putBool("pinLock", sysConfig.pinLockEnabled);
+  preferences.putString("pinCode", sysConfig.currentPin);
+  preferences.putInt("musicVol", sysConfig.musicVol);
+  preferences.putInt("musicTrack", sysConfig.lastTrack);
+  preferences.putInt("musicTime", sysConfig.lastTime);
   preferences.end();
 
   preferences.begin("pet-data", false);
@@ -8198,17 +8286,13 @@ void handleEarthquakeSettingsInput() {
         else if (eqSettings.minMagnitude == 2.5) eqSettings.minMagnitude = 4.5;
         else if (eqSettings.minMagnitude == 4.5) eqSettings.minMagnitude = 6.0;
         else eqSettings.minMagnitude = 0.0;
-        preferences.begin("eq-data", false);
-        preferences.putFloat("eqMinMag", eqSettings.minMagnitude);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 1: // Indonesia Only
         eqSettings.indonesiaOnly = !eqSettings.indonesiaOnly;
         if (eqSettings.indonesiaOnly) eqSettings.maxRadiusKm = 0; // Disable radius
-        preferences.begin("eq-data", false);
-        preferences.putBool("eqIndoOnly", eqSettings.indonesiaOnly);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 2: // Max Radius - cycle 0, 500, 1000, 2000, 5000
@@ -8218,16 +8302,12 @@ void handleEarthquakeSettingsInput() {
         else if (eqSettings.maxRadiusKm == 2000) eqSettings.maxRadiusKm = 5000;
         else eqSettings.maxRadiusKm = 0;
         if (eqSettings.maxRadiusKm > 0) eqSettings.indonesiaOnly = false;
-        preferences.begin("eq-data", false);
-        preferences.putInt("eqRadius", eqSettings.maxRadiusKm);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 3: // Notifications
         eqSettings.notifyEnabled = !eqSettings.notifyEnabled;
-        preferences.begin("eq-data", false);
-        preferences.putBool("eqNotify", eqSettings.notifyEnabled);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 4: // Notify Min Mag - cycle 4.0, 5.0, 6.0, 7.0
@@ -8235,16 +8315,12 @@ void handleEarthquakeSettingsInput() {
         else if (eqSettings.notifyMinMag == 5.0) eqSettings.notifyMinMag = 6.0;
         else if (eqSettings.notifyMinMag == 6.0) eqSettings.notifyMinMag = 7.0;
         else eqSettings.notifyMinMag = 4.0;
-        preferences.begin("eq-data", false);
-        preferences.putFloat("eqNotifyMag", eqSettings.notifyMinMag);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 5: // Auto Refresh
         eqSettings.autoRefresh = !eqSettings.autoRefresh;
-        preferences.begin("eq-data", false);
-        preferences.putBool("eqAutoRefresh", eqSettings.autoRefresh);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 6: // Refresh Interval - cycle 5, 10, 15, 30
@@ -8252,16 +8328,12 @@ void handleEarthquakeSettingsInput() {
         else if (eqSettings.refreshInterval == 10) eqSettings.refreshInterval = 15;
         else if (eqSettings.refreshInterval == 15) eqSettings.refreshInterval = 30;
         else eqSettings.refreshInterval = 5;
-        preferences.begin("eq-data", false);
-        preferences.putInt("eqRefreshInt", eqSettings.refreshInterval);
-        preferences.end();
+        saveEQConfig();
         break;
 
       case 7: // Data Source
         eqSettings.dataSource = (eqSettings.dataSource == 1) ? 0 : 1;
-        preferences.begin("eq-data", false);
-        preferences.putInt("eqSource", eqSettings.dataSource);
-        preferences.end();
+        saveEQConfig();
         fetchEarthquakeData();
         break;
 
@@ -8523,10 +8595,8 @@ void handleSystemMenuSelect() {
       changeState(STATE_SYSTEM_INFO_MENU);
       break;
     case 1: // Security
-      preferences.begin("app-config", false);
       pinLockEnabled = !pinLockEnabled;
-      preferences.putBool("pinLock", pinLockEnabled);
-      preferences.end();
+      saveConfig();
       if (!pinLockEnabled) {
         showStatus("PIN Lock Disabled", 1500);
       } else {
@@ -8567,9 +8637,7 @@ void handlePinLockKeyPress() {
     } else if (currentState == STATE_CHANGE_PIN) {
       if (pinInput.length() == 4) {
         currentPin = pinInput;
-        preferences.begin("app-config", false);
-        preferences.putString("pinCode", currentPin);
-        preferences.end();
+        saveConfig();
         showStatus("PIN Set!", 1000);
         changeState(STATE_SYSTEM_MENU);
       } else {
@@ -9166,16 +9234,6 @@ void setup() {
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
-    } else {
-      // NVS fallback for main config
-      preferences.begin("app-config", true);
-      sysConfig.ssid = preferences.getString("ssid", "");
-      sysConfig.password = preferences.getString("password", "");
-      sysConfig.espnowNick = preferences.getString("espnow_nick", "ESP32");
-      sysConfig.showFPS = preferences.getBool("showFPS", false);
-      preferences.end();
-      myNickname = sysConfig.espnowNick;
-      showFPS = sysConfig.showFPS;
     }
     bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
     drawBootScreen(bootStatusLines, ++currentLine, 75);
@@ -9212,16 +9270,7 @@ void setup() {
         Serial.println("Initializing Earthquake Monitor...");
 
         // Load settings
-        preferences.begin("eq-data", true);
-        eqSettings.minMagnitude = preferences.getFloat("eqMinMag", 4.5);
-        eqSettings.indonesiaOnly = preferences.getBool("eqIndoOnly", true);
-        eqSettings.maxRadiusKm = preferences.getInt("eqRadius", 0);
-        eqSettings.notifyEnabled = preferences.getBool("eqNotify", true);
-        eqSettings.notifyMinMag = preferences.getFloat("eqNotifyMag", 5.0);
-        eqSettings.autoRefresh = preferences.getBool("eqAutoRefresh", true);
-        eqSettings.refreshInterval = preferences.getInt("eqRefreshInt", 10);
-        eqSettings.dataSource = preferences.getInt("eqSource", 1); // Default to BMKG
-        preferences.end();
+        loadEQConfig();
 
         // Initial data fetch
         fetchEarthquakeData();
@@ -9246,11 +9295,6 @@ void setup() {
 
 
     // --- Go to Main State ---
-    preferences.begin("app-config", true);
-    pinLockEnabled = preferences.getBool("pinLock", false);
-    currentPin = preferences.getString("pinCode", "1234");
-    preferences.end();
-
     if (pinLockEnabled) {
         currentState = STATE_PIN_LOCK;
         stateAfterUnlock = STATE_MAIN_MENU;
@@ -9272,9 +9316,10 @@ void updateMusicPlayerState() {
     if (fileNumber > 0 && fileNumber <= totalTracks) {
         if (currentTrackIdx != fileNumber) {
             currentTrackIdx = fileNumber;
-            // Only write to preferences if the track has actually changed & throttle writes
+            // Only write to config if the track has actually changed & throttle writes
             if (millis() - lastTrackSaveMillis > 2000) { // Throttle writes
-                preferences.putInt("musicTrack", currentTrackIdx);
+                sysConfig.lastTrack = currentTrackIdx;
+                saveConfig();
                 lastTrackSaveMillis = millis();
             }
         }
@@ -9674,7 +9719,7 @@ void loop() {
                 if (musicVol < 30) {
                     musicVol++;
                     myDFPlayer.volume(musicVol);
-                    preferences.putInt("musicVol", musicVol);
+                    saveConfig();
                     lastVolumeChangeMillis = currentMillis;
                 }
             }
@@ -9682,7 +9727,7 @@ void loop() {
                 if (musicVol > 0) {
                     musicVol--;
                     myDFPlayer.volume(musicVol);
-                    preferences.putInt("musicVol", musicVol);
+                    saveConfig();
                     lastVolumeChangeMillis = currentMillis;
                 }
             }
