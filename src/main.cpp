@@ -165,7 +165,10 @@ enum AppState {
   STATE_EARTHQUAKE,
   STATE_EARTHQUAKE_DETAIL,
   STATE_EARTHQUAKE_SETTINGS,
-  STATE_EARTHQUAKE_MAP
+  STATE_EARTHQUAKE_MAP,
+  STATE_UTTT,
+  STATE_UTTT_MENU,
+  STATE_UTTT_GAMEOVER
 };
 
 AppState currentState = STATE_BOOT;
@@ -587,6 +590,65 @@ BreakoutBrick breakoutBricks[BREAKOUT_ROWS][BREAKOUT_COLS];
 bool breakoutGameActive = false;
 int breakoutScore = 0;
 
+// ===== ULTIMATE TIC-TAC-TOE GAME =====
+// Cell states
+#define CELL_EMPTY 0
+#define CELL_X 1
+#define CELL_O 2
+
+// Game states
+#define GAME_PLAYING 0
+#define GAME_X_WIN 1
+#define GAME_O_WIN 2
+#define GAME_TIE 3
+
+// AI Difficulty
+#define DIFF_EASY 0
+#define DIFF_MEDIUM 1
+#define DIFF_HARD 2
+
+struct SmallBoard {
+  uint8_t cells[9];     // 0=empty, 1=X, 2=O
+  uint8_t winner;       // 0=none, 1=X, 2=O, 3=tie
+  bool isActive;        // Can play here?
+  bool isComplete;      // No more moves possible
+};
+
+struct UTTTGame {
+  SmallBoard boards[9]; // 9 small boards
+  uint8_t bigWinner;    // Winner of overall game (0=none, 1=X, 2=O, 3=tie)
+  uint8_t currentPlayer; // 1=X, 2=O
+  int8_t activeBoard;   // Which board must be played (-1 = any)
+  int8_t lastMove;      // Last cell played (for undo)
+  int8_t lastBoard;     // Last board played (for undo)
+  uint8_t gameState;    // GAME_PLAYING, GAME_X_WIN, etc
+  bool vsAI;            // Playing against AI?
+  uint8_t aiDifficulty; // DIFF_EASY, DIFF_MEDIUM, DIFF_HARD
+  uint8_t aiPlayer;     // Which player is AI (1 or 2)
+};
+
+UTTTGame uttt;
+
+// UI State
+int utttCursorBoard = 4;    // Current board cursor (0-8), start at center
+int utttCursorCell = 4;     // Current cell cursor (0-8), start at center
+bool utttCellSelected = false; // Has player selected a cell?
+
+// AI move tracking
+int utttAIMoveBoard = -1;
+int utttAIMoveCell = -1;
+
+// Statistics
+struct UTTTStats {
+  int gamesPlayed;
+  int gamesWon;
+  int gamesLost;
+  int gamesTied;
+  int totalMoves;
+};
+
+UTTTStats utttStats;
+
 
 // ===== PRAYER TIMES SYSTEM =====
 struct PrayerTimes {
@@ -904,7 +966,7 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_gamehub};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -1454,6 +1516,32 @@ void handleEarthquakeMapInput();
 void handleEarthquakeSettingsInput();
 void checkEarthquakeAlerts();
 void showEarthquakeAlert(Earthquake eq);
+
+// ===== ULTIMATE TIC-TAC-TOE =====
+struct UTTTMove {
+  int board;
+  int cell;
+};
+void initUTTT();
+void saveUTTTStats();
+void startNewUTTT(bool vsAI, uint8_t difficulty);
+uint8_t checkWin(uint8_t* cells);
+void updateSmallBoard(int boardIdx);
+void updateBigGame();
+bool isValidMove(int boardIdx, int cellIdx);
+void makeMove(int boardIdx, int cellIdx);
+void undoUTTTMove();
+int evaluateUTTT();
+void getValidMoves(UTTTMove* moves, int* count);
+int minimax(int depth, bool isMaximizing, int alpha, int beta);
+void aiMakeMove();
+void drawUTTT();
+void drawSmallBoard(int x, int y, int boardIdx);
+void drawUTTTGameOver();
+void drawUTTTMenu();
+void handleUTTTInput();
+void handleUTTTMenuInput();
+void handleUTTTGameOverInput();
 
 // ===== LOCATION DETECTION =====
 void fetchUserLocation() {
@@ -6681,6 +6769,724 @@ void drawEarthquakeSettings() {
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+// ===== ULTIMATE TIC-TAC-TOE LOGIC =====
+void initUTTT() {
+  for (int b = 0; b < 9; b++) {
+    for (int c = 0; c < 9; c++) {
+      uttt.boards[b].cells[c] = CELL_EMPTY;
+    }
+    uttt.boards[b].winner = 0;
+    uttt.boards[b].isActive = true;
+    uttt.boards[b].isComplete = false;
+  }
+
+  uttt.bigWinner = 0;
+  uttt.currentPlayer = CELL_X;
+  uttt.activeBoard = -1;
+  uttt.lastMove = -1;
+  uttt.lastBoard = -1;
+  uttt.gameState = GAME_PLAYING;
+
+  utttCursorBoard = 4;
+  utttCursorCell = 4;
+  utttCellSelected = false;
+
+  Serial.println("Ultimate Tic-Tac-Toe initialized");
+}
+
+void saveUTTTStats() {
+  preferences.putInt("utttPlayed", utttStats.gamesPlayed);
+  preferences.putInt("utttWon", utttStats.gamesWon);
+  preferences.putInt("utttLost", utttStats.gamesLost);
+  preferences.putInt("utttTied", utttStats.gamesTied);
+}
+
+void startNewUTTT(bool vsAI, uint8_t difficulty) {
+  initUTTT();
+  uttt.vsAI = vsAI;
+  uttt.aiDifficulty = difficulty;
+  uttt.aiPlayer = CELL_O;
+  changeState(STATE_UTTT);
+}
+
+uint8_t checkWin(uint8_t* cells) {
+  const int wins[8][3] = {
+    {0, 1, 2}, {3, 4, 5}, {6, 7, 8},
+    {0, 3, 6}, {1, 4, 7}, {2, 5, 8},
+    {0, 4, 8}, {2, 4, 6}
+  };
+
+  for (int i = 0; i < 8; i++) {
+    uint8_t a = cells[wins[i][0]];
+    uint8_t b = cells[wins[i][1]];
+    uint8_t c = cells[wins[i][2]];
+
+    if (a != CELL_EMPTY && a == b && b == c) {
+      return a;
+    }
+  }
+
+  return 0;
+}
+
+void updateSmallBoard(int boardIdx) {
+  SmallBoard* board = &uttt.boards[boardIdx];
+  board->winner = checkWin(board->cells);
+
+  if (board->winner != 0) {
+    board->isComplete = true;
+    board->isActive = false;
+    Serial.printf("Board %d won by %s\n", boardIdx, board->winner == CELL_X ? "X" : "O");
+    return;
+  }
+
+  bool isFull = true;
+  for (int i = 0; i < 9; i++) {
+    if (board->cells[i] == CELL_EMPTY) {
+      isFull = false;
+      break;
+    }
+  }
+
+  if (isFull) {
+    board->winner = 3; // Tie
+    board->isComplete = true;
+    board->isActive = false;
+    Serial.printf("Board %d is tied\n", boardIdx);
+  }
+}
+
+void updateBigGame() {
+  uint8_t bigBoard[9];
+  for (int i = 0; i < 9; i++) {
+    bigBoard[i] = uttt.boards[i].winner;
+  }
+
+  uttt.bigWinner = checkWin(bigBoard);
+
+  if (uttt.bigWinner == CELL_X) {
+    uttt.gameState = GAME_X_WIN;
+    utttStats.gamesPlayed++;
+    utttStats.gamesWon++;
+    Serial.println("GAME OVER: X WINS!");
+    if (isDFPlayerAvailable) myDFPlayer.play(96);
+    saveUTTTStats();
+    changeState(STATE_UTTT_GAMEOVER);
+  } else if (uttt.bigWinner == CELL_O) {
+    uttt.gameState = GAME_O_WIN;
+    utttStats.gamesPlayed++;
+    if (uttt.vsAI) utttStats.gamesLost++;
+    Serial.println("GAME OVER: O WINS!");
+    if (isDFPlayerAvailable) myDFPlayer.play(97);
+    saveUTTTStats();
+    changeState(STATE_UTTT_GAMEOVER);
+  } else {
+    bool allComplete = true;
+    for (int i = 0; i < 9; i++) {
+      if (!uttt.boards[i].isComplete) {
+        allComplete = false;
+        break;
+      }
+    }
+
+    if (allComplete) {
+      uttt.gameState = GAME_TIE;
+      utttStats.gamesPlayed++;
+      utttStats.gamesTied++;
+      Serial.println("GAME OVER: TIE!");
+      if (isDFPlayerAvailable) myDFPlayer.play(98);
+      saveUTTTStats();
+      changeState(STATE_UTTT_GAMEOVER);
+    }
+  }
+}
+
+bool isValidMove(int boardIdx, int cellIdx) {
+  if (uttt.gameState != GAME_PLAYING) return false;
+  if (uttt.boards[boardIdx].cells[cellIdx] != CELL_EMPTY) return false;
+  if (uttt.boards[boardIdx].isComplete) return false;
+  if (uttt.activeBoard != -1 && boardIdx != uttt.activeBoard) {
+    if (!uttt.boards[uttt.activeBoard].isComplete) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void makeMove(int boardIdx, int cellIdx) {
+  if (!isValidMove(boardIdx, cellIdx)) {
+    Serial.println("Invalid move!");
+    return;
+  }
+
+  uttt.lastBoard = boardIdx;
+  uttt.lastMove = cellIdx;
+  uttt.boards[boardIdx].cells[cellIdx] = uttt.currentPlayer;
+  utttStats.totalMoves++;
+
+  if (isDFPlayerAvailable) myDFPlayer.play(95);
+
+  Serial.printf("Player %s plays board %d, cell %d\n",
+                uttt.currentPlayer == CELL_X ? "X" : "O",
+                boardIdx, cellIdx);
+
+  updateSmallBoard(boardIdx);
+  updateBigGame();
+
+  if (uttt.gameState == GAME_PLAYING) {
+    uttt.activeBoard = cellIdx;
+    if (uttt.boards[cellIdx].isComplete) {
+      uttt.activeBoard = -1;
+    }
+    uttt.currentPlayer = (uttt.currentPlayer == CELL_X) ? CELL_O : CELL_X;
+  }
+}
+
+void undoUTTTMove() {
+  if (uttt.lastMove == -1 || uttt.lastBoard == -1) {
+    Serial.println("No move to undo");
+    return;
+  }
+
+  uttt.boards[uttt.lastBoard].cells[uttt.lastMove] = CELL_EMPTY;
+  uttt.boards[uttt.lastBoard].winner = 0;
+  uttt.boards[uttt.lastBoard].isComplete = false;
+  uttt.boards[uttt.lastBoard].isActive = true;
+  uttt.gameState = GAME_PLAYING;
+  uttt.bigWinner = 0;
+  uttt.currentPlayer = (uttt.currentPlayer == CELL_X) ? CELL_O : CELL_X;
+  uttt.lastMove = -1;
+  uttt.lastBoard = -1;
+  Serial.println("Move undone");
+}
+
+// ===== AI OPPONENT =====
+int evaluateUTTT() {
+  int score = 0;
+  int xBoards = 0, oBoards = 0;
+  for (int i = 0; i < 9; i++) {
+    if (uttt.boards[i].winner == CELL_X) xBoards++;
+    if (uttt.boards[i].winner == CELL_O) oBoards++;
+  }
+
+  if (uttt.bigWinner == CELL_O) return 1000;
+  if (uttt.bigWinner == CELL_X) return -1000;
+
+  score += oBoards * 10;
+  score -= xBoards * 10;
+
+  if (uttt.boards[4].winner == CELL_O) score += 5;
+  if (uttt.boards[4].winner == CELL_X) score -= 5;
+
+  int corners[] = {0, 2, 6, 8};
+  for (int c : corners) {
+    if (uttt.boards[c].winner == CELL_O) score += 3;
+    if (uttt.boards[c].winner == CELL_X) score -= 3;
+  }
+
+  return score;
+}
+
+void getValidMoves(UTTTMove* moves, int* count) {
+  *count = 0;
+  for (int b = 0; b < 9; b++) {
+    if (uttt.activeBoard != -1 && b != uttt.activeBoard) {
+      if (!uttt.boards[uttt.activeBoard].isComplete) continue;
+    }
+    if (uttt.boards[b].isComplete) continue;
+    for (int c = 0; c < 9; c++) {
+      if (uttt.boards[b].cells[c] == CELL_EMPTY) {
+        moves[*count].board = b;
+        moves[*count].cell = c;
+        (*count)++;
+      }
+    }
+  }
+}
+
+int minimax(int depth, bool isMaximizing, int alpha, int beta) {
+  if (uttt.gameState != GAME_PLAYING || depth == 0) {
+    return evaluateUTTT();
+  }
+
+  UTTTMove moves[81];
+  int moveCount;
+  getValidMoves(moves, &moveCount);
+
+  if (moveCount == 0) return 0;
+
+  if (isMaximizing) {
+    int maxEval = -9999;
+    for (int i = 0; i < moveCount; i++) {
+      uint8_t savedPlayer = uttt.currentPlayer;
+      int8_t savedActive = uttt.activeBoard;
+      uint8_t savedState = uttt.gameState;
+      uint8_t savedWinner = uttt.boards[moves[i].board].winner;
+      bool savedComplete = uttt.boards[moves[i].board].isComplete;
+
+      uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_O;
+      updateSmallBoard(moves[i].board);
+      uint8_t bigBoard[9];
+      for (int k = 0; k < 9; k++) bigBoard[k] = uttt.boards[k].winner;
+      uttt.bigWinner = checkWin(bigBoard);
+      if (uttt.bigWinner != 0) uttt.gameState = (uttt.bigWinner == CELL_X) ? GAME_X_WIN : GAME_O_WIN;
+
+      int8_t nextActive = moves[i].cell;
+      if (uttt.boards[nextActive].isComplete) nextActive = -1;
+      uttt.activeBoard = nextActive;
+      uttt.currentPlayer = CELL_X;
+
+      int eval = minimax(depth - 1, false, alpha, beta);
+
+      uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_EMPTY;
+      uttt.boards[moves[i].board].winner = savedWinner;
+      uttt.boards[moves[i].board].isComplete = savedComplete;
+      uttt.currentPlayer = savedPlayer;
+      uttt.activeBoard = savedActive;
+      uttt.gameState = savedState;
+      uttt.bigWinner = 0;
+
+      maxEval = max(maxEval, eval);
+      alpha = max(alpha, eval);
+      if (beta <= alpha) break;
+    }
+    return maxEval;
+  } else {
+    int minEval = 9999;
+    for (int i = 0; i < moveCount; i++) {
+      uint8_t savedPlayer = uttt.currentPlayer;
+      int8_t savedActive = uttt.activeBoard;
+      uint8_t savedState = uttt.gameState;
+      uint8_t savedWinner = uttt.boards[moves[i].board].winner;
+      bool savedComplete = uttt.boards[moves[i].board].isComplete;
+
+      uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_X;
+      updateSmallBoard(moves[i].board);
+      uint8_t bigBoard[9];
+      for (int k = 0; k < 9; k++) bigBoard[k] = uttt.boards[k].winner;
+      uttt.bigWinner = checkWin(bigBoard);
+      if (uttt.bigWinner != 0) uttt.gameState = (uttt.bigWinner == CELL_X) ? GAME_X_WIN : GAME_O_WIN;
+
+      int8_t nextActive = moves[i].cell;
+      if (uttt.boards[nextActive].isComplete) nextActive = -1;
+      uttt.activeBoard = nextActive;
+      uttt.currentPlayer = CELL_O;
+
+      int eval = minimax(depth - 1, true, alpha, beta);
+
+      uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_EMPTY;
+      uttt.boards[moves[i].board].winner = savedWinner;
+      uttt.boards[moves[i].board].isComplete = savedComplete;
+      uttt.currentPlayer = savedPlayer;
+      uttt.activeBoard = savedActive;
+      uttt.gameState = savedState;
+      uttt.bigWinner = 0;
+
+      minEval = min(minEval, eval);
+      beta = min(beta, eval);
+      if (beta <= alpha) break;
+    }
+    return minEval;
+  }
+}
+
+void aiMakeMove() {
+  UTTTMove moves[81];
+  int moveCount;
+  getValidMoves(moves, &moveCount);
+
+  if (moveCount == 0) return;
+
+  int depth = 2;
+  switch (uttt.aiDifficulty) {
+    case DIFF_EASY:
+      {
+        int randIdx = random(moveCount);
+        utttAIMoveBoard = moves[randIdx].board;
+        utttAIMoveCell = moves[randIdx].cell;
+        return;
+      }
+    case DIFF_MEDIUM:
+      depth = 2;
+      break;
+    case DIFF_HARD:
+      depth = 4;
+      break;
+  }
+
+  int bestScore = -9999;
+  UTTTMove bestMove = moves[0];
+
+  for (int i = 0; i < moveCount; i++) {
+    uint8_t savedPlayer = uttt.currentPlayer;
+    int8_t savedActive = uttt.activeBoard;
+    uint8_t savedState = uttt.gameState;
+    uint8_t savedWinner = uttt.boards[moves[i].board].winner;
+    bool savedComplete = uttt.boards[moves[i].board].isComplete;
+
+    uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_O;
+    updateSmallBoard(moves[i].board);
+    uint8_t bigBoard[9];
+    for (int k = 0; k < 9; k++) bigBoard[k] = uttt.boards[k].winner;
+    uttt.bigWinner = checkWin(bigBoard);
+    if (uttt.bigWinner != 0) uttt.gameState = (uttt.bigWinner == CELL_X) ? GAME_X_WIN : GAME_O_WIN;
+
+    int8_t nextActive = moves[i].cell;
+    if (uttt.boards[nextActive].isComplete) nextActive = -1;
+    uttt.activeBoard = nextActive;
+    uttt.currentPlayer = CELL_X;
+
+    int score = minimax(depth - 1, false, -10000, 10000);
+
+    uttt.boards[moves[i].board].cells[moves[i].cell] = CELL_EMPTY;
+    uttt.boards[moves[i].board].winner = savedWinner;
+    uttt.boards[moves[i].board].isComplete = savedComplete;
+    uttt.currentPlayer = savedPlayer;
+    uttt.activeBoard = savedActive;
+    uttt.gameState = savedState;
+    uttt.bigWinner = 0;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = moves[i];
+    }
+  }
+
+  utttAIMoveBoard = bestMove.board;
+  utttAIMoveCell = bestMove.cell;
+
+  Serial.printf("AI chose board %d, cell %d (score: %d)\n",
+                utttAIMoveBoard, utttAIMoveCell, bestScore);
+}
+
+// ===== DRAW GAME SCREEN =====
+void drawUTTT() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(5, 20);
+  canvas.print("ULTIMATE TIC-TAC-TOE");
+
+  canvas.setTextColor(uttt.currentPlayer == CELL_X ? 0xF800 : 0x001F);
+  canvas.setCursor(200, 20);
+  if (uttt.gameState == GAME_PLAYING) {
+    canvas.print(uttt.currentPlayer == CELL_X ? "X" : "O");
+    canvas.print(" Turn");
+  }
+
+  int startX = 10;
+  int startY = 35;
+  int bigBoardSize = 27;
+  int spacing = 3;
+
+  for (int bigRow = 0; bigRow < 3; bigRow++) {
+    for (int bigCol = 0; bigCol < 3; bigCol++) {
+      int boardIdx = bigRow * 3 + bigCol;
+      int bx = startX + bigCol * (bigBoardSize + spacing);
+      int by = startY + bigRow * (bigBoardSize + spacing);
+      drawSmallBoard(bx, by, boardIdx);
+    }
+  }
+
+  if (uttt.activeBoard != -1) {
+    int row = uttt.activeBoard / 3;
+    int col = uttt.activeBoard % 3;
+    int bx = startX + col * (bigBoardSize + spacing) - 2;
+    int by = startY + row * (bigBoardSize + spacing) - 2;
+    canvas.drawRect(bx, by, bigBoardSize + 4, bigBoardSize + 4, COLOR_SUCCESS);
+  }
+
+  int footerY = SCREEN_HEIGHT - 20;
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(5, footerY);
+  canvas.print("ARROWS=Move SEL=Pick");
+  canvas.setCursor(5, footerY + 10);
+  canvas.print("L=Undo R=Menu L+R=Exit");
+
+  if (uttt.activeBoard != -1) {
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(150, footerY);
+    canvas.print("Board: ");
+    canvas.print(uttt.activeBoard + 1);
+  } else {
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(150, footerY);
+    canvas.print("Any board");
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawSmallBoard(int x, int y, int boardIdx) {
+  SmallBoard* board = &uttt.boards[boardIdx];
+  int cellSize = 8;
+  int gap = 1;
+
+  uint16_t bgColor = COLOR_BG;
+  if (boardIdx == utttCursorBoard && !utttCellSelected) {
+    bgColor = 0x2104;
+  }
+  canvas.fillRect(x, y, 27, 27, bgColor);
+
+  if (board->winner == CELL_X) {
+    canvas.setTextSize(3);
+    canvas.setTextColor(0xF800);
+    canvas.setCursor(x + 6, y + 6);
+    canvas.print("X");
+    return;
+  } else if (board->winner == CELL_O) {
+    canvas.setTextSize(3);
+    canvas.setTextColor(0x001F);
+    canvas.setCursor(x + 6, y + 6);
+    canvas.print("O");
+    return;
+  } else if (board->winner == 3) {
+    canvas.fillRect(x + 8, y + 8, 11, 11, 0x7BEF);
+    return;
+  }
+
+  for (int row = 0; row < 3; row++) {
+    for (int col = 0; col < 3; col++) {
+      int cellIdx = row * 3 + col;
+      int cx = x + col * (cellSize + gap);
+      int cy = y + row * (cellSize + gap);
+
+      uint16_t cellColor = 0x4208;
+      if (boardIdx == utttCursorBoard && cellIdx == utttCursorCell && utttCellSelected) {
+        cellColor = COLOR_PRIMARY;
+      }
+      canvas.fillRect(cx, cy, cellSize, cellSize, cellColor);
+
+      canvas.setTextSize(1);
+      if (board->cells[cellIdx] == CELL_X) {
+        canvas.setTextColor(0xF800);
+        canvas.setCursor(cx + 2, cy + 1);
+        canvas.print("X");
+      } else if (board->cells[cellIdx] == CELL_O) {
+        canvas.setTextColor(0x001F);
+        canvas.setCursor(cx + 2, cy + 1);
+        canvas.print("O");
+      }
+    }
+  }
+}
+
+void drawUTTTGameOver() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextSize(3);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(30, 40);
+  canvas.print("GAME OVER");
+
+  canvas.setTextSize(2);
+  if (uttt.gameState == GAME_X_WIN) {
+    canvas.setTextColor(0xF800);
+    canvas.setCursor(60, 75);
+    canvas.print("X WINS!");
+  } else if (uttt.gameState == GAME_O_WIN) {
+    canvas.setTextColor(0x001F);
+    canvas.setCursor(60, 75);
+    canvas.print("O WINS!");
+  } else {
+    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setCursor(80, 75);
+    canvas.print("TIE!");
+  }
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(50, 110);
+  canvas.print("Total Moves: ");
+  canvas.print(utttStats.totalMoves);
+
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(40, 135);
+  canvas.print("SEL = New Game");
+  canvas.setCursor(40, 145);
+  canvas.print("L+R = Main Menu");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+static int utttMenuCursor = 0;
+void drawUTTTMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(20, 25);
+  canvas.print("TIC-TAC-TOE");
+
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+
+  int y = 55;
+  const char* options[] = {
+    "1. vs AI (Easy)",
+    "2. vs AI (Medium)",
+    "3. vs AI (Hard)",
+    "4. vs Human (Local)",
+    "5. Back to Menu"
+  };
+
+  for (int i = 0; i < 5; i++) {
+    if (i == utttMenuCursor) {
+      canvas.fillRoundRect(20, y - 4, SCREEN_WIDTH - 40, 14, 4, COLOR_PRIMARY);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.setTextColor(COLOR_TEXT);
+    }
+    canvas.setCursor(30, y);
+    canvas.print(options[i]);
+    y += 15;
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ===== INPUT HANDLING =====
+void handleUTTTInput() {
+  if (uttt.vsAI && uttt.currentPlayer == uttt.aiPlayer && uttt.gameState == GAME_PLAYING) {
+    static unsigned long aiThinkTime = 0;
+    static bool aiThinking = false;
+
+    if (!aiThinking) {
+      aiThinking = true;
+      aiThinkTime = millis();
+      utttAIMoveBoard = -1;
+      utttAIMoveCell = -1;
+    }
+
+    if (millis() - aiThinkTime > 1000) {
+      if (utttAIMoveBoard == -1) {
+        aiMakeMove();
+      }
+      if (utttAIMoveBoard != -1) {
+        makeMove(utttAIMoveBoard, utttAIMoveCell);
+        aiThinking = false;
+        screenIsDirty = true;
+      }
+    }
+    return;
+  }
+
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    if (!utttCellSelected) {
+      if (utttCursorBoard >= 3) utttCursorBoard -= 3;
+    } else {
+      if (utttCursorCell >= 3) utttCursorCell -= 3;
+    }
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    if (!utttCellSelected) {
+      if (utttCursorBoard < 6) utttCursorBoard += 3;
+    } else {
+      if (utttCursorCell < 6) utttCursorCell += 3;
+    }
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_LEFT) == BTN_ACT) {
+    if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+       changeState(STATE_MAIN_MENU);
+       return;
+    }
+    if (!utttCellSelected) {
+      if (utttCursorBoard % 3 != 0) utttCursorBoard--;
+    } else {
+      if (utttCursorCell % 3 != 0) utttCursorCell--;
+    }
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) {
+    if (digitalRead(BTN_LEFT) == BTN_ACT) {
+       changeState(STATE_MAIN_MENU);
+       return;
+    }
+    if (!utttCellSelected) {
+      if (utttCursorBoard % 3 != 2) utttCursorBoard++;
+    } else {
+      if (utttCursorCell % 3 != 2) utttCursorCell++;
+    }
+    ledQuickFlash();
+    delay(150);
+  }
+
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    if (!utttCellSelected) {
+      utttCellSelected = true;
+      utttCursorCell = 4;
+    } else {
+      if (isValidMove(utttCursorBoard, utttCursorCell)) {
+        makeMove(utttCursorBoard, utttCursorCell);
+        utttCellSelected = false;
+      }
+    }
+    ledSuccess();
+    delay(200);
+  }
+
+  if (digitalRead(BTN_BACK) == BTN_ACT) {
+    if (utttCellSelected) {
+      utttCellSelected = false;
+    } else {
+      undoUTTTMove();
+    }
+    ledQuickFlash();
+    delay(200);
+  }
+}
+
+void handleUTTTMenuInput() {
+  if (digitalRead(BTN_DOWN) == BTN_ACT) {
+    utttMenuCursor = (utttMenuCursor + 1) % 5;
+    ledQuickFlash();
+    delay(150);
+  }
+  if (digitalRead(BTN_UP) == BTN_ACT) {
+    utttMenuCursor = (utttMenuCursor - 1 + 5) % 5;
+    ledQuickFlash();
+    delay(150);
+  }
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    ledSuccess();
+    switch (utttMenuCursor) {
+      case 0: startNewUTTT(true, DIFF_EASY); break;
+      case 1: startNewUTTT(true, DIFF_MEDIUM); break;
+      case 2: startNewUTTT(true, DIFF_HARD); break;
+      case 3: startNewUTTT(false, 0); break;
+      case 4: changeState(STATE_MAIN_MENU); break;
+    }
+    delay(200);
+  }
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_MAIN_MENU);
+  }
+}
+
+void handleUTTTGameOverInput() {
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    ledSuccess();
+    changeState(STATE_UTTT_MENU);
+    delay(200);
+  }
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+    changeState(STATE_MAIN_MENU);
+  }
+}
+
 // ============ MAIN MENU (COOL VERTICAL) ============
 void drawMainMenuCool() {
     canvas.fillScreen(COLOR_BG);
@@ -6693,8 +7499,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE"};
-    int numItems = 16;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE"};
+    int numItems = 17;
     int centerY = SCREEN_HEIGHT / 2 + 5;
     int itemGap = 45; // Jarak antar item
 
@@ -8781,6 +9587,10 @@ void handleMainMenuSelect() {
     case 15: // EARTHQUAKE
       changeState(STATE_EARTHQUAKE);
       break;
+    case 16: // TIC-TAC-TOE
+      utttMenuCursor = 0;
+      changeState(STATE_UTTT_MENU);
+      break;
   }
 }
 
@@ -9359,6 +10169,15 @@ void refreshCurrentScreen() {
     case STATE_EARTHQUAKE_MAP:
       drawEarthquakeMap();
       break;
+    case STATE_UTTT:
+      drawUTTT();
+      break;
+    case STATE_UTTT_MENU:
+      drawUTTTMenu();
+      break;
+    case STATE_UTTT_GAMEOVER:
+      drawUTTTGameOver();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -9579,6 +10398,16 @@ void setup() {
         fetchEarthquakeData();
 
         Serial.println("Earthquake Monitor ready");
+
+        // ===== ULTIMATE TIC-TAC-TOE INITIALIZATION =====
+        Serial.println("Initializing Ultimate Tic-Tac-Toe...");
+        utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
+        utttStats.gamesWon = preferences.getInt("utttWon", 0);
+        utttStats.gamesLost = preferences.getInt("utttLost", 0);
+        utttStats.gamesTied = preferences.getInt("utttTied", 0);
+        utttStats.totalMoves = 0;
+        Serial.println("Ultimate Tic-Tac-Toe ready");
+
         } else {
             bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
         }
@@ -9838,6 +10667,15 @@ void loop() {
     }
     else if (currentState == STATE_EARTHQUAKE_SETTINGS) {
       handleEarthquakeSettingsInput();
+    }
+    else if (currentState == STATE_UTTT) {
+      handleUTTTInput();
+    }
+    else if (currentState == STATE_UTTT_MENU) {
+      handleUTTTMenuInput();
+    }
+    else if (currentState == STATE_UTTT_GAMEOVER) {
+      handleUTTTGameOverInput();
     }
     else if (currentState == STATE_EARTHQUAKE_MAP) {
       handleEarthquakeMapInput();
@@ -10245,7 +11083,7 @@ void loop() {
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
           break;
         case STATE_MAIN_MENU:
-          if (menuSelection < 15) menuSelection++;
+          if (menuSelection < 16) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
