@@ -5875,7 +5875,7 @@ void loadEQConfig() {
         eqSettings.maxRadiusKm = doc["radius"] | 0;
         eqSettings.notifyEnabled = doc["notify"] | true;
         eqSettings.notifyMinMag = doc["notifyMag"] | 5.0f;
-        eqSettings.autoRefresh = doc["autoRef"] | true;
+        eqSettings.autoRefresh = true;
         eqSettings.refreshInterval = doc["refInt"] | 10;
         eqSettings.dataSource = doc["source"] | 1;
         Serial.println("EQ settings loaded from JSON");
@@ -5886,7 +5886,7 @@ void loadEQConfig() {
         eqSettings.maxRadiusKm = preferences.getInt("eqRadius", 0);
         eqSettings.notifyEnabled = preferences.getBool("eqNotify", true);
         eqSettings.notifyMinMag = preferences.getFloat("eqNotifyMag", 5.0);
-        eqSettings.autoRefresh = preferences.getBool("eqAutoRefresh", true);
+        eqSettings.autoRefresh = true;
         eqSettings.refreshInterval = preferences.getInt("eqRefreshInt", 10);
         eqSettings.dataSource = preferences.getInt("eqSource", 1);
         preferences.end();
@@ -6667,13 +6667,11 @@ const char* eqSettingsItems[] = {
   "Max Radius",
   "Notifications",
   "Notify Min Mag",
-  "Auto Refresh",
   "Refresh Interval",
   "Data Source",
-  "Refresh Now",
   "Back"
 };
-int eqSettingsCount = 10;
+int eqSettingsCount = 8;
 
 void drawEarthquakeMap() {
   canvas.fillScreen(COLOR_BG);
@@ -6811,7 +6809,7 @@ void drawEarthquakeSettings() {
     canvas.print(eqSettingsItems[i]);
 
     // Show current values
-    if (i < 8) {
+    if (i < 7) {
       String val = "";
       switch (i) {
         case 0: // Min Magnitude
@@ -6831,13 +6829,10 @@ void drawEarthquakeSettings() {
         case 4: // Notify Min Mag
           val = String(eqSettings.notifyMinMag, 1) + "+";
           break;
-        case 5: // Auto Refresh
-          val = eqSettings.autoRefresh ? "[ON]" : "[OFF]";
-          break;
-        case 6: // Refresh Interval
+        case 5: // Refresh Interval
           val = String(eqSettings.refreshInterval) + " m";
           break;
-        case 7: // Data Source
+        case 6: // Data Source
           val = (eqSettings.dataSource == 1) ? "BMKG" : "USGS";
           break;
       }
@@ -9360,6 +9355,8 @@ void handlePrayerSettingsInput() {
 
 // ===== EARTHQUAKE INPUT HANDLERS =====
 void handleEarthquakeInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) return;
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     if (earthquakeCount > 0) {
       earthquakeCursor++;
@@ -9402,18 +9399,11 @@ void handleEarthquakeInput() {
     changeState(STATE_EARTHQUAKE_SETTINGS);
     ledQuickFlash();
   }
-
-  if (digitalRead(BTN_LEFT) == BTN_ACT) {
-    // Refresh data
-    fetchEarthquakeData();
-    earthquakeCursor = 0;
-    earthquakeScrollOffset = 0;
-    eqTextScroll = 0;
-    ledSuccess();
-  }
 }
 
 void handleEarthquakeDetailInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) return;
+
   if (digitalRead(BTN_UP) == BTN_ACT) {
     analyzeEarthquakeAI();
     ledSuccess();
@@ -9423,14 +9413,11 @@ void handleEarthquakeDetailInput() {
     changeState(STATE_EARTHQUAKE_MAP);
     ledSuccess();
   }
-
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE);
-    ledQuickFlash();
-  }
 }
 
 void handleEarthquakeMapInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) return;
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     earthquakeCursor = (earthquakeCursor + 1) % earthquakeCount;
     selectedEarthquake = earthquakes[earthquakeCursor];
@@ -9442,14 +9429,11 @@ void handleEarthquakeMapInput() {
     selectedEarthquake = earthquakes[earthquakeCursor];
     ledQuickFlash();
   }
-
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE_DETAIL);
-    ledQuickFlash();
-  }
 }
 
 void handleEarthquakeSettingsInput() {
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) return;
+
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
     eqSettingsCursor = (eqSettingsCursor + 1) % eqSettingsCount;
     ledQuickFlash();
@@ -9500,12 +9484,7 @@ void handleEarthquakeSettingsInput() {
         saveEQConfig();
         break;
 
-      case 5: // Auto Refresh
-        eqSettings.autoRefresh = !eqSettings.autoRefresh;
-        saveEQConfig();
-        break;
-
-      case 6: // Refresh Interval - cycle 5, 10, 15, 30
+      case 5: // Refresh Interval - cycle 5, 10, 15, 30
         if (eqSettings.refreshInterval == 5) eqSettings.refreshInterval = 10;
         else if (eqSettings.refreshInterval == 10) eqSettings.refreshInterval = 15;
         else if (eqSettings.refreshInterval == 15) eqSettings.refreshInterval = 30;
@@ -9513,27 +9492,19 @@ void handleEarthquakeSettingsInput() {
         saveEQConfig();
         break;
 
-      case 7: // Data Source
+      case 6: // Data Source
         eqSettings.dataSource = (eqSettings.dataSource == 1) ? 0 : 1;
         saveEQConfig();
         fetchEarthquakeData();
         break;
 
-      case 8: // Refresh Now
-        fetchEarthquakeData();
-        break;
-
-      case 9: // Back
+      case 7: // Back
         changeState(STATE_EARTHQUAKE);
         break;
     }
     delay(200);
   }
 
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-    changeState(STATE_EARTHQUAKE);
-    ledQuickFlash();
-  }
 }
 
 // ===== EARTHQUAKE ALERTS =====
@@ -11581,9 +11552,17 @@ void loop() {
           break;
         case STATE_WIKI_VIEWER:
         case STATE_SYSTEM_MONITOR:
-      case STATE_PRAYER_TIMES:
-      case STATE_PRAYER_SETTINGS:
+        case STATE_PRAYER_TIMES:
+        case STATE_PRAYER_SETTINGS:
+        case STATE_EARTHQUAKE:
           changeState(STATE_MAIN_MENU);
+          break;
+        case STATE_EARTHQUAKE_DETAIL:
+        case STATE_EARTHQUAKE_SETTINGS:
+          changeState(STATE_EARTHQUAKE);
+          break;
+        case STATE_EARTHQUAKE_MAP:
+          changeState(STATE_EARTHQUAKE_DETAIL);
           break;
         case STATE_KEYBOARD:
           if (keyboardContext == CONTEXT_CHAT) {
