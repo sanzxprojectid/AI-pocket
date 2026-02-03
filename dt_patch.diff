@@ -1,0 +1,18 @@
+<<<<<<< SEARCH
+unsigned long lastFrameMillis = 0;
+struct LEDStatus {
+=======
+unsigned long lastFrameMicros = 0;
+struct LEDStatus {
+>>>>>>> REPLACE
+<<<<<<< SEARCH
+  deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
+  if (deltaTime > 0.1f) deltaTime = 0.1f; // Cap dt to prevent huge jumps
+  lastFrameMillis = currentMillis;
+=======
+  unsigned long currentMicros = micros();
+  if (lastFrameMicros == 0) lastFrameMicros = currentMicros;
+  deltaTime = (currentMicros - lastFrameMicros) / 1000000.0f;
+  if (deltaTime > 0.1f) deltaTime = 0.1f; // Cap dt to prevent huge jumps
+  lastFrameMicros = currentMicros;
+>>>>>>> REPLACE
