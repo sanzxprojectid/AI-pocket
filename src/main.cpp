@@ -10591,10 +10591,10 @@ void loop() {
   }
 
   // Calculate Delta Time
-  float dt = (currentMillis - lastFrameMillis) / 1000.0f;
-  if (dt > 0.1f) dt = 0.1f; // Cap dt to prevent huge jumps
+  deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
+  if (deltaTime > 0.1f) deltaTime = 0.1f; // Cap dt to prevent huge jumps
   lastFrameMillis = currentMillis;
-
+  float dt = deltaTime;
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
