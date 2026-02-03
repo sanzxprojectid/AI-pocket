@@ -288,7 +288,11 @@ enum AppState {
   STATE_EARTHQUAKE_MAP,
   STATE_UTTT,
   STATE_UTTT_MENU,
-  STATE_UTTT_GAMEOVER
+  STATE_UTTT_GAMEOVER,
+  STATE_QUIZ_MENU,
+  STATE_QUIZ_PLAYING,
+  STATE_QUIZ_RESULT,
+  STATE_QUIZ_LEADERBOARD
 };
 
 AppState currentState = STATE_BOOT;
@@ -535,6 +539,95 @@ struct RacePacket {
 };
 RacePacket outgoingRacePacket;
 RacePacket incomingRacePacket;
+
+// ============ TRIVIA QUIZ GAME ============
+#define MAX_QUESTIONS 10
+#define QUIZ_TIMER_SECONDS 10
+#define MAX_LEADERBOARD 10
+
+#define QUIZ_WAITING 0
+#define QUIZ_SELECTING 1
+#define QUIZ_ANSWERED 2
+#define QUIZ_TIMESUP 3
+
+struct QuizQuestion {
+  String category;
+  String difficulty;
+  String question;
+  String correctAnswer;
+  String answers[4];
+  int correctIndex;
+  bool isValid;
+};
+
+struct QuizLeaderboard {
+  String name;
+  int score;
+  String category;
+  String difficulty;
+  int streak;
+};
+
+struct QuizSettings {
+  int categoryId;
+  String categoryName;
+  int difficulty;
+  int questionCount;
+  int timerSeconds;
+  bool soundEnabled;
+  bool streakEnabled;
+};
+
+struct QuizGameState {
+  QuizQuestion questions[MAX_QUESTIONS];
+  int totalQuestions;
+  int currentQuestion;
+  int score;
+  int streak;
+  int maxStreak;
+  int correctCount;
+  int wrongCount;
+  int skipped;
+  int lifeline5050;
+  int lifelineSkip;
+  int state;
+  int selectedAnswer;
+  unsigned long timerStart;
+  int timeLeft;
+  bool gameOver;
+  bool dataLoaded;
+};
+
+struct CategoryItem {
+  int id;
+  String name;
+};
+
+QuizGameState quiz;
+QuizSettings quizSettings;
+QuizLeaderboard leaderboard[MAX_LEADERBOARD];
+int leaderboardCount = 0;
+int quizMenuCursor = 0;
+
+CategoryItem quizCategories[] = {
+  {-1, "Any Category"},
+  {9, "General Knowledge"},
+  {10, "Books"},
+  {11, "Music"},
+  {12, "Video Games"},
+  {13, "Television"},
+  {14, "Anime & Manga"},
+  {17, "Science: Nature"},
+  {18, "Computers"},
+  {19, "Mathematics"},
+  {20, "Geography"},
+  {21, "History"},
+  {22, "Art"},
+  {24, "Celebrities"},
+  {27, "Mythology"},
+  {32, "Cartoon & Animation"}
+};
+int quizCategoryCount = 16;
 
 // --- NEW V3 COLOR SPRITES (RGB565 format) ---
 // Each value is a 16-bit color, 0x0000 is transparent
@@ -1619,6 +1712,29 @@ void showPrayerAlert(String prayerName);
 void playAdzan();
 void fetchEarthquakeData();
 void fetchBMKGData();
+void fetchQuizQuestions();
+void parseQuizQuestions(String jsonData);
+String urlDecode(String input);
+int calculateScore(int timeLeft, String difficulty, int streak);
+void updateLeaderboard(int score, String category, String difficulty, int streak);
+void saveLeaderboard();
+void loadLeaderboard();
+void drawQuizMenu();
+void drawQuizPlaying();
+void drawQuizResult();
+void drawQuizLeaderboard();
+int drawWordWrap(String text, int x, int y, int maxWidth, uint16_t color);
+String getDifficultyName(int diff);
+void initQuizGame();
+void updateQuizTimer();
+void submitAnswer(int answerIdx);
+void nextQuestion();
+void use5050();
+void useSkip();
+void handleQuizMenuInput();
+void handleQuizPlayingInput();
+void handleQuizResultInput();
+void handleQuizLeaderboardInput();
 void analyzeEarthquakeAI();
 void parseEarthquakeData(Stream& stream);
 float calculateDistance(float lat1, float lon1, float lat2, float lon2);
@@ -2247,6 +2363,298 @@ String getRelativeTime(uint64_t timestamp) {
   if (diff < 86400) return String(diff / 3600) + "h ago";
   return String(diff / 86400) + "d ago";
 }
+
+// ===== TRIVIA QUIZ API =====
+void fetchQuizQuestions() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected");
+    quiz.dataLoaded = false;
+    return;
+  }
+  Serial.println("Fetching quiz questions...");
+  String url = "https://opentdb.com/api.php?amount=" + String(quizSettings.questionCount) + "&type=multiple&encode=url3986";
+  if (quizSettings.categoryId != -1) url += "&category=" + String(quizSettings.categoryId);
+  if (quizSettings.difficulty != 3) {
+    url += "&difficulty=";
+    if (quizSettings.difficulty == 0) url += "easy";
+    else if (quizSettings.difficulty == 1) url += "medium";
+    else url += "hard";
+  }
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  http.begin(client, url);
+  http.setTimeout(15000);
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    parseQuizQuestions(http.getString());
+  } else {
+    quiz.dataLoaded = false;
+  }
+  http.end();
+}
+
+String urlDecode(String input) {
+  String result = "";
+  for (int i = 0; i < input.length(); i++) {
+    if (input[i] == '%' && i + 2 < input.length()) {
+      String hex = input.substring(i + 1, i + 3);
+      char c = (char)strtol(hex.c_str(), NULL, 16);
+      result += c;
+      i += 2;
+    } else if (input[i] == '+') result += ' ';
+    else result += input[i];
+  }
+  return result;
+}
+
+void parseQuizQuestions(String jsonData) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonData);
+  if (error || doc["response_code"].as<int>() != 0) {
+    quiz.dataLoaded = false;
+    return;
+  }
+  JsonArray data = doc["results"];
+  if (data.isNull()) data = doc["data"];
+  quiz.totalQuestions = 0;
+  for (JsonObject item : data) {
+    if (quiz.totalQuestions >= MAX_QUESTIONS) break;
+    QuizQuestion q;
+    q.category = urlDecode(item["category"].as<String>());
+    q.difficulty = urlDecode(item["difficulty"].as<String>());
+    q.question = urlDecode(item["question"].as<String>());
+    q.correctAnswer = urlDecode(item["correct_answer"].as<String>());
+    q.isValid = true;
+    JsonArray incorrect = item["incorrect_answers"];
+    String allAnswers[4];
+    allAnswers[0] = q.correctAnswer;
+    for (int i = 0; i < 3; i++) allAnswers[i+1] = (i < incorrect.size()) ? urlDecode(incorrect[i].as<String>()) : "";
+    for (int i = 3; i > 0; i--) {
+      int j = random(i + 1);
+      String temp = allAnswers[i];
+      allAnswers[i] = allAnswers[j];
+      allAnswers[j] = temp;
+    }
+    for (int i = 0; i < 4; i++) {
+      q.answers[i] = allAnswers[i];
+      if (allAnswers[i] == q.correctAnswer) q.correctIndex = i;
+    }
+    quiz.questions[quiz.totalQuestions++] = q;
+  }
+  quiz.dataLoaded = true;
+}
+
+// ===== SCORING & LEADERBOARD =====
+int calculateScore(int timeLeft, String difficulty, int streak) {
+  int base = (difficulty == "easy") ? 100 : (difficulty == "medium" ? 200 : 300);
+  float mult = (streak >= 5) ? 2.0 : (streak >= 3 ? 1.5 : 1.0);
+  return (int)((base + timeLeft * 10) * mult);
+}
+
+void updateLeaderboard(int score, String category, String difficulty, int streak) {
+  if (leaderboardCount < MAX_LEADERBOARD || score > leaderboard[leaderboardCount - 1].score) {
+    QuizLeaderboard entry = {"Player", score, category, difficulty, streak};
+    int pos = leaderboardCount;
+    for (int i = 0; i < leaderboardCount; i++) { if (score > leaderboard[i].score) { pos = i; break; } }
+    int end = (leaderboardCount < MAX_LEADERBOARD) ? leaderboardCount : MAX_LEADERBOARD - 1;
+    for (int i = end; i > pos; i--) leaderboard[i] = leaderboard[i - 1];
+    leaderboard[pos] = entry;
+    if (leaderboardCount < MAX_LEADERBOARD) leaderboardCount++;
+    saveLeaderboard();
+  }
+}
+
+void saveLeaderboard() {
+  String data = "";
+  for (int i = 0; i < leaderboardCount; i++) data += String(leaderboard[i].score) + "," + String(leaderboard[i].streak) + ";";
+  preferences.putString("quizLeaderboard", data);
+}
+
+void loadLeaderboard() {
+  String data = preferences.getString("quizLeaderboard", "");
+  leaderboardCount = 0;
+  if (data.length() == 0) return;
+  int idx = 0;
+  while (idx < data.length() && leaderboardCount < MAX_LEADERBOARD) {
+    int comma = data.indexOf(",", idx), semi = data.indexOf(";", idx);
+    if (comma == -1 || semi == -1) break;
+    leaderboard[leaderboardCount].score = data.substring(idx, comma).toInt();
+    leaderboard[leaderboardCount].streak = data.substring(comma + 1, semi).toInt();
+    leaderboard[leaderboardCount].name = "Player";
+    leaderboardCount++;
+    idx = semi + 1;
+  }
+}
+
+// ===== DRAW QUIZ UI (SIMPLE) =====
+void drawQuizMenu() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(85, 22); canvas.print("TRIVIA QUIZ");
+  canvas.drawFastHLine(70, 42, 180, COLOR_PRIMARY);
+  String items[] = {"Start Quiz", "Category: " + quizSettings.categoryName, "Difficulty: " + getDifficultyName(quizSettings.difficulty), "Questions: " + String(quizSettings.questionCount), "Timer: " + String(quizSettings.timerSeconds) + "s", "Leaderboard", "Back"};
+  canvas.setTextSize(1);
+  for (int i = 0; i < 7; i++) {
+    if (i == quizMenuCursor) { canvas.fillRect(50, 53 + i * 16, 220, 14, COLOR_PRIMARY); canvas.setTextColor(COLOR_BG); }
+    else canvas.setTextColor(COLOR_TEXT);
+    canvas.setCursor(60, 55 + i * 16); canvas.print(items[i]);
+  }
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+String getDifficultyName(int diff) { return (diff == 0) ? "Easy" : (diff == 1 ? "Medium" : (diff == 2 ? "Hard" : "Mixed")); }
+
+void drawQuizPlaying() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  if (quiz.currentQuestion >= quiz.totalQuestions) return;
+  QuizQuestion q = quiz.questions[quiz.currentQuestion];
+  canvas.setTextSize(1); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(10, 20); canvas.print("Q" + String(quiz.currentQuestion + 1) + "/" + String(quiz.totalQuestions));
+  canvas.setCursor(120, 20); canvas.print("Score: " + String(quiz.score));
+  if (quiz.streak > 0) { canvas.setCursor(220, 20); canvas.print("Streak: x" + String(quiz.streak)); }
+  canvas.fillRect(10, 32, SCREEN_WIDTH - 20, 4, COLOR_PANEL);
+  canvas.fillRect(10, 32, (int)((SCREEN_WIDTH - 20) * quiz.timeLeft / quizSettings.timerSeconds), 4, COLOR_PRIMARY);
+  canvas.setTextColor(COLOR_DIM); canvas.setCursor(10, 42); canvas.print(q.category + " [" + q.difficulty + "]");
+  int qy = drawWordWrap(q.question, 10, 55, SCREEN_WIDTH - 20, COLOR_TEXT);
+  qy += 8;
+  for (int i = 0; i < 4; i++) {
+    if (q.answers[i] == "") continue;
+    uint16_t bg = COLOR_PANEL, fg = COLOR_TEXT;
+    if (i == quiz.selectedAnswer && quiz.state == QUIZ_SELECTING) { bg = COLOR_PRIMARY; fg = COLOR_BG; }
+    if (quiz.state == QUIZ_ANSWERED || quiz.state == QUIZ_TIMESUP) {
+      if (i == q.correctIndex) { bg = COLOR_SUCCESS; fg = COLOR_BG; }
+      else if (i == quiz.selectedAnswer) { bg = COLOR_ERROR; fg = COLOR_BG; }
+    }
+    canvas.fillRect(10, qy, SCREEN_WIDTH - 20, 18, bg);
+    canvas.setTextColor(fg); canvas.setCursor(15, qy + 5); canvas.print(String((char)('A' + i)) + ". " + (q.answers[i].length() > 45 ? q.answers[i].substring(0, 42) + "..." : q.answers[i]));
+    qy += 22;
+  }
+  canvas.setTextColor(COLOR_DIM); canvas.setCursor(10, SCREEN_HEIGHT - 12); canvas.print("L=Lifeline  R=Menu  L+R=Back  50/50:" + String(quiz.lifeline5050) + " Skip:" + String(quiz.lifelineSkip));
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+int drawWordWrap(String text, int x, int y, int maxWidth, uint16_t color) {
+  canvas.setTextColor(color);
+  int curX = x;
+  String word = "";
+  for (int i = 0; i <= text.length(); i++) {
+    if (i == text.length() || text[i] == ' ') {
+      if (curX + word.length() * 6 > x + maxWidth) { y += 10; curX = x; }
+      canvas.setCursor(curX, y); canvas.print(word + " ");
+      curX += (word.length() + 1) * 6; word = "";
+    } else word += text[i];
+  }
+  return y + 10;
+}
+
+void drawQuizResult() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(100, 30); canvas.print("QUIZ OVER!");
+  canvas.setTextSize(3);
+  int16_t x1, y1; uint16_t w, h; String s = String(quiz.score);
+  canvas.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor((SCREEN_WIDTH - w) / 2, 60); canvas.print(s);
+  canvas.setTextSize(1); canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor((SCREEN_WIDTH - 40) / 2, 90); canvas.print("points");
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(40, 110); canvas.print("Correct: " + String(quiz.correctCount) + "  Wrong: " + String(quiz.wrongCount));
+  canvas.setCursor(40, 125); canvas.print("Skipped: " + String(quiz.skipped) + "  Max Streak: " + String(quiz.maxStreak));
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(80, SCREEN_HEIGHT - 25); canvas.print("Press SELECT to play again");
+  canvas.setCursor(100, SCREEN_HEIGHT - 12); canvas.print("Press L+R for Menu");
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void drawQuizLeaderboard() {
+  canvas.fillScreen(COLOR_BG); drawStatusBar();
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(85, 22); canvas.print("LEADERBOARD");
+  canvas.drawFastHLine(70, 42, 180, COLOR_PRIMARY);
+  canvas.setTextSize(1);
+  if (leaderboardCount == 0) { canvas.setCursor(100, 80); canvas.print("No scores yet!"); }
+  else {
+    canvas.setCursor(40, 50); canvas.print("RANK   SCORE   STREAK");
+    for (int i = 0; i < leaderboardCount; i++) {
+      canvas.setCursor(45, 65 + i * 12); canvas.print(String(i + 1) + ".      " + String(leaderboard[i].score) + "      x" + String(leaderboard[i].streak));
+    }
+  }
+  canvas.setCursor(110, SCREEN_HEIGHT - 15); canvas.print("Press SELECT or L+R to Back");
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+// ===== GAME LOGIC =====
+void initQuizGame() {
+  quiz.currentQuestion = 0; quiz.score = 0; quiz.streak = 0; quiz.maxStreak = 0; quiz.correctCount = 0; quiz.wrongCount = 0; quiz.skipped = 0;
+  quiz.lifeline5050 = 2; quiz.lifelineSkip = 1; quiz.state = QUIZ_WAITING; quiz.selectedAnswer = 0; quiz.gameOver = false; quiz.dataLoaded = false;
+  fetchQuizQuestions();
+  if (quiz.dataLoaded) { quiz.timerStart = millis(); quiz.timeLeft = quizSettings.timerSeconds; quiz.state = QUIZ_SELECTING; changeState(STATE_QUIZ_PLAYING); }
+  else changeState(STATE_QUIZ_MENU);
+}
+
+void updateQuizTimer() {
+  if (quiz.state != QUIZ_SELECTING || quiz.gameOver) return;
+  quiz.timeLeft = quizSettings.timerSeconds - (int)((millis() - quiz.timerStart) / 1000);
+  if (quiz.timeLeft <= 0) { quiz.timeLeft = 0; quiz.state = QUIZ_TIMESUP; quiz.wrongCount++; quiz.streak = 0; if (quizSettings.soundEnabled && isDFPlayerAvailable) myDFPlayer.play(97); }
+}
+
+void submitAnswer(int idx) {
+  if (quiz.state != QUIZ_SELECTING) return;
+  quiz.selectedAnswer = idx; quiz.state = QUIZ_ANSWERED;
+  QuizQuestion q = quiz.questions[quiz.currentQuestion];
+  if (idx == q.correctIndex) { quiz.correctCount++; quiz.streak++; if (quiz.streak > quiz.maxStreak) quiz.maxStreak = quiz.streak; quiz.score += calculateScore(quiz.timeLeft, q.difficulty, quiz.streak); if (quizSettings.soundEnabled && isDFPlayerAvailable) myDFPlayer.play(95); }
+  else { quiz.wrongCount++; quiz.streak = 0; if (quizSettings.soundEnabled && isDFPlayerAvailable) myDFPlayer.play(97); }
+}
+
+void nextQuestion() {
+  if (++quiz.currentQuestion >= quiz.totalQuestions) { quiz.gameOver = true; changeState(STATE_QUIZ_RESULT); updateLeaderboard(quiz.score, quizSettings.categoryName, getDifficultyName(quizSettings.difficulty), quiz.maxStreak); if (quizSettings.soundEnabled && isDFPlayerAvailable) myDFPlayer.play(96); }
+  else { quiz.state = QUIZ_SELECTING; quiz.selectedAnswer = 0; quiz.timerStart = millis(); quiz.timeLeft = quizSettings.timerSeconds; }
+}
+
+void use5050() {
+  if (quiz.lifeline5050-- <= 0 || quiz.state != QUIZ_SELECTING) return;
+  QuizQuestion* q = &quiz.questions[quiz.currentQuestion]; int e = 0;
+  for (int i = 0; i < 4 && e < 2; i++) { if (i != q->correctIndex) { q->answers[i] = ""; e++; } }
+  if (q->answers[quiz.selectedAnswer] == "") for (int i = 0; i < 4; i++) if (q->answers[i] != "") { quiz.selectedAnswer = i; break; }
+}
+
+void useSkip() { if (quiz.lifelineSkip-- > 0 && quiz.state == QUIZ_SELECTING) { quiz.skipped++; quiz.streak = 0; nextQuestion(); } }
+
+// ===== INPUT HANDLERS (USING digitalRead) =====
+void handleQuizMenuInput() {
+  if (digitalRead(BTN_DOWN) == BTN_ACT) { quizMenuCursor = (quizMenuCursor + 1) % 7; delay(150); screenIsDirty = true; }
+  if (digitalRead(BTN_UP) == BTN_ACT) { quizMenuCursor = (quizMenuCursor + 6) % 7; delay(150); screenIsDirty = true; }
+  if (digitalRead(BTN_SELECT) == BTN_ACT) {
+    switch (quizMenuCursor) {
+      case 0: initQuizGame(); break;
+      case 1: { static int c = 0; c = (c + 1) % quizCategoryCount; quizSettings.categoryId = quizCategories[c].id; quizSettings.categoryName = quizCategories[c].name; break; }
+      case 2: quizSettings.difficulty = (quizSettings.difficulty + 1) % 4; break;
+      case 3: quizSettings.questionCount = (quizSettings.questionCount == 5 ? 10 : (quizSettings.questionCount == 10 ? 15 : 5)); break;
+      case 4: quizSettings.timerSeconds = (quizSettings.timerSeconds == 20 ? 5 : quizSettings.timerSeconds + 5); break;
+      case 5: loadLeaderboard(); changeState(STATE_QUIZ_LEADERBOARD); break;
+      case 6: changeState(STATE_MAIN_MENU); break;
+    }
+    delay(200); screenIsDirty = true;
+  }
+}
+
+void handleQuizPlayingInput() {
+  updateQuizTimer();
+  if (quiz.state == QUIZ_ANSWERED || quiz.state == QUIZ_TIMESUP) { if (digitalRead(BTN_SELECT) == BTN_ACT) { nextQuestion(); delay(200); screenIsDirty = true; } return; }
+  if (digitalRead(BTN_UP) == BTN_ACT) { do { quiz.selectedAnswer = (quiz.selectedAnswer + 3) % 4; } while (quiz.questions[quiz.currentQuestion].answers[quiz.selectedAnswer] == ""); delay(150); screenIsDirty = true; }
+  if (digitalRead(BTN_DOWN) == BTN_ACT) { do { quiz.selectedAnswer = (quiz.selectedAnswer + 1) % 4; } while (quiz.questions[quiz.currentQuestion].answers[quiz.selectedAnswer] == ""); delay(150); screenIsDirty = true; }
+  if (digitalRead(BTN_SELECT) == BTN_ACT) { submitAnswer(quiz.selectedAnswer); delay(200); screenIsDirty = true; }
+  if (digitalRead(BTN_LEFT) == BTN_ACT) { if (quiz.lifeline5050 > 0) use5050(); else if (quiz.lifelineSkip > 0) useSkip(); delay(200); screenIsDirty = true; }
+  if (digitalRead(BTN_RIGHT) == BTN_ACT) { changeState(STATE_QUIZ_MENU); delay(200); screenIsDirty = true; }
+}
+
+void handleQuizResultInput() { if (digitalRead(BTN_SELECT) == BTN_ACT) { initQuizGame(); delay(200); screenIsDirty = true; } }
+void handleQuizLeaderboardInput() { if (digitalRead(BTN_SELECT) == BTN_ACT) { changeState(STATE_QUIZ_MENU); delay(200); screenIsDirty = true; } }
+
 
 // ===== QIBLA CALCULATOR =====
 float calculateQibla(float lat, float lon) {
@@ -7759,8 +8167,8 @@ void drawMainMenuCool() {
 
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE"};
-    int numItems = 17;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ"};
+    int numItems = 18;
     int centerY = SCREEN_HEIGHT / 2;
     int itemGap = 50;
 
@@ -9823,6 +10231,10 @@ void handleMainMenuSelect() {
       utttMenuCursor = 0;
       changeState(STATE_UTTT_MENU);
       break;
+    case 17: // TRIVIA QUIZ
+      quizMenuCursor = 0;
+      changeState(STATE_QUIZ_MENU);
+      break;
   }
 }
 
@@ -10401,6 +10813,10 @@ void refreshCurrentScreen() {
     case STATE_EARTHQUAKE_MAP:
       drawEarthquakeMap();
       break;
+    case STATE_QUIZ_MENU: drawQuizMenu(); break;
+    case STATE_QUIZ_PLAYING: drawQuizPlaying(); break;
+    case STATE_QUIZ_RESULT: drawQuizResult(); break;
+    case STATE_QUIZ_LEADERBOARD: drawQuizLeaderboard(); break;
     case STATE_UTTT:
       drawUTTT();
       break;
@@ -10639,6 +11055,16 @@ void setup() {
         utttStats.gamesTied = preferences.getInt("utttTied", 0);
         utttStats.totalMoves = 0;
         Serial.println("Ultimate Tic-Tac-Toe ready");
+
+        Serial.println("Initializing Trivia Quiz...");
+        quizSettings.categoryId = preferences.getInt("quizCatId", -1);
+        quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
+        quizSettings.difficulty = preferences.getInt("quizDiff", 1);
+        quizSettings.questionCount = preferences.getInt("quizCount", 10);
+        quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
+        quizSettings.soundEnabled = preferences.getBool("quizSound", true);
+        loadLeaderboard();
+        Serial.println("Trivia Quiz ready");
 
         } else {
             bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
@@ -10912,6 +11338,10 @@ void loop() {
     else if (currentState == STATE_UTTT_GAMEOVER) {
       handleUTTTGameOverInput();
     }
+    else if (currentState == STATE_QUIZ_MENU) { handleQuizMenuInput(); }
+    else if (currentState == STATE_QUIZ_PLAYING) { handleQuizPlayingInput(); }
+    else if (currentState == STATE_QUIZ_RESULT) { handleQuizResultInput(); }
+    else if (currentState == STATE_QUIZ_LEADERBOARD) { handleQuizLeaderboardInput(); }
     else if (currentState == STATE_EARTHQUAKE_MAP) {
       handleEarthquakeMapInput();
     }
