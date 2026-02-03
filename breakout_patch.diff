@@ -1,0 +1,11 @@
+<<<<<<< SEARCH
+          breakoutScore += 10;
+          ledSuccess();
+          return;
+        }
+=======
+          breakoutScore += 10;
+          ledSuccess();
+          // continue to allow other brick collisions or physics completion
+        }
+>>>>>>> REPLACE

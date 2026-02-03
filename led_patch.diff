@@ -1,0 +1,61 @@
+<<<<<<< SEARCH
+void ledQuickFlash() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(30);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void ledSuccess() {
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(100);
+  }
+}
+
+void ledError() {
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(80);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(80);
+  }
+}
+=======
+void ledQuickFlash() {
+  builtInLedStatus.flashesRemaining = 1;
+  builtInLedStatus.interval = 30;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
+}
+
+void ledSuccess() {
+  builtInLedStatus.flashesRemaining = 3;
+  builtInLedStatus.interval = 100;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
+}
+
+void ledError() {
+  builtInLedStatus.flashesRemaining = 5;
+  builtInLedStatus.interval = 80;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
+}
+
+void updateBuiltInLED() {
+  if (builtInLedStatus.flashesRemaining > 0) {
+    if (millis() >= builtInLedStatus.nextToggle) {
+      builtInLedStatus.state = !builtInLedStatus.state;
+      digitalWrite(LED_BUILTIN, builtInLedStatus.state ? HIGH : LOW);
+      builtInLedStatus.nextToggle = millis() + builtInLedStatus.interval;
+      if (!builtInLedStatus.state) {
+        builtInLedStatus.flashesRemaining--;
+      }
+    }
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+}
+>>>>>>> REPLACE

@@ -80,7 +80,15 @@ unsigned long neoPixelEffectEnd = 0;
 #define TARGET_FPS 120
 #define FRAME_TIME (1000 / TARGET_FPS)
 
-unsigned long lastFrameMillis = 0;
+unsigned long lastFrameMicros = 0;
+struct LEDStatus {
+  int flashesRemaining;
+  unsigned long nextToggle;
+  bool state;
+  int interval;
+};
+LEDStatus builtInLedStatus = {0, 0, false, 0};
+
 float deltaTime = 0.0;
 
 // ============ COLOR SCHEME (RGB565) - MODERN BLACK & WHITE ============
@@ -1420,6 +1428,7 @@ void ledQuickFlash();
 void ledSuccess();
 void ledError();
 void handleMainMenuSelect();
+void updateBuiltInLED();
 void handleKeyPress();
 void handlePasswordKeyPress();
 void handleESPNowKeyPress();
@@ -4805,7 +4814,7 @@ void updateBreakoutLogic() {
           breakoutBall.vy *= -1;
           breakoutScore += 10;
           ledSuccess();
-          return;
+          // continue to allow other brick collisions or physics completion
         }
       }
     }
@@ -6125,26 +6134,38 @@ void updateNeoPixel() {
 
 // ============ LED PATTERNS ============
 void ledQuickFlash() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(30);
-  digitalWrite(LED_BUILTIN, LOW);
+  builtInLedStatus.flashesRemaining = 1;
+  builtInLedStatus.interval = 30;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
 }
 
 void ledSuccess() {
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(100);
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(100);
-  }
+  builtInLedStatus.flashesRemaining = 3;
+  builtInLedStatus.interval = 100;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
 }
 
 void ledError() {
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(80);
+  builtInLedStatus.flashesRemaining = 5;
+  builtInLedStatus.interval = 80;
+  builtInLedStatus.nextToggle = millis();
+  builtInLedStatus.state = false;
+}
+
+void updateBuiltInLED() {
+  if (builtInLedStatus.flashesRemaining > 0) {
+    if (millis() >= builtInLedStatus.nextToggle) {
+      builtInLedStatus.state = !builtInLedStatus.state;
+      digitalWrite(LED_BUILTIN, builtInLedStatus.state ? HIGH : LOW);
+      builtInLedStatus.nextToggle = millis() + builtInLedStatus.interval;
+      if (!builtInLedStatus.state) {
+        builtInLedStatus.flashesRemaining--;
+      }
+    }
+  } else {
     digitalWrite(LED_BUILTIN, LOW);
-    delay(80);
   }
 }
 
@@ -10591,9 +10612,11 @@ void loop() {
   }
 
   // Calculate Delta Time
-  deltaTime = (currentMillis - lastFrameMillis) / 1000.0f;
+  unsigned long currentMicros = micros();
+  if (lastFrameMicros == 0) lastFrameMicros = currentMicros;
+  deltaTime = (currentMicros - lastFrameMicros) / 1000000.0f;
   if (deltaTime > 0.1f) deltaTime = 0.1f; // Cap dt to prevent huge jumps
-  lastFrameMillis = currentMillis;
+  lastFrameMicros = currentMicros;
   float dt = deltaTime;
 
   // Animation Logic
@@ -10673,6 +10696,7 @@ void loop() {
   }
 
   updateNeoPixel();
+  updateBuiltInLED();
   updateStatusBarData();
   
   if (currentState == STATE_LOADING) {
