@@ -22,6 +22,24 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+struct NextPrayerInfo {
+  String name;
+  String time;
+  int remainingMinutes;
+  int index; // 0-6
+  float progress; // 0.0 to 1.0
+};
+
+struct ConversationContext {
+  String fullHistory;
+  String userInfo;
+  String recentTopics;
+  String emotionalPattern;
+  String importantDates;
+  int totalInteractions;
+  String lastConversation;
+};
+
 uint16_t mixColors(uint16_t color1, uint16_t color2, uint8_t ratio) {
   uint8_t r1 = (color1 >> 11) & 0x1F;
   uint8_t g1 = (color1 >> 5) & 0x3F;
@@ -828,13 +846,6 @@ struct PrayerSettings {
   int hijriAdjustment;
 };
 
-struct NextPrayerInfo {
-  String name;
-  String time;
-  int remainingMinutes;
-  int index; // 0-6
-  float progress; // 0.0 to 1.0
-};
 
 PrayerTimes currentPrayer;
 bool prayerFetchFailed = false;
@@ -1435,15 +1446,6 @@ bool pomoBtnLeftLongPressTriggered = false;
 bool pomoBtnRightLongPressTriggered = false;
 
 // ============ CONVERSATION CONTEXT STRUCTURE ============
-struct ConversationContext {
-  String fullHistory;
-  String userInfo;
-  String recentTopics;
-  String emotionalPattern;
-  String importantDates;
-  int totalInteractions;
-  String lastConversation;
-};
 
 // ============ AI PERSONALITY & CONTEXT - DUAL MODE ============
 const char* AI_SYSTEM_PROMPT_SUBARU = 
