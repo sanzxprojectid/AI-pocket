@@ -645,9 +645,8 @@ struct UTTTGame {
 UTTTGame uttt;
 
 // UI State
-int utttCursorBoard = 4;    // Current board cursor (0-8), start at center
-int utttCursorCell = 4;     // Current cell cursor (0-8), start at center
-bool utttCellSelected = false; // Has player selected a cell?
+int utttCursorX = 4;        // Current cell cursor X (0-8)
+int utttCursorY = 4;        // Current cell cursor Y (0-8)
 
 // AI move tracking
 int utttAIMoveBoard = -1;
@@ -6942,9 +6941,8 @@ void initUTTT() {
   uttt.lastBoard = -1;
   uttt.gameState = GAME_PLAYING;
 
-  utttCursorBoard = 4;
-  utttCursorCell = 4;
-  utttCellSelected = false;
+  utttCursorX = 4;
+  utttCursorY = 4;
 
   Serial.println("Ultimate Tic-Tac-Toe initialized");
 }
@@ -7092,6 +7090,10 @@ void makeMove(int boardIdx, int cellIdx) {
     uttt.activeBoard = cellIdx;
     if (uttt.boards[cellIdx].isComplete) {
       uttt.activeBoard = -1;
+    } else {
+      // Auto-move cursor to the center of the active board for human player convenience
+      utttCursorX = (uttt.activeBoard % 3) * 3 + 1;
+      utttCursorY = (uttt.activeBoard / 3) * 3 + 1;
     }
     uttt.currentPlayer = (uttt.currentPlayer == CELL_X) ? CELL_O : CELL_X;
   }
@@ -7321,20 +7323,21 @@ void drawUTTT() {
 
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(5, 20);
+  canvas.setCursor(10, 18);
   canvas.print("ULTIMATE TIC-TAC-TOE");
 
-  canvas.setTextColor(uttt.currentPlayer == CELL_X ? 0xF800 : 0x001F);
-  canvas.setCursor(200, 20);
   if (uttt.gameState == GAME_PLAYING) {
+    canvas.setTextColor(uttt.currentPlayer == CELL_X ? 0xF800 : 0x001F);
+    canvas.setCursor(SCREEN_WIDTH - 60, 18);
     canvas.print(uttt.currentPlayer == CELL_X ? "X" : "O");
-    canvas.print(" Turn");
+    canvas.print(" TURN");
   }
 
-  int startX = 10;
-  int startY = 35;
-  int bigBoardSize = 27;
-  int spacing = 3;
+  int bigBoardSize = 38; // 3 * 12 + 2 * 1
+  int spacing = 4;
+  int totalSize = 3 * bigBoardSize + 2 * spacing;
+  int startX = (SCREEN_WIDTH - totalSize) / 2;
+  int startY = 32;
 
   for (int bigRow = 0; bigRow < 3; bigRow++) {
     for (int bigCol = 0; bigCol < 3; bigCol++) {
@@ -7345,61 +7348,62 @@ void drawUTTT() {
     }
   }
 
+  // Highlight active board
   if (uttt.activeBoard != -1) {
     int row = uttt.activeBoard / 3;
     int col = uttt.activeBoard % 3;
-    int bx = startX + col * (bigBoardSize + spacing) - 2;
-    int by = startY + row * (bigBoardSize + spacing) - 2;
-    canvas.drawRect(bx, by, bigBoardSize + 4, bigBoardSize + 4, COLOR_SUCCESS);
+    int bx = startX + col * (bigBoardSize + spacing) - 3;
+    int by = startY + row * (bigBoardSize + spacing) - 3;
+    canvas.drawRect(bx, by, bigBoardSize + 6, bigBoardSize + 6, COLOR_SUCCESS);
   }
 
-  int footerY = SCREEN_HEIGHT - 20;
+  int footerY = SCREEN_HEIGHT - 13;
   canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(5, footerY);
-  canvas.print("ARROWS=Move SEL=Pick");
-  canvas.setCursor(5, footerY + 10);
-  canvas.print("L=Undo R=Menu L+R=Exit");
+  canvas.setTextColor(COLOR_DIM);
 
   if (uttt.activeBoard != -1) {
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.setCursor(150, footerY);
-    canvas.print("Board: ");
+    canvas.setCursor(10, footerY);
+    canvas.print("FORCED BOARD: ");
     canvas.print(uttt.activeBoard + 1);
   } else {
-    canvas.setTextColor(COLOR_SECONDARY);
-    canvas.setCursor(150, footerY);
-    canvas.print("Any board");
+    canvas.setCursor(10, footerY);
+    canvas.print("FREE PLAY ANYWHERE");
   }
+
+  canvas.setCursor(SCREEN_WIDTH - 80, footerY);
+  canvas.print("L=Undo R=Menu");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void drawSmallBoard(int x, int y, int boardIdx) {
   SmallBoard* board = &uttt.boards[boardIdx];
-  int cellSize = 8;
+  int cellSize = 12;
   int gap = 1;
+  int bigSize = 3 * cellSize + 2 * gap;
 
   uint16_t bgColor = COLOR_BG;
-  if (boardIdx == utttCursorBoard && !utttCellSelected) {
+  // Highlight the board if the cursor is within it
+  if (boardIdx == (utttCursorY / 3) * 3 + (utttCursorX / 3)) {
     bgColor = 0x2104;
   }
-  canvas.fillRect(x, y, 27, 27, bgColor);
+  canvas.fillRect(x, y, bigSize, bigSize, bgColor);
 
   if (board->winner == CELL_X) {
-    canvas.setTextSize(3);
+    canvas.setTextSize(4);
     canvas.setTextColor(0xF800);
-    canvas.setCursor(x + 6, y + 6);
+    canvas.setCursor(x + 8, y + 4);
     canvas.print("X");
     return;
   } else if (board->winner == CELL_O) {
-    canvas.setTextSize(3);
+    canvas.setTextSize(4);
     canvas.setTextColor(0x001F);
-    canvas.setCursor(x + 6, y + 6);
+    canvas.setCursor(x + 8, y + 4);
     canvas.print("O");
     return;
   } else if (board->winner == 3) {
-    canvas.fillRect(x + 8, y + 8, 11, 11, 0x7BEF);
+    // Tie - fill with a gray pattern
+    canvas.fillRect(x + 4, y + 4, bigSize - 8, bigSize - 8, 0x7BEF);
     return;
   }
 
@@ -7409,20 +7413,26 @@ void drawSmallBoard(int x, int y, int boardIdx) {
       int cx = x + col * (cellSize + gap);
       int cy = y + row * (cellSize + gap);
 
-      uint16_t cellColor = 0x4208;
-      if (boardIdx == utttCursorBoard && cellIdx == utttCursorCell && utttCellSelected) {
+      uint16_t cellColor = 0x2104; // Normal cell
+
+      // Cursor cell logic
+      int currentCellIdx = (utttCursorY % 3) * 3 + (utttCursorX % 3);
+      int currentBoardIdx = (utttCursorY / 3) * 3 + (utttCursorX / 3);
+
+      if (boardIdx == currentBoardIdx && cellIdx == currentCellIdx) {
         cellColor = COLOR_PRIMARY;
       }
+
       canvas.fillRect(cx, cy, cellSize, cellSize, cellColor);
 
       canvas.setTextSize(1);
       if (board->cells[cellIdx] == CELL_X) {
         canvas.setTextColor(0xF800);
-        canvas.setCursor(cx + 2, cy + 1);
+        canvas.setCursor(cx + 3, cy + 2);
         canvas.print("X");
       } else if (board->cells[cellIdx] == CELL_O) {
         canvas.setTextColor(0x001F);
-        canvas.setCursor(cx + 2, cy + 1);
+        canvas.setCursor(cx + 3, cy + 2);
         canvas.print("O");
       }
     }
@@ -7532,21 +7542,13 @@ void handleUTTTInput() {
   }
 
   if (digitalRead(BTN_UP) == BTN_ACT) {
-    if (!utttCellSelected) {
-      if (utttCursorBoard >= 3) utttCursorBoard -= 3;
-    } else {
-      if (utttCursorCell >= 3) utttCursorCell -= 3;
-    }
+    if (utttCursorY > 0) utttCursorY--;
     ledQuickFlash();
     delay(150);
   }
 
   if (digitalRead(BTN_DOWN) == BTN_ACT) {
-    if (!utttCellSelected) {
-      if (utttCursorBoard < 6) utttCursorBoard += 3;
-    } else {
-      if (utttCursorCell < 6) utttCursorCell += 3;
-    }
+    if (utttCursorY < 8) utttCursorY++;
     ledQuickFlash();
     delay(150);
   }
@@ -7556,11 +7558,7 @@ void handleUTTTInput() {
        changeState(STATE_MAIN_MENU);
        return;
     }
-    if (!utttCellSelected) {
-      if (utttCursorBoard % 3 != 0) utttCursorBoard--;
-    } else {
-      if (utttCursorCell % 3 != 0) utttCursorCell--;
-    }
+    if (utttCursorX > 0) utttCursorX--;
     ledQuickFlash();
     delay(150);
   }
@@ -7570,35 +7568,26 @@ void handleUTTTInput() {
        changeState(STATE_MAIN_MENU);
        return;
     }
-    if (!utttCellSelected) {
-      if (utttCursorBoard % 3 != 2) utttCursorBoard++;
-    } else {
-      if (utttCursorCell % 3 != 2) utttCursorCell++;
-    }
+    if (utttCursorX < 8) utttCursorX++;
     ledQuickFlash();
     delay(150);
   }
 
   if (digitalRead(BTN_SELECT) == BTN_ACT) {
-    if (!utttCellSelected) {
-      utttCellSelected = true;
-      utttCursorCell = 4;
+    int boardIdx = (utttCursorY / 3) * 3 + (utttCursorX / 3);
+    int cellIdx = (utttCursorY % 3) * 3 + (utttCursorX % 3);
+
+    if (isValidMove(boardIdx, cellIdx)) {
+      makeMove(boardIdx, cellIdx);
+      ledSuccess();
     } else {
-      if (isValidMove(utttCursorBoard, utttCursorCell)) {
-        makeMove(utttCursorBoard, utttCursorCell);
-        utttCellSelected = false;
-      }
+      ledError();
     }
-    ledSuccess();
     delay(200);
   }
 
   if (digitalRead(BTN_BACK) == BTN_ACT) {
-    if (utttCellSelected) {
-      utttCellSelected = false;
-    } else {
-      undoUTTTMove();
-    }
+    undoUTTTMove();
     ledQuickFlash();
     delay(200);
   }
