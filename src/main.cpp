@@ -22,6 +22,100 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+uint16_t mixColors(uint16_t color1, uint16_t color2, uint8_t ratio) {
+  uint8_t r1 = (color1 >> 11) & 0x1F;
+  uint8_t g1 = (color1 >> 5) & 0x3F;
+  uint8_t b1 = color1 & 0x1F;
+
+  uint8_t r2 = (color2 >> 11) & 0x1F;
+  uint8_t g2 = (color2 >> 5) & 0x3F;
+  uint8_t b2 = color2 & 0x1F;
+
+  uint8_t r = (r1 * (255 - ratio) + r2 * ratio) >> 8;
+  uint8_t g = (g1 * (255 - ratio) + g2 * ratio) >> 8;
+  uint8_t b = (b1 * (255 - ratio) + b2 * ratio) >> 8;
+
+  return (r << 11) | (g << 5) | b;
+}
+
+void fillRectAlpha(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t alpha) {
+  extern GFXcanvas16 canvas;
+  if (alpha == 0) return;
+  if (alpha == 255) {
+    canvas.fillRect(x, y, w, h, color);
+    return;
+  }
+
+  uint16_t* buf = canvas.getBuffer();
+  uint16_t r2 = (color >> 11) & 0x1F;
+  uint16_t g2 = (color >> 5) & 0x3F;
+  uint16_t b2 = color & 0x1F;
+
+  for (int16_t j = y; j < y + h; j++) {
+    if (j < 0 || j >= 240) continue;
+    for (int16_t i = x; i < x + w; i++) {
+      if (i < 0 || i >= 320) continue;
+      uint16_t color1 = buf[j * 320 + i];
+      uint16_t r1 = (color1 >> 11) & 0x1F;
+      uint16_t g1 = (color1 >> 5) & 0x3F;
+      uint16_t b1 = color1 & 0x1F;
+
+      uint16_t r = (r1 * (255 - alpha) + r2 * alpha) >> 8;
+      uint16_t g = (g1 * (255 - alpha) + g2 * alpha) >> 8;
+      uint16_t b = (b1 * (255 - alpha) + b2 * alpha) >> 8;
+
+      buf[j * 320 + i] = (r << 11) | (g << 5) | b;
+    }
+  }
+}
+
+void drawGradientRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color1, uint16_t color2, bool vertical) {
+  extern GFXcanvas16 canvas;
+  uint8_t r1 = (color1 >> 11) & 0x1F;
+  uint8_t g1 = (color1 >> 5) & 0x3F;
+  uint8_t b1 = color1 & 0x1F;
+
+  uint8_t r2 = (color2 >> 11) & 0x1F;
+  uint8_t g2 = (color2 >> 5) & 0x3F;
+  uint8_t b2 = color2 & 0x1F;
+
+  if (vertical) {
+    for (int16_t i = 0; i < h; i++) {
+      uint8_t r = (r1 * (h - i) + r2 * i) / h;
+      uint8_t g = (g1 * (h - i) + g2 * i) / h;
+      uint8_t b = (b1 * (h - i) + b2 * i) / h;
+      canvas.drawFastHLine(x, y + i, w, (r << 11) | (g << 5) | b);
+    }
+  } else {
+    for (int16_t i = 0; i < w; i++) {
+      uint8_t r = (r1 * (w - i) + r2 * i) / w;
+      uint8_t g = (g1 * (w - i) + g2 * i) / w;
+      uint8_t b = (b1 * (w - i) + b2 * i) / w;
+      canvas.drawFastVLine(x + i, y, h, (r << 11) | (g << 5) | b);
+    }
+  }
+}
+
+void drawSynthSun(int16_t x, int16_t y, int16_t radius) {
+  extern GFXcanvas16 canvas;
+  for (int16_t i = 0; i < radius * 2; i++) {
+    int16_t lineY = y - radius + i;
+    float h = abs(i - radius);
+    int16_t w = sqrt(radius * radius - h * h) * 2;
+    if (i > radius && (i % 10 < 3)) continue;
+    uint16_t color = mixColors(0xF81F, 0xFFE0, (i * 255) / (radius * 2));
+    canvas.drawFastHLine(x - w / 2, lineY, w, color);
+  }
+}
+
+void drawSelectionGlow(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+  float pulse = (sin(millis() / 200.0f) + 1.0f) / 2.0f;
+  uint8_t alpha = 40 + (pulse * 40);
+  for (int i = 1; i <= 3; i++) {
+    fillRectAlpha(x - i, y - i, w + (i * 2), h + (i * 2), color, alpha / (i * 2));
+  }
+}
+
 
 // From https://github.com/spacehuhn/esp8266_deauther/blob/master/esp8266_deauther/functions.h
 // extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3);
@@ -2179,48 +2273,38 @@ uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
 
 // ============ BOOT SCREEN FUNCTION ============
 void drawBootScreen(const char* lines[], int lineCount, int progress) {
-  canvas.fillScreen(ST77XX_BLACK);
-  canvas.setTextColor(ST77XX_GREEN);
+  drawGradientRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_VAPOR_BG_START, COLOR_VAPOR_BG_END, true);
+  drawSynthSun(SCREEN_WIDTH / 2, 65, 45);
+
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setTextSize(2);
+  canvas.setCursor(95, 80);
+  canvas.print("AI-POCKET S3");
+
   canvas.setTextSize(1);
-
-  // Header
-  canvas.setCursor(10, 10);
-  canvas.print("AI-POCKET S3 // v2.2");
-  canvas.drawFastHLine(10, 22, SCREEN_WIDTH - 20, ST77XX_GREEN);
-
-  // Status Lines
-  int y = 35;
+  canvas.setTextColor(COLOR_VAPOR_CYAN);
   for (int i = 0; i < lineCount; i++) {
-    canvas.setCursor(10, y);
+    canvas.setCursor(40, 115 + (i * 12));
     canvas.print(lines[i]);
-    y += 12;
   }
 
-  // Progress Bar
-  int barX = 20;
-  int barY = SCREEN_HEIGHT - 30;
-  int barW = SCREEN_WIDTH - 40;
-  int barH = 15;
+  int barW = 260;
+  int barH = 14;
+  int barX = (SCREEN_WIDTH - barW) / 2;
+  int barY = SCREEN_HEIGHT - 35;
 
-  canvas.drawRoundRect(barX, barY, barW, barH, 5, ST77XX_GREEN);
-
+  canvas.drawRoundRect(barX, barY, barW, barH, 4, COLOR_VAPOR_CYAN);
   progress = constrain(progress, 0, 100);
   int fillW = map(progress, 0, 100, 0, barW - 4);
 
   if (fillW > 0) {
-    // Simple fill for boot screen, gradient is overkill here
-    canvas.fillRoundRect(barX + 2, barY + 2, fillW, barH - 4, 3, ST77XX_GREEN);
+    drawGradientRect(barX + 2, barY + 2, fillW, barH - 4, COLOR_VAPOR_PINK, COLOR_VAPOR_CYAN, false);
   }
 
   String progressText = String(progress) + "%";
-  int16_t x1, y1;
-  uint16_t w, h;
-  canvas.getTextBounds(progressText, 0, 0, &x1, &y1, &w, &h);
-
-  canvas.setTextColor(ST77XX_BLACK);
-  canvas.setCursor(barX + (barW - w) / 2, barY + (barH - h) / 2);
+  canvas.setCursor(barX + (barW - progressText.length() * 6) / 2, barY + 4);
+  canvas.setTextColor(COLOR_PRIMARY);
   canvas.print(progressText);
-  canvas.setTextColor(ST77XX_GREEN);
 }
 
 // ============ MUSIC PLAYER FUNCTIONS ============
@@ -6260,77 +6344,77 @@ void drawStatusBar() {
       }
     }
   }
+
+  fillRectAlpha(0, 0, SCREEN_WIDTH, 15, 0x0000, 180);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_VAPOR_CYAN);
+
   int prayerWidth = 0;
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setTextSize(1);
+
   if (cachedTimeStr.length() > 0) {
-    canvas.setCursor(5, 2);
+    canvas.setTextColor(COLOR_VAPOR_CYAN);
+    canvas.setCursor(5, 4);
     canvas.print(cachedTimeStr);
   }
   
+  int iconX = 50;
   if (sdCardMounted) {
-    canvas.setCursor(38, 2);
+    canvas.fillRoundRect(iconX, 2, 20, 10, 2, 0x07E0);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setCursor(iconX + 4, 3);
     canvas.print("SD");
+    iconX += 25;
   }
   
   if (chatMessageCount > 0) {
-    canvas.setCursor(55, 2);
-    canvas.print("C:");
+    canvas.fillRoundRect(iconX, 2, 20, 10, 2, COLOR_VAPOR_PINK);
+    canvas.setTextColor(COLOR_BG);
+    canvas.setCursor(iconX + 4, 3);
     canvas.print(chatMessageCount);
+    iconX += 25;
   }
   
   if (espnowInitialized) {
-    canvas.setCursor(85, 2);
-    canvas.print("ESP:");
+    canvas.setTextColor(COLOR_VAPOR_PURPLE);
+    canvas.setCursor(iconX, 4);
+    canvas.print("E:");
     canvas.print(espnowPeerCount);
+    iconX += 35;
   }
 
   if (currentPrayer.isValid && currentState != STATE_PRAYER_TIMES) {
     NextPrayerInfo next = getNextPrayer();
-    canvas.setTextSize(1);
-    canvas.setTextColor(0x07E0); // Green
-
     String countdown = formatRemainingTime(next.remainingMinutes);
     prayerWidth = (countdown.length() + 2) * 6;
-
-    canvas.setCursor(SCREEN_WIDTH - 105 - prayerWidth, 2);
+    canvas.setCursor(SCREEN_WIDTH - 115 - prayerWidth, 4);
+    canvas.setTextColor(0x07E0);
     canvas.print("P:");
     canvas.print(countdown);
   }
 
-  // Earthquake indicator (if recent significant quake)
   if (earthquakeCount > 0 && earthquakes[0].magnitude >= 5.0) {
-    // Check if earthquake happened in the last hour
-    time_t now_t;
-    time(&now_t);
+    time_t now_t; time(&now_t);
     uint64_t currentMs = (now_t > 1000000000) ? (uint64_t)now_t * 1000 : (uint64_t)millis();
-
     if (earthquakeDataLoaded && (currentMs - earthquakes[0].time < 3600000)) {
-        canvas.setTextSize(1);
-        canvas.setTextColor(0xF800); // Red
-        int eqX = SCREEN_WIDTH - 120 - prayerWidth - (showFPS ? 60 : 0);
-        canvas.setCursor(eqX, 2);
+        canvas.setTextColor(0xF800);
+        int eqX = SCREEN_WIDTH - 130 - prayerWidth - (showFPS ? 60 : 0);
+        canvas.setCursor(eqX, 4);
         canvas.print("EQ!");
     }
   }
 
   if (showFPS) {
     uint16_t fpsColor = COLOR_SUCCESS;
-    if (perfFPS < 100) fpsColor = 0xFFE0; // Yellow
-    if (perfFPS < 60) fpsColor = COLOR_ERROR;  // Red
-
+    if (perfFPS < 100) fpsColor = 0xFFE0;
+    if (perfFPS < 60) fpsColor = COLOR_ERROR;
     String fpsStr = String(perfFPS);
-    int textWidth = (fpsStr.length() + 4) * 6; // "XXX FPS"
-    int panelX = SCREEN_WIDTH - 110 - prayerWidth - textWidth;
-
-    canvas.fillRoundRect(panelX, 0, textWidth, 12, 3, COLOR_PANEL);
-    canvas.drawRoundRect(panelX, 0, textWidth, 12, 3, COLOR_BORDER);
-
-    canvas.setTextSize(1);
-    canvas.setCursor(panelX + 4, 2);
+    int textWidth = (fpsStr.length() + 4) * 6;
+    int panelX = SCREEN_WIDTH - 120 - prayerWidth - textWidth;
     canvas.setTextColor(fpsColor);
+    canvas.setCursor(panelX, 4);
     canvas.print(fpsStr);
-    canvas.setTextColor(COLOR_SECONDARY);
+    canvas.setTextColor(COLOR_DIM);
     canvas.print(" FPS");
   }
 
@@ -6342,20 +6426,18 @@ void drawStatusBar() {
     else if (cachedRSSI > -65) bars = 3;
     else if (cachedRSSI > -75) bars = 2;
     else if (cachedRSSI > -85) bars = 1;
-    int x = SCREEN_WIDTH - 100;
-    int y = 8;
+    int x = SCREEN_WIDTH - 105;
+    int y = 10;
     for (int i = 0; i < 4; i++) {
       int h = (i + 1) * 2;
-      if (i < bars) {
-        canvas.fillRect(x + (i * 3), y - h + 2, 2, h, COLOR_ACCENT);
-      } else {
-        canvas.drawRect(x + (i * 3), y - h + 2, 2, h, COLOR_DIM);
-      }
+      canvas.fillRect(x + (i * 3), y - h, 2, h, (i < bars) ? COLOR_VAPOR_CYAN : 0x2104);
     }
+  } else {
+    canvas.setCursor(SCREEN_WIDTH - 105, 4);
+    canvas.setTextColor(COLOR_ERROR);
+    canvas.print("OFF");
   }
 }
-
-// ============ UTILITY FUNCTIONS ============
 void showStatus(String message, int delayMs) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar(); // Draw status bar for context
@@ -7654,62 +7736,69 @@ void handleUTTTGameOverInput() {
 
 // ============ MAIN MENU (COOL VERTICAL) ============
 void drawMainMenuCool() {
-    canvas.fillScreen(COLOR_BG);
+    drawGradientRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_VAPOR_BG_START, COLOR_VAPOR_BG_END, true);
 
-    // Latar belakang partikel dinamis
-    updateParticles();
-    for (int i = 0; i < NUM_PARTICLES; i++) {
-        canvas.fillCircle(particles[i].x, particles[i].y, particles[i].size, COLOR_PANEL);
+    uint16_t gridColor = mixColors(COLOR_VAPOR_PURPLE, COLOR_BG, 150);
+    static float gridScroll = 0;
+    gridScroll += 25.0f * deltaTime;
+    if (gridScroll >= 40) gridScroll = 0;
+
+    int horizonY = 125;
+    for (int i = -12; i <= 12; i++) {
+        canvas.drawLine(SCREEN_WIDTH/2 + i*12, horizonY, SCREEN_WIDTH/2 + i*140, SCREEN_HEIGHT, gridColor);
     }
+    for (int i = 0; i < 6; i++) {
+        int y = horizonY + pow(1.5, i) * (5 + gridScroll);
+        if (y < SCREEN_HEIGHT) canvas.drawFastHLine(0, y, SCREEN_WIDTH, gridColor);
+    }
+
+    fillRectAlpha(70, 20, 235, SCREEN_HEIGHT - 40, 0x0000, 160);
+    canvas.drawRect(70, 20, 235, SCREEN_HEIGHT - 40, COLOR_VAPOR_CYAN);
 
     drawStatusBar();
 
     const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE"};
     int numItems = 17;
-    int centerY = SCREEN_HEIGHT / 2 + 5;
-    int itemGap = 45; // Jarak antar item
+    int centerY = SCREEN_HEIGHT / 2;
+    int itemGap = 50;
 
-    // Gambar setiap item menu
     for (int i = 0; i < numItems; i++) {
         float distance = i - (menuScrollCurrent / (float)itemGap);
-        float scale = 1.0f - (abs(distance) * 0.25f);
+        float scale = 1.0f - (abs(distance) * 0.35f);
         scale = max(0.0f, scale);
 
-        int y = centerY + (distance * itemGap) - (32 / 2);
+        int y = centerY + (distance * itemGap);
 
-        if (y < -40 || y > SCREEN_HEIGHT + 40) {
-            continue; // Lewati item di luar layar
+        if (y < -50 || y > SCREEN_HEIGHT + 50) {
+            continue;
         }
 
         uint16_t color = COLOR_PRIMARY;
-        if (abs(distance) > 0.5) {
-            color = COLOR_DIM; // Item yang lebih jauh lebih redup
+        if (abs(distance) < 0.5f) {
+            color = COLOR_VAPOR_PINK;
+            drawSelectionGlow(80, y - 20, 215, 40, COLOR_VAPOR_PINK);
+            float pulse = (sin(millis() / 150.0f) + 1.0f) * 0.1f;
+            scale += pulse;
+        } else {
+            color = COLOR_DIM;
         }
 
-        // Gambar ikon dengan skala
         int iconSize = 32 * scale;
         int iconX = 40 - (iconSize / 2);
-        drawScaledBitmap(iconX, y, menuIcons[i], 32, 32, scale, color);
+        drawScaledBitmap(iconX, y - (iconSize/2), menuIcons[i], 32, 32, scale, color);
 
-        // Gambar teks dengan skala
-        canvas.setTextSize(2 * scale);
+        canvas.setTextSize(2);
         canvas.setTextColor(color);
-        canvas.setCursor(80, y + ( (itemGap - (16*scale)) / 2) );
+        canvas.setCursor(90, y - 7);
         canvas.print(items[i]);
     }
 
-    // Indikator Pilihan
-    canvas.drawTriangle(
-        10, centerY - 8,
-        10, centerY + 8,
-        20, centerY,
-        COLOR_PRIMARY
-    );
+    int triY = centerY;
+    canvas.fillTriangle(15, triY - 10, 15, triY + 10, 30, triY, COLOR_VAPOR_PINK);
+    canvas.drawTriangle(13, triY - 12, 13, triY + 12, 33, triY, COLOR_VAPOR_CYAN);
 
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
-
-// ============ MAIN MENU (REALISTIC B&W + PARTICLES) ============
 void updateParticles() {
   if (!particlesInit) {
     for (int i = 0; i < NUM_PARTICLES; i++) {
