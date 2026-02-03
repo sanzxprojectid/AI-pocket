@@ -22,6 +22,31 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+#define COLOR_BG        0x0000  // Pure Black
+#define COLOR_PRIMARY   0xFFFF  // White
+#define COLOR_SECONDARY 0x7BEF  // Slate Gray
+#define COLOR_ACCENT    0x0410  // Teal
+#define COLOR_TEXT      0xDEFB  // Slate White
+#define COLOR_WARN      0xFD20  // Orange
+#define COLOR_ERROR     0xF800  // Red
+#define COLOR_DIM       0x52AA  // Muted Slate
+#define COLOR_PANEL     0x10A2  // Dark Slate
+#define COLOR_BORDER    0x3186  // Border Slate
+#define COLOR_SUCCESS   0x07E0  // Green
+
+// ============ SLATE & TEAL PALETTE (Modern & Elegan) ============
+#define COLOR_SLATE_BG_DARK  0x10A2  // Deep Slate Gray
+#define COLOR_SLATE_BG_LIGHT 0x2945  // Medium Slate Gray
+#define COLOR_TEAL_ACCENT    0x0410  // Pure Teal
+#define COLOR_TEAL_SOFT      0x4512  // Soft Teal
+#define COLOR_SLATE_MEDIUM   0x52AA  // Muted Slate
+
+#define COLOR_VAPOR_BG_START COLOR_SLATE_BG_DARK
+#define COLOR_VAPOR_BG_END   COLOR_SLATE_BG_LIGHT
+#define COLOR_VAPOR_PINK     COLOR_TEAL_ACCENT
+#define COLOR_VAPOR_CYAN     COLOR_TEAL_SOFT
+#define COLOR_VAPOR_PURPLE   COLOR_SLATE_MEDIUM
+
 struct NextPrayerInfo {
   String name;
   String time;
@@ -121,7 +146,7 @@ void drawSynthSun(int16_t x, int16_t y, int16_t radius) {
     float h = abs(i - radius);
     int16_t w = sqrt(radius * radius - h * h) * 2;
     if (i > radius && (i % 10 < 3)) continue;
-    uint16_t color = mixColors(0xF81F, 0xFFE0, (i * 255) / (radius * 2));
+    uint16_t color = mixColors(COLOR_TEAL_ACCENT, COLOR_TEAL_SOFT, (i * 255) / (radius * 2));
     canvas.drawFastHLine(x - w / 2, lineY, w, color);
   }
 }
@@ -204,25 +229,6 @@ LEDStatus builtInLedStatus = {0, 0, false, 0};
 float deltaTime = 0.0;
 
 // ============ COLOR SCHEME (RGB565) - MODERN BLACK & WHITE ============
-#define COLOR_BG        0x0000  // Pure Black
-#define COLOR_PRIMARY   0xFFFF  // Pure White
-#define COLOR_SECONDARY 0xC618  // Light Gray (192, 192, 192)
-#define COLOR_ACCENT    0xFFFF  // White
-#define COLOR_TEXT      0xFFFF  // White
-#define COLOR_WARN      0x8410  // Medium Gray (128, 128, 128)
-#define COLOR_ERROR     0x8410  // Medium Gray (128, 128, 128)
-#define COLOR_DIM       0x8410  // Medium Gray (128, 128, 128)
-#define COLOR_PANEL     0x2104  // Very Dark Gray (32, 32, 32)
-#define COLOR_BORDER    0x4208  // Border Gray (64, 64, 64)
-#define COLOR_SUCCESS   0xC618  // Light Gray (192, 192, 192)
-
-// ============ VAPORWAVE PALETTE (for Music Player) ============
-#define COLOR_VAPOR_BG_START 0x10A6  // Dark Blue/Purple
-#define COLOR_VAPOR_BG_END   0x5008  // Dark Magenta
-#define COLOR_VAPOR_PINK     0xF81F  // Bright Pink
-#define COLOR_VAPOR_CYAN     0x07FF  // Bright Cyan
-#define COLOR_VAPOR_PURPLE   0x819F  // Lighter Purple
-
 
 // ============ APP STATE ============
 enum AppState {
@@ -630,16 +636,16 @@ CategoryItem quizCategories[] = {
 int quizCategoryCount = 16;
 
 // --- NEW V3 COLOR SPRITES (RGB565 format) ---
-// Each value is a 16-bit color, 0x0000 is transparent
-#define C_BLACK   0x0000
-#define C_RED     0xF800
-#define C_WHITE   0xFFFF
+// Each value is a 16-bit color, COLOR_BG is transparent
+#define C_BLACK   COLOR_BG
+#define C_RED     COLOR_ERROR
+#define C_WHITE   COLOR_PRIMARY
 #define C_DGREY   0x3186
 #define C_LGREY   0x7BCF
 #define C_BLUE    0x001F
 #define C_DBLUE   0x000A
-#define C_YELLOW  0xFFE0
-#define C_GREEN   0x07E0
+#define C_YELLOW  COLOR_WARN
+#define C_GREEN   COLOR_SUCCESS
 #define C_DGREEN  0x03E0
 #define C_BROWN   0xA280
 
@@ -744,9 +750,9 @@ const float JUMPER_GRAVITY = 0.45f;
 const float JUMPER_LIFT = -11.0f;
 
 // --- Jumper Assets ---
-#define C_JUMPER_BODY  0x07FF  // Cyan
-#define C_JUMPER_EYE   0xFFFF  // White
-#define C_JUMPER_PUPIL 0x0000  // Black
+#define C_JUMPER_BODY  COLOR_TEAL_SOFT  // Cyan
+#define C_JUMPER_EYE   COLOR_PRIMARY  // White
+#define C_JUMPER_PUPIL COLOR_BG  // Black
 #define C_JUMPER_FEET  0x7BEF  // Gray
 
 const uint16_t sprite_jumper_char[] PROGMEM = {
@@ -2108,11 +2114,11 @@ void fetchBMKGData() {
 
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
+    DeserializationError error = deserializeJson(doc, http.getStream());
 
     if (!error) {
+
       JsonArray list = doc["Infogempa"]["gempa"];
       earthquakeCount = 0;
 
@@ -2245,7 +2251,7 @@ void parseEarthquakeData(Stream& stream) {
     eq.longitude = coordinates[0].as<float>();
     eq.latitude = coordinates[1].as<float>();
     eq.depth = coordinates[2].as<float>();
-    eq.time = properties["time"].as<unsigned long>();
+    eq.time = properties["time"].as<uint64_t>();
     eq.tsunami = properties["tsunami"].as<int>();
     eq.magType = properties["magType"].as<String>();
     eq.title = properties["title"].as<String>();
@@ -2326,12 +2332,12 @@ void sortEarthquakesByTime() {
 
 // ===== MAGNITUDE VISUALIZATION =====
 uint16_t getMagnitudeColor(float mag) {
-  if (mag >= 7.0) return 0xF800;      // Red - Major
+  if (mag >= 7.0) return COLOR_ERROR;      // Red - Major
   if (mag >= 6.0) return 0xFD20;      // Orange - Strong
-  if (mag >= 5.0) return 0xFFE0;      // Yellow - Moderate
-  if (mag >= 4.0) return 0x07FF;      // Cyan - Light
-  if (mag >= 3.0) return 0x07E0;      // Green - Minor
-  return 0xFFFF;                       // White - Micro
+  if (mag >= 5.0) return COLOR_WARN;      // Yellow - Moderate
+  if (mag >= 4.0) return COLOR_TEAL_SOFT;      // Cyan - Light
+  if (mag >= 3.0) return COLOR_SUCCESS;      // Green - Minor
+  return COLOR_PRIMARY;                       // White - Micro
 }
 
 String getMagnitudeLabel(float mag) {
@@ -3361,13 +3367,13 @@ void drawESPNowChat() {
 
     if (chatTheme == 0) { // Modern
         bubbleColor = msg.isFromMe ? 0x4B1F : 0x632F; // Brighter Blue / Purple
-        textColor = 0xFFFF;
+        textColor = COLOR_PRIMARY;
     } else if (chatTheme == 1) { // Bubble (Light)
-        bubbleColor = msg.isFromMe ? 0x07FF : 0xFD20; // Cyan / Orange
-        textColor = 0x0000;
+        bubbleColor = msg.isFromMe ? COLOR_TEAL_SOFT : 0xFD20; // Cyan / Orange
+        textColor = COLOR_BG;
     } else { // Cyberpunk
-        bubbleColor = msg.isFromMe ? 0xF800 : 0x07E0; // Red / Green
-        textColor = 0xFFFF;
+        bubbleColor = msg.isFromMe ? COLOR_ERROR : COLOR_SUCCESS; // Red / Green
+        textColor = COLOR_PRIMARY;
     }
 
     if (msg.isFromMe) {
@@ -3515,20 +3521,20 @@ void drawSystemMonitor() {
 
   // Top Left: WiFi RSSI (Green)
   String rssiVal = String(sysMetrics.rssiHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " dBm";
-  drawGraph(padding, startY, graphW, graphH, sysMetrics.rssiHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0x07E0, "WiFi RSSI", rssiVal);
+  drawGraph(padding, startY, graphW, graphH, sysMetrics.rssiHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, COLOR_SUCCESS, "WiFi RSSI", rssiVal);
 
   // Top Right: Battery (Yellow)
   float bVal = sysMetrics.battHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN] / 100.0f;
   String battVal = String(bVal, 2) + " V";
-  drawGraph(2 * padding + graphW, startY, graphW, graphH, sysMetrics.battHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0xFFE0, "Battery", battVal);
+  drawGraph(2 * padding + graphW, startY, graphW, graphH, sysMetrics.battHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, COLOR_WARN, "Battery", battVal);
 
   // Bottom Left: CPU Temp (Red)
   String tempVal = String(sysMetrics.tempHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " C";
-  drawGraph(padding, startY + padding + graphH, graphW, graphH, sysMetrics.tempHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0xF800, "CPU Temp", tempVal);
+  drawGraph(padding, startY + padding + graphH, graphW, graphH, sysMetrics.tempHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, COLOR_ERROR, "CPU Temp", tempVal);
 
   // Bottom Right: Free RAM (Cyan)
   String ramVal = String(sysMetrics.ramHistory[(sysMetrics.historyIndex - 1 + SYS_MONITOR_HISTORY_LEN) % SYS_MONITOR_HISTORY_LEN]) + " KB";
-  drawGraph(2 * padding + graphW, startY + padding + graphH, graphW, graphH, sysMetrics.ramHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, 0x07FF, "Free RAM", ramVal);
+  drawGraph(2 * padding + graphW, startY + padding + graphH, graphW, graphH, sysMetrics.ramHistory, SYS_MONITOR_HISTORY_LEN, sysMetrics.historyIndex, COLOR_TEAL_SOFT, "Free RAM", ramVal);
 
   // Footer: Uptime
   canvas.fillRect(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, 15, COLOR_PANEL);
@@ -3723,7 +3729,7 @@ void drawSnakeGame() {
   for (int i = 0; i < snakeLength; i++) {
     uint16_t color;
     if (i == 0) {
-      color = 0x07E0; // Bright Green
+      color = COLOR_SUCCESS; // Bright Green
     } else {
       // Gradient: Green to Cyan/Blue
       uint8_t g = 255 - (i * 150 / snakeLength);
@@ -3749,15 +3755,15 @@ void drawSnakeGame() {
         ey1 = hy + 2;
         ey2 = hy + SNAKE_GRID_SIZE - 4;
       }
-      canvas.fillRect(ex1, ey1, eyeSize, eyeSize, 0xFFFF);
-      canvas.fillRect(ex2, ey2, eyeSize, eyeSize, 0xFFFF);
+      canvas.fillRect(ex1, ey1, eyeSize, eyeSize, COLOR_PRIMARY);
+      canvas.fillRect(ex2, ey2, eyeSize, eyeSize, COLOR_PRIMARY);
     }
   }
 
   // Draw food (pulsing)
   float pulse = sin(millis() * 0.01f) * 1.5f;
-  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 1 + pulse, 0xF800); // Red
-  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 3 + pulse, 0xFFE0); // Yellow core
+  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 1 + pulse, COLOR_ERROR); // Red
+  canvas.fillCircle(food.x * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, food.y * SNAKE_GRID_SIZE + SNAKE_GRID_SIZE / 2, SNAKE_GRID_SIZE / 2 - 3 + pulse, COLOR_WARN); // Yellow core
 
   // Draw particles
   for (int i = 0; i < MAX_SNAKE_PARTICLES; i++) {
@@ -3838,7 +3844,7 @@ void drawScaledColorBitmap(int16_t x, int16_t y, const uint16_t *bitmap, int16_t
       if (srcX >= w) continue;
 
       uint16_t color = pgm_read_word(&bitmap[bitmapOffset + srcX]);
-      if (color != 0x0000) {
+      if (color != COLOR_BG) {
         buffer[rowOffset + x + i] = color;
       }
     }
@@ -3868,7 +3874,7 @@ void drawDeauthAttack() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800); // Red header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_ERROR); // Red header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(70, 18);
@@ -3878,13 +3884,13 @@ void drawDeauthAttack() {
   canvas.setTextSize(1);
   canvas.setCursor(10, 50);
   canvas.print("Target SSID: ");
-  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setTextColor(COLOR_WARN); // Yellow
   canvas.print(deauthTargetSSID);
 
   canvas.setTextColor(COLOR_TEXT);
   canvas.setCursor(10, 65);
   canvas.print("Target BSSID: ");
-  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setTextColor(COLOR_WARN); // Yellow
   char bssidStr[18];
   sprintf(bssidStr, "%02X:%02X:%02X:%02X:%02X:%02X",
           deauthTargetBSSID[0], deauthTargetBSSID[1], deauthTargetBSSID[2],
@@ -3896,7 +3902,7 @@ void drawDeauthAttack() {
   canvas.setTextSize(2);
   canvas.setCursor(20, 97);
   canvas.print("Packets Sent: ");
-  canvas.setTextColor(0xF800);
+  canvas.setTextColor(COLOR_ERROR);
   canvas.print(deauthPacketsSent);
 
 
@@ -3912,7 +3918,7 @@ void drawDeauthSelect() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800); // Red header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_ERROR); // Red header
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(10, 18);
@@ -3951,12 +3957,12 @@ void drawDeauthSelect() {
 
         if (networks[i].encrypted) {
           canvas.setCursor(SCREEN_WIDTH - 45, y + 7);
-          if (i != selectedNetwork) canvas.setTextColor(0xF800);
+          if (i != selectedNetwork) canvas.setTextColor(COLOR_ERROR);
           canvas.print("L");
         }
 
         int bars = map(networks[i].rssi, -100, -50, 1, 4);
-        uint16_t signalColor = (bars > 3) ? 0x07E0 : (bars > 2) ? 0xFFE0 : 0xF800;
+        uint16_t signalColor = (bars > 3) ? COLOR_SUCCESS : (bars > 2) ? COLOR_WARN : COLOR_ERROR;
         if (i == selectedNetwork) signalColor = COLOR_BG;
 
         int barX = SCREEN_WIDTH - 30;
@@ -4130,7 +4136,7 @@ void drawGameOfLife() {
   for(int x=0; x<LIFE_W; x++) {
     for(int y=0; y<LIFE_H; y++) {
       if(lifeGrid[x][y]) {
-        canvas.fillRect(x*LIFE_SCALE, y*LIFE_SCALE, LIFE_SCALE-1, LIFE_SCALE-1, 0x07E0); // Green
+        canvas.fillRect(x*LIFE_SCALE, y*LIFE_SCALE, LIFE_SCALE-1, LIFE_SCALE-1, COLOR_SUCCESS); // Green
       }
     }
   }
@@ -4591,9 +4597,9 @@ void drawPlatformerGame() {
     if (jumperPlatforms[i].active) {
       uint16_t color;
       switch(jumperPlatforms[i].type) {
-        case PLATFORM_MOVING:    color = 0xFFE0; break; // Yellow
-        case PLATFORM_BREAKABLE: color = 0xF800; break; // Red
-        default:                 color = 0x07E0; break; // Green
+        case PLATFORM_MOVING:    color = COLOR_WARN; break; // Yellow
+        case PLATFORM_BREAKABLE: color = COLOR_ERROR; break; // Red
+        default:                 color = COLOR_SUCCESS; break; // Green
       }
       int screenY = jumperPlatforms[i].y - jumperCameraY;
       canvas.fillRect(jumperPlatforms[i].x, screenY, jumperPlatforms[i].width, 8, color);
@@ -4671,8 +4677,8 @@ void drawRacingGame() {
     // --- Draw Parallax Background ---
     for(int i=0; i<3; i++) {
         int cloudX = (int)(i * 160 - camera.z * 0.005f) % (SCREEN_WIDTH + 100) - 50;
-        canvas.fillCircle(cloudX, 25 + i*10, 15, 0xFFFF);
-        canvas.fillCircle(cloudX + 10, 30 + i*10, 12, 0xFFFF);
+        canvas.fillCircle(cloudX, 25 + i*10, 15, COLOR_PRIMARY);
+        canvas.fillCircle(cloudX + 10, 30 + i*10, 12, COLOR_PRIMARY);
     }
 
     // Static distant mountains
@@ -4730,7 +4736,7 @@ void drawRacingGame() {
 
         uint16_t grassColor = ( (int)(lineZ / 500) % 2 == 0) ? 0x05E0 : 0x03E0;
         uint16_t rumbleColor = ( (int)(lineZ / 200) % 2 == 0) ? C_RED : C_WHITE;
-        uint16_t roadColor = ( (int)(lineZ / 200) % 2 == 0) ? 0x3186 : 0x2104;
+        uint16_t roadColor = ( (int)(lineZ / 200) % 2 == 0) ? 0x3186 : COLOR_PANEL;
 
         int roadHalf = roadWidth / 2;
         int kerbWidth = roadWidth * 0.12;
@@ -4793,7 +4799,7 @@ void drawRacingGame() {
 
     // --- HUD REDESIGN ---
     // Digital Speedometer (Bottom Left)
-    uint16_t speedColor = (playerCar.speed > 200) ? 0xF800 : (playerCar.speed > 100) ? 0xFFE0 : 0x07E0;
+    uint16_t speedColor = (playerCar.speed > 200) ? COLOR_ERROR : (playerCar.speed > 100) ? COLOR_WARN : COLOR_SUCCESS;
     canvas.fillRoundRect(10, SCREEN_HEIGHT - 50, 90, 40, 5, 0x1082);
     canvas.drawRoundRect(10, SCREEN_HEIGHT - 50, 90, 40, 5, speedColor);
 
@@ -4815,7 +4821,7 @@ void drawRacingGame() {
     int totalLen = 0; for(int i=0; i<totalSegments; i++) totalLen += track[i].length * SEGMENT_STEP_LENGTH;
     float prog = playerCar.z / (float)totalLen;
     canvas.drawRect(50, 10, SCREEN_WIDTH - 100, 6, 0x4208);
-    canvas.fillRect(50, 10, (SCREEN_WIDTH - 100) * prog, 6, 0x07FF);
+    canvas.fillRect(50, 10, (SCREEN_WIDTH - 100) * prog, 6, COLOR_TEAL_SOFT);
 
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_PRIMARY);
@@ -5095,7 +5101,7 @@ void updateSnakeLogic() {
       snakeParticles[i].vx = random(-30, 31) / 10.0f;
       snakeParticles[i].vy = random(-30, 31) / 10.0f;
       snakeParticles[i].life = random(10, 20);
-      snakeParticles[i].color = (random(0, 2) == 0) ? 0xF800 : 0xFFE0;
+      snakeParticles[i].color = (random(0, 2) == 0) ? COLOR_ERROR : COLOR_WARN;
     }
     snakeScore += 10;
     if (snakeLength < MAX_SNAKE_LENGTH) {
@@ -5206,13 +5212,13 @@ void drawFlappyGame() {
   for (int i = 0; i < FLAPPY_MAX_PIPES; i++) {
     int pipeWidth = 35;
     int pipeGap = 65;
-    canvas.fillRect(flappyPipes[i].x, 15, pipeWidth, flappyPipes[i].gapY - 15, 0x07E0);
+    canvas.fillRect(flappyPipes[i].x, 15, pipeWidth, flappyPipes[i].gapY - 15, COLOR_SUCCESS);
     canvas.drawRect(flappyPipes[i].x, 15, pipeWidth, flappyPipes[i].gapY - 15, COLOR_BORDER);
-    canvas.fillRect(flappyPipes[i].x, flappyPipes[i].gapY + pipeGap, pipeWidth, SCREEN_HEIGHT - (flappyPipes[i].gapY + pipeGap), 0x07E0);
+    canvas.fillRect(flappyPipes[i].x, flappyPipes[i].gapY + pipeGap, pipeWidth, SCREEN_HEIGHT - (flappyPipes[i].gapY + pipeGap), COLOR_SUCCESS);
     canvas.drawRect(flappyPipes[i].x, flappyPipes[i].gapY + pipeGap, pipeWidth, SCREEN_HEIGHT - (flappyPipes[i].gapY + pipeGap), COLOR_BORDER);
   }
 
-  canvas.fillRect(50, flappyBird.y, 14, 10, 0xFFE0);
+  canvas.fillRect(50, flappyBird.y, 14, 10, COLOR_WARN);
   canvas.fillRect(58, flappyBird.y + 2, 3, 3, COLOR_BG);
 
   canvas.setTextSize(2);
@@ -5226,7 +5232,7 @@ void drawFlappyGame() {
   if (!flappyGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
     canvas.drawRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_BORDER);
-    canvas.setTextColor(0xF800);
+    canvas.setTextColor(COLOR_ERROR);
     canvas.setTextSize(2);
     int16_t x1, y1; uint16_t w, h;
     canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
@@ -5251,7 +5257,7 @@ void initBreakoutGame() {
   breakoutPaddle.x = SCREEN_WIDTH / 2 - 25;
   breakoutScore = 0;
   breakoutGameActive = true;
-  uint16_t rowColors[] = {0xF800, 0xFD20, 0xFFE0, 0x07E0, 0x001F};
+  uint16_t rowColors[] = {COLOR_ERROR, 0xFD20, COLOR_WARN, COLOR_SUCCESS, 0x001F};
   for (int r = 0; r < BREAKOUT_ROWS; r++) {
     for (int c = 0; c < BREAKOUT_COLS; c++) {
       breakoutBricks[r][c].active = true;
@@ -5321,7 +5327,7 @@ void drawBreakoutGame() {
   int paddleW = 50;
   int paddleH = 6;
   canvas.fillRect(breakoutPaddle.x, SCREEN_HEIGHT - 20, paddleW, paddleH, COLOR_PRIMARY);
-  canvas.fillCircle(breakoutBall.x, breakoutBall.y, 3, 0xFFFF);
+  canvas.fillCircle(breakoutBall.x, breakoutBall.y, 3, COLOR_PRIMARY);
   int brickAreaY = 40;
   for (int r = 0; r < BREAKOUT_ROWS; r++) {
     for (int c = 0; c < BREAKOUT_COLS; c++) {
@@ -5340,7 +5346,7 @@ void drawBreakoutGame() {
   if (!breakoutGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_PANEL);
     canvas.drawRoundRect(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 - 30, 160, 60, 8, COLOR_BORDER);
-    canvas.setTextColor(0xF800);
+    canvas.setTextColor(COLOR_ERROR);
     canvas.setTextSize(2);
     int16_t x1, y1; uint16_t w, h;
     canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
@@ -5685,7 +5691,7 @@ void drawSniffer() {
   drawStatusBar();
 
   // Matrix Style Header
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0x07E0);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_SUCCESS);
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(10, 18);
@@ -5699,7 +5705,7 @@ void drawSniffer() {
   for(int i=0; i<SNIFFER_HISTORY_LEN; i++) {
     int idx = (snifferHistoryIdx + i) % SNIFFER_HISTORY_LEN;
     int h = map(snifferHistory[idx], 0, maxVal, 0, 100);
-    if(h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF); // Cyan lines
+    if(h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, COLOR_TEAL_SOFT); // Cyan lines
   }
 
   canvas.setTextColor(COLOR_TEXT);
@@ -5718,7 +5724,7 @@ void drawNetScan() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xFFE0); // Yellow/Amber
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_WARN); // Yellow/Amber
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(10, 18);
@@ -5747,7 +5753,7 @@ void drawNetScan() {
 
   canvas.drawFastHLine(0, 80, SCREEN_WIDTH, COLOR_BORDER);
   canvas.setCursor(10, 85);
-  canvas.setTextColor(0x07FF);
+  canvas.setTextColor(COLOR_TEAL_SOFT);
   canvas.print("NEARBY APs (Passive):");
 
   int listY = 100;
@@ -5911,7 +5917,7 @@ void drawWiFiSonar() {
   drawStatusBar();
 
   // Header
-  uint16_t headerColor = sonarAlert ? 0xF800 : 0x07E0; // Red if Alert, Green normal
+  uint16_t headerColor = sonarAlert ? COLOR_ERROR : COLOR_SUCCESS; // Red if Alert, Green normal
   canvas.fillRect(0, 15, SCREEN_WIDTH, 20, headerColor);
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
@@ -5931,7 +5937,7 @@ void drawWiFiSonar() {
   for(int i=0; i<SONAR_HISTORY_LEN; i++) {
     int idx = (sonarHistoryIdx + i) % SONAR_HISTORY_LEN;
     int h = sonarHistory[idx] * 3; // Scale up
-    if (h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, 0x07FF);
+    if (h > 0) canvas.drawFastVLine(i * 2, graphBase - h, h, COLOR_TEAL_SOFT);
   }
 
   canvas.setTextColor(COLOR_DIM);
@@ -6743,8 +6749,8 @@ void drawStatusBar() {
       emergencyActive = false;
     } else {
       if ((millis() / 500) % 2 == 0) {
-        canvas.fillRect(0, 0, SCREEN_WIDTH, 13, 0xF800);
-        canvas.setTextColor(0xFFFF);
+        canvas.fillRect(0, 0, SCREEN_WIDTH, 13, COLOR_ERROR);
+        canvas.setTextColor(COLOR_PRIMARY);
         canvas.setTextSize(1);
         int16_t x1, y1; uint16_t w, h;
         canvas.getTextBounds("!! EMERGENCY ALERT !!", 0, 0, &x1, &y1, &w, &h);
@@ -6755,7 +6761,7 @@ void drawStatusBar() {
     }
   }
 
-  fillRectAlpha(0, 0, SCREEN_WIDTH, 15, 0x0000, 180);
+  fillRectAlpha(0, 0, SCREEN_WIDTH, 15, COLOR_BG, 180);
   canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_VAPOR_CYAN);
 
   int prayerWidth = 0;
@@ -6770,7 +6776,7 @@ void drawStatusBar() {
   
   int iconX = 50;
   if (sdCardMounted) {
-    canvas.fillRoundRect(iconX, 2, 20, 10, 2, 0x07E0);
+    canvas.fillRoundRect(iconX, 2, 20, 10, 2, COLOR_SUCCESS);
     canvas.setTextColor(COLOR_BG);
     canvas.setCursor(iconX + 4, 3);
     canvas.print("SD");
@@ -6798,7 +6804,7 @@ void drawStatusBar() {
     String countdown = formatRemainingTime(next.remainingMinutes);
     prayerWidth = (countdown.length() + 2) * 6;
     canvas.setCursor(SCREEN_WIDTH - 115 - prayerWidth, 4);
-    canvas.setTextColor(0x07E0);
+    canvas.setTextColor(COLOR_SUCCESS);
     canvas.print("P:");
     canvas.print(countdown);
   }
@@ -6807,7 +6813,7 @@ void drawStatusBar() {
     time_t now_t; time(&now_t);
     uint64_t currentMs = (now_t > 1000000000) ? (uint64_t)now_t * 1000 : (uint64_t)millis();
     if (earthquakeDataLoaded && (currentMs - earthquakes[0].time < 3600000)) {
-        canvas.setTextColor(0xF800);
+        canvas.setTextColor(COLOR_ERROR);
         int eqX = SCREEN_WIDTH - 130 - prayerWidth - (showFPS ? 60 : 0);
         canvas.setCursor(eqX, 4);
         canvas.print("EQ!");
@@ -6816,7 +6822,7 @@ void drawStatusBar() {
 
   if (showFPS) {
     uint16_t fpsColor = COLOR_SUCCESS;
-    if (perfFPS < 100) fpsColor = 0xFFE0;
+    if (perfFPS < 100) fpsColor = COLOR_WARN;
     if (perfFPS < 60) fpsColor = COLOR_ERROR;
     String fpsStr = String(perfFPS);
     int textWidth = (fpsStr.length() + 4) * 6;
@@ -6840,7 +6846,7 @@ void drawStatusBar() {
     int y = 10;
     for (int i = 0; i < 4; i++) {
       int h = (i + 1) * 2;
-      canvas.fillRect(x + (i * 3), y - h, 2, h, (i < bars) ? COLOR_VAPOR_CYAN : 0x2104);
+      canvas.fillRect(x + (i * 3), y - h, 2, h, (i < bars) ? COLOR_VAPOR_CYAN : COLOR_PANEL);
     }
   } else {
     canvas.setCursor(SCREEN_WIDTH - 105, 4);
@@ -6973,8 +6979,8 @@ void showProgressBar(String title, int percent) {
 
   if (fillW > 0) {
     // Draw the gradient fill
-    uint16_t startColor = 0x07E0; // Green
-    uint16_t endColor = 0x07FF;   // Cyan
+    uint16_t startColor = COLOR_SUCCESS; // Green
+    uint16_t endColor = COLOR_TEAL_SOFT;   // Cyan
     for (int i = 0; i < fillW; i++) {
       uint8_t r = ((startColor >> 11) & 0x1F) + ((((endColor >> 11) & 0x1F) - ((startColor >> 11) & 0x1F)) * i) / fillW;
       uint8_t g = ((startColor >> 5) & 0x3F) + ((((endColor >> 5) & 0x3F) - ((startColor >> 5) & 0x3F)) * i) / fillW;
@@ -7046,7 +7052,7 @@ void drawEarthquakeMonitor() {
   int16_t x1, y1; uint16_t w, h;
   canvas.setTextSize(1);
   canvas.getTextBounds(filter, 0, 0, &x1, &y1, &w, &h);
-  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setTextColor(COLOR_WARN); // Yellow
   canvas.setCursor(SCREEN_WIDTH - 10 - w, 20);
   canvas.print(filter);
 
@@ -7079,7 +7085,7 @@ void drawEarthquakeMonitor() {
 
     // Highlight selected
     if (i == earthquakeCursor) {
-      canvas.fillRoundRect(5, y - 2, SCREEN_WIDTH - 10, itemH - 1, 4, 0x2104);
+      canvas.fillRoundRect(5, y - 2, SCREEN_WIDTH - 10, itemH - 1, 4, COLOR_PANEL);
       canvas.drawRoundRect(5, y - 2, SCREEN_WIDTH - 10, itemH - 1, 4, COLOR_BORDER);
     }
 
@@ -7116,13 +7122,13 @@ void drawEarthquakeMonitor() {
     if (eq.distance > 0) sub += " | " + String((int)eq.distance) + "km";
 
     if (eq.mmi.length() > 0) {
-      canvas.setTextColor(0x07FF); // Cyan for MMI
+      canvas.setTextColor(COLOR_TEAL_SOFT); // Cyan for MMI
       int spaceIdx = eq.mmi.indexOf(' ');
       sub += " | MMI: " + (spaceIdx != -1 ? eq.mmi.substring(0, spaceIdx) : eq.mmi);
     }
 
     if (eq.tsunami == 1) {
-      canvas.setTextColor(0xF800); // Red
+      canvas.setTextColor(COLOR_ERROR); // Red
       sub += " [TSUNAMI]";
     }
     canvas.print(sub);
@@ -7170,7 +7176,7 @@ void drawEarthquakeDetail() {
   int16_t x1, y1; uint16_t w, h;
 
   // Place
-  canvas.setTextColor(0xFFE0); // Yellow header
+  canvas.setTextColor(COLOR_WARN); // Yellow header
   canvas.setCursor(10, y);
   canvas.print("LOKASI:");
   y += 12;
@@ -7210,7 +7216,7 @@ void drawEarthquakeDetail() {
 
   if (eq.mmi.length() > 0) {
     y += 18;
-    canvas.setTextColor(0x07FF);
+    canvas.setTextColor(COLOR_TEAL_SOFT);
     canvas.setCursor(10, y);
     canvas.print("DIRASAKAN:");
     y += 10;
@@ -7229,7 +7235,7 @@ void drawEarthquakeDetail() {
 
   if (eq.tsunami == 1) {
     y += 18;
-    canvas.fillRect(10, y, SCREEN_WIDTH - 20, 16, 0xF800);
+    canvas.fillRect(10, y, SCREEN_WIDTH - 20, 16, COLOR_ERROR);
     canvas.setTextColor(COLOR_BG);
     canvas.setCursor(25, y + 4);
     canvas.print("!!! PERINGATAN TSUNAMI !!!");
@@ -7325,14 +7331,14 @@ void drawEarthquakeMap() {
     int sy = getY(eq.latitude);
     uint16_t col = getMagnitudeColor(eq.magnitude);
     canvas.drawCircle(sx, sy, 5, col);
-    canvas.drawCircle(sx, sy, 2, 0xFFFF);
+    canvas.drawCircle(sx, sy, 2, COLOR_PRIMARY);
   }
 
   // Draw user location
   if (userLocation.isValid && isInBounds(userLocation.latitude, userLocation.longitude)) {
     int ux = getX(userLocation.longitude);
     int uy = getY(userLocation.latitude);
-    canvas.fillRect(ux - 1, uy - 1, 3, 3, 0x07E0); // Green dot
+    canvas.fillRect(ux - 1, uy - 1, 3, 3, COLOR_SUCCESS); // Green dot
   }
 
   // Legend/Info
@@ -7840,7 +7846,7 @@ void drawUTTT() {
   canvas.print("ULTIMATE TIC-TAC-TOE");
 
   if (uttt.gameState == GAME_PLAYING) {
-    canvas.setTextColor(uttt.currentPlayer == CELL_X ? 0xF800 : 0x001F);
+    canvas.setTextColor(uttt.currentPlayer == CELL_X ? COLOR_ERROR : 0x001F);
     canvas.setCursor(SCREEN_WIDTH - 60, 18);
     canvas.print(uttt.currentPlayer == CELL_X ? "X" : "O");
     canvas.print(" TURN");
@@ -7898,13 +7904,13 @@ void drawSmallBoard(int x, int y, int boardIdx) {
   uint16_t bgColor = COLOR_BG;
   // Highlight the board if the cursor is within it
   if (boardIdx == (utttCursorY / 3) * 3 + (utttCursorX / 3)) {
-    bgColor = 0x2104;
+    bgColor = COLOR_PANEL;
   }
   canvas.fillRect(x, y, bigSize, bigSize, bgColor);
 
   if (board->winner == CELL_X) {
     canvas.setTextSize(4);
-    canvas.setTextColor(0xF800);
+    canvas.setTextColor(COLOR_ERROR);
     canvas.setCursor(x + 8, y + 4);
     canvas.print("X");
     return;
@@ -7926,7 +7932,7 @@ void drawSmallBoard(int x, int y, int boardIdx) {
       int cx = x + col * (cellSize + gap);
       int cy = y + row * (cellSize + gap);
 
-      uint16_t cellColor = 0x2104; // Normal cell
+      uint16_t cellColor = COLOR_PANEL; // Normal cell
 
       // Cursor cell logic
       int currentCellIdx = (utttCursorY % 3) * 3 + (utttCursorX % 3);
@@ -7940,7 +7946,7 @@ void drawSmallBoard(int x, int y, int boardIdx) {
 
       canvas.setTextSize(1);
       if (board->cells[cellIdx] == CELL_X) {
-        canvas.setTextColor(0xF800);
+        canvas.setTextColor(COLOR_ERROR);
         canvas.setCursor(cx + 3, cy + 2);
         canvas.print("X");
       } else if (board->cells[cellIdx] == CELL_O) {
@@ -7963,7 +7969,7 @@ void drawUTTTGameOver() {
 
   canvas.setTextSize(2);
   if (uttt.gameState == GAME_X_WIN) {
-    canvas.setTextColor(0xF800);
+    canvas.setTextColor(COLOR_ERROR);
     canvas.setCursor(60, 75);
     canvas.print("X WINS!");
   } else if (uttt.gameState == GAME_O_WIN) {
@@ -8162,7 +8168,7 @@ void drawMainMenuCool() {
         if (y < SCREEN_HEIGHT) canvas.drawFastHLine(0, y, SCREEN_WIDTH, gridColor);
     }
 
-    fillRectAlpha(70, 20, 235, SCREEN_HEIGHT - 40, 0x0000, 160);
+    fillRectAlpha(70, 20, 235, SCREEN_HEIGHT - 40, COLOR_BG, 160);
     canvas.drawRect(70, 20, 235, SCREEN_HEIGHT - 40, COLOR_VAPOR_CYAN);
 
     drawStatusBar();
@@ -8418,7 +8424,7 @@ void displayWiFiNetworks(int x_offset) {
       if (networks[i].encrypted) {
         canvas.setCursor(SCREEN_WIDTH - 45, y + 7);
         // Red Lock if encrypted
-        if (i != selectedNetwork) canvas.setTextColor(0xF800); // Red
+        if (i != selectedNetwork) canvas.setTextColor(COLOR_ERROR); // Red
         canvas.print("L");
       }
       
@@ -8426,9 +8432,9 @@ void displayWiFiNetworks(int x_offset) {
       bars = constrain(bars, 1, 4);
 
       // Color code signal strength (Green -> Yellow -> Red)
-      uint16_t signalColor = 0xF800; // Red
-      if (bars > 3) signalColor = 0x07E0; // Green
-      else if (bars > 2) signalColor = 0xFFE0; // Yellow
+      uint16_t signalColor = COLOR_ERROR; // Red
+      if (bars > 3) signalColor = COLOR_SUCCESS; // Green
+      else if (bars > 2) signalColor = COLOR_WARN; // Yellow
 
       if (i == selectedNetwork) signalColor = COLOR_BG; // Invert on selection
 
@@ -8744,14 +8750,14 @@ void drawCourierTool() {
   canvas.print("STATUS");
 
   if (isTracking) {
-      canvas.setTextColor(0xFFE0); // Yellow
+      canvas.setTextColor(COLOR_WARN); // Yellow
       if ((millis() / 200) % 2 == 0) courierStatus = "TRACKING...";
       else courierStatus = "TRACKING. .";
   }
 
   if (courierStatus.indexOf("DELIVERED") != -1) canvas.setTextColor(COLOR_SUCCESS);
   else if (courierStatus.indexOf("ERR") != -1) canvas.setTextColor(COLOR_ERROR);
-  else if (isTracking) canvas.setTextColor(0xFFE0);
+  else if (isTracking) canvas.setTextColor(COLOR_WARN);
   else canvas.setTextColor(COLOR_PRIMARY);
 
   canvas.setCursor(20, y + 17);
@@ -9402,7 +9408,7 @@ void drawWikiViewer() {
 
   // Draw Title
   canvas.setTextSize(2);
-  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setTextColor(COLOR_WARN); // Yellow
 
   // Simple word wrap for Title
   String title = currentArticle.title;
@@ -9496,10 +9502,10 @@ void drawPrayerIcon(int x, int y, int type) {
       canvas.drawLine(x + 2, y + 11, x + 14, y + 11, 0xFDA0);
       break;
     case 3: // Dzuhur - Sun
-      canvas.drawCircle(x + 8, y + 8, 4, 0xFFE0); // Yellow
+      canvas.drawCircle(x + 8, y + 8, 4, COLOR_WARN); // Yellow
       for(int i=0; i<8; i++) {
         float a = i * PI / 4;
-        canvas.drawLine(x+8+cos(a)*5, y+8+sin(a)*5, x+8+cos(a)*7, y+8+sin(a)*7, 0xFFE0);
+        canvas.drawLine(x+8+cos(a)*5, y+8+sin(a)*5, x+8+cos(a)*7, y+8+sin(a)*7, COLOR_WARN);
       }
       break;
     case 4: // Ashar - Afternoon Sun
@@ -9507,9 +9513,9 @@ void drawPrayerIcon(int x, int y, int type) {
       canvas.drawLine(x + 1, y + 1, x + 4, y + 4, 0xFE60);
       break;
     case 5: // Maghrib - Sunset
-      canvas.drawCircle(x + 8, y + 10, 5, 0xF800); // Red
+      canvas.drawCircle(x + 8, y + 10, 5, COLOR_ERROR); // Red
       canvas.fillRect(x, y + 11, 16, 5, COLOR_BG);
-      canvas.drawLine(x, y + 11, x + 16, y + 11, 0xF800);
+      canvas.drawLine(x, y + 11, x + 16, y + 11, COLOR_ERROR);
       break;
     case 6: // Isya - Moon
       canvas.drawCircle(x + 8, y + 8, 5, 0xCE7F); // Whitish Blue
@@ -9524,7 +9530,7 @@ void drawPrayerTimes() {
 
   if (!currentPrayer.isValid) {
     canvas.setTextSize(2);
-    canvas.setTextColor(prayerFetchFailed ? 0xF800 : COLOR_TEXT);
+    canvas.setTextColor(prayerFetchFailed ? COLOR_ERROR : COLOR_TEXT);
     int16_t x1, y1; uint16_t w, h;
     String msg = prayerFetchFailed ? "FETCH FAILED" : "LOADING...";
     canvas.getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
@@ -9581,7 +9587,7 @@ void drawPrayerTimes() {
   canvas.setCursor(15, nextY + 8);
   canvas.print("MENDEKATI:");
 
-  canvas.setTextColor(0x07FF); // Cyan
+  canvas.setTextColor(COLOR_TEAL_SOFT); // Cyan
   canvas.setTextSize(3);
   canvas.setCursor(15, nextY + 18);
   canvas.print(next.name);
@@ -9589,7 +9595,7 @@ void drawPrayerTimes() {
   // Countdown
   String countdown = formatRemainingTime(next.remainingMinutes);
   canvas.setTextSize(2);
-  canvas.setTextColor(0xFFE0); // Yellow
+  canvas.setTextColor(COLOR_WARN); // Yellow
   canvas.getTextBounds(countdown, 0, 0, &tx1, &ty1, &tw, &th);
   canvas.setCursor(SCREEN_WIDTH - 15 - tw, nextY + 15);
   canvas.print(countdown);
@@ -9600,7 +9606,7 @@ void drawPrayerTimes() {
   int pbX = 15;
   int pbY = nextY + 42;
   canvas.drawRoundRect(pbX, pbY, pbW, pbH, 2, COLOR_BORDER);
-  canvas.fillRoundRect(pbX, pbY, (int)(pbW * next.progress), pbH, 2, 0x07FF);
+  canvas.fillRoundRect(pbX, pbY, (int)(pbW * next.progress), pbH, 2, COLOR_TEAL_SOFT);
 
   // --- MIDDLE: PRAYER LIST (Two Columns) ---
   int listY = 92;
@@ -9620,9 +9626,9 @@ void drawPrayerTimes() {
     bool isNext = (next.index == i);
 
     if (isNext) {
-      canvas.fillRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, 0x2104);
-      canvas.drawRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, 0x07FF);
-      canvas.setTextColor(0x07FF);
+      canvas.fillRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, COLOR_PANEL);
+      canvas.drawRoundRect(x - 4, y - 2, colWidth + 8, 14, 4, COLOR_TEAL_SOFT);
+      canvas.setTextColor(COLOR_TEAL_SOFT);
     } else {
       canvas.setTextColor(COLOR_SECONDARY);
     }
@@ -9802,7 +9808,7 @@ void drawPrayerSettings() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
 
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, 0x2104);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
   canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
 
@@ -10836,7 +10842,7 @@ void refreshCurrentScreen() {
 void drawGenericToolScreen(const char* title) {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, 0xF800);
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 20, COLOR_ERROR);
   canvas.setTextColor(COLOR_BG);
   canvas.setTextSize(2);
   canvas.setCursor(10, 18);
@@ -12246,15 +12252,15 @@ void drawPomodoroTimer() {
       if (pomoState == POMO_WORK) {
         statusText = "WORK";
         totalDuration = POMO_WORK_DURATION / 1000;
-        progressColor = 0xF800; // Red
+        progressColor = COLOR_ERROR; // Red
       } else if (pomoState == POMO_SHORT_BREAK) {
         statusText = "SHORT BREAK";
         totalDuration = POMO_SHORT_BREAK_DURATION / 1000;
-        progressColor = 0x07E0; // Green
+        progressColor = COLOR_SUCCESS; // Green
       } else { // POMO_LONG_BREAK
         statusText = "LONG BREAK";
         totalDuration = POMO_LONG_BREAK_DURATION / 1000;
-        progressColor = 0x07FF; // Cyan
+        progressColor = COLOR_TEAL_SOFT; // Cyan
       }
     }
   }
