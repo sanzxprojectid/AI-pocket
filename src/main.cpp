@@ -1192,7 +1192,7 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_about, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_gamehub};
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_visuals, icon_gamehub, icon_about};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -8152,69 +8152,50 @@ void handleUTTTGameOverInput() {
 
 // ============ MAIN MENU (COOL VERTICAL) ============
 void drawMainMenuCool() {
-    drawGradientRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COLOR_VAPOR_BG_START, COLOR_VAPOR_BG_END, true);
-
-    uint16_t gridColor = mixColors(COLOR_VAPOR_PURPLE, COLOR_BG, 150);
-    static float gridScroll = 0;
-    gridScroll += 25.0f * deltaTime;
-    if (gridScroll >= 40) gridScroll = 0;
-
-    int horizonY = 125;
-    for (int i = -12; i <= 12; i++) {
-        canvas.drawLine(SCREEN_WIDTH/2 + i*12, horizonY, SCREEN_WIDTH/2 + i*140, SCREEN_HEIGHT, gridColor);
-    }
-    for (int i = 0; i < 6; i++) {
-        int y = horizonY + pow(1.5, i) * (5 + gridScroll);
-        if (y < SCREEN_HEIGHT) canvas.drawFastHLine(0, y, SCREEN_WIDTH, gridColor);
-    }
-
-    fillRectAlpha(70, 20, 235, SCREEN_HEIGHT - 40, COLOR_BG, 160);
-    canvas.drawRect(70, 20, 235, SCREEN_HEIGHT - 40, COLOR_VAPOR_CYAN);
-
+    canvas.fillScreen(COLOR_BG);
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "ABOUT", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ"};
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ", "ABOUT"};
     int numItems = 18;
-    int centerY = SCREEN_HEIGHT / 2;
-    int itemGap = 50;
+    int centerX = SCREEN_WIDTH / 2;
+    int centerY = 75;
+    int itemGap = 85;
 
     for (int i = 0; i < numItems; i++) {
         float distance = i - (menuScrollCurrent / (float)itemGap);
-        float scale = 1.0f - (abs(distance) * 0.35f);
+        float scale = 1.0f - (abs(distance) * 0.45f);
         scale = max(0.0f, scale);
 
-        int y = centerY + (distance * itemGap);
+        int x = centerX + (distance * itemGap);
 
-        if (y < -50 || y > SCREEN_HEIGHT + 50) {
+        if (x < -60 || x > SCREEN_WIDTH + 60) {
             continue;
         }
 
         uint16_t color = COLOR_PRIMARY;
         if (abs(distance) < 0.5f) {
-            color = COLOR_VAPOR_PINK;
-            drawSelectionGlow(80, y - 20, 215, 40, COLOR_VAPOR_PINK);
+            color = COLOR_ACCENT;
+            drawSelectionGlow(x - 25, centerY - 25, 50, 50, COLOR_ACCENT);
             float pulse = (sin(millis() / 150.0f) + 1.0f) * 0.1f;
             scale += pulse;
+
+            canvas.setTextSize(2);
+            canvas.setTextColor(COLOR_TEXT);
+            int16_t x1, y1;
+            uint16_t w, h;
+            canvas.getTextBounds(items[i], 0, 0, &x1, &y1, &w, &h);
+            canvas.setCursor(centerX - (w / 2), centerY + 45);
+            canvas.print(items[i]);
         } else {
             color = COLOR_DIM;
         }
 
         int iconSize = 32 * scale;
-        int iconX = 40 - (iconSize / 2);
-        drawScaledBitmap(iconX, y - (iconSize/2), menuIcons[i], 32, 32, scale, color);
-
-        canvas.setTextSize(2);
-        canvas.setTextColor(color);
-        canvas.setCursor(90, y - 7);
-        canvas.print(items[i]);
+        drawScaledBitmap(x - (iconSize / 2), centerY - (iconSize / 2), menuIcons[i], 32, 32, scale, color);
     }
-
-    int triY = centerY;
-    canvas.fillTriangle(15, triY - 10, 15, triY + 10, 30, triY, COLOR_VAPOR_PINK);
-    canvas.drawTriangle(13, triY - 12, 13, triY + 12, 33, triY, COLOR_VAPOR_CYAN);
-
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
+
 void updateParticles() {
   if (!particlesInit) {
     for (int i = 0; i < NUM_PARTICLES; i++) {
@@ -8225,7 +8206,6 @@ void updateParticles() {
     }
     particlesInit = true;
   }
-
   for (int i = 0; i < NUM_PARTICLES; i++) {
     particles[i].x -= particles[i].speed;
     if (particles[i].x < 0) {
@@ -10206,10 +10186,7 @@ void handleMainMenuSelect() {
       menuSelection = 0;
       changeState(STATE_GAME_HUB);
       break;
-    case 9: // ABOUT
-      changeState(STATE_ABOUT);
-      break;
-    case 10: // SONAR
+    case 9: // SONAR
       if (WiFi.status() != WL_CONNECTED) {
          showStatus("Connect WiFi\nFirst!", 1000);
          changeState(STATE_WIFI_MENU);
@@ -10217,29 +10194,32 @@ void handleMainMenuSelect() {
          changeState(STATE_TOOL_WIFI_SONAR);
       }
       break;
-    case 11: // MUSIC
+    case 10: // MUSIC
       changeState(STATE_MUSIC_PLAYER);
       break;
-    case 12: // POMODORO
+    case 11: // POMODORO
       changeState(STATE_POMODORO);
       break;
-    case 13: // PRAYER
+    case 12: // PRAYER
       changeState(STATE_PRAYER_TIMES);
       break;
-    case 14: // WIKIPEDIA
+    case 13: // WIKIPEDIA
       wikiScrollOffset = 0;
       changeState(STATE_WIKI_VIEWER);
       break;
-    case 15: // EARTHQUAKE
+    case 14: // EARTHQUAKE
       changeState(STATE_EARTHQUAKE);
       break;
-    case 16: // TIC-TAC-TOE
+    case 15: // TIC-TAC-TOE
       utttMenuCursor = 0;
       changeState(STATE_UTTT_MENU);
       break;
-    case 17: // TRIVIA QUIZ
+    case 16: // TRIVIA QUIZ
       quizMenuCursor = 0;
       changeState(STATE_QUIZ_MENU);
+      break;
+    case 17: // ABOUT
+      changeState(STATE_ABOUT);
       break;
   }
 }
@@ -11144,7 +11124,7 @@ void loop() {
 
   // Animation Logic
   if (currentState == STATE_MAIN_MENU) {
-      int itemGap = 45; // Sesuaikan dengan celah menu baru
+      int itemGap = 85; // Sesuaikan dengan celah menu baru
       menuScrollTarget = menuSelection * itemGap;
 
       // Fisika pegas untuk scrolling yang lebih alami
@@ -11684,9 +11664,6 @@ void loop() {
         case STATE_CHANGE_PIN:
           cursorY = (cursorY > 0) ? cursorY - 1 : 3;
           break;
-        case STATE_MAIN_MENU:
-          if (menuSelection > 0) menuSelection--;
-          break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection > 0) menuSelection--;
           break;
@@ -11752,9 +11729,6 @@ void loop() {
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorY = (cursorY < 3) ? cursorY + 1 : 0;
-          break;
-        case STATE_MAIN_MENU:
-          if (menuSelection < 16) menuSelection++;
           break;
         case STATE_HACKER_TOOLS_MENU:
           if (menuSelection < 6) menuSelection++;
@@ -11827,6 +11801,9 @@ void loop() {
           cursorX = (cursorX > 0) ? cursorX - 1 : 2;
           break;
         case STATE_KEYBOARD:
+        case STATE_MAIN_MENU:
+          if (menuSelection > 0) menuSelection--;
+          break;
         case STATE_PASSWORD_INPUT:
           cursorX--;
           if (cursorX < 0) cursorX = 9;
@@ -11867,6 +11844,9 @@ void loop() {
     
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
+        case STATE_MAIN_MENU:
+          if (menuSelection < 17) menuSelection++;
+          break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
           cursorX = (cursorX < 2) ? cursorX + 1 : 0;
