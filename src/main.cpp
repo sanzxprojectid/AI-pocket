@@ -190,6 +190,12 @@ typedef struct {
 #define TFT_MOSI  11
 #define TFT_SCLK  12
 #define TFT_BL    14
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  #define LEDC_BACKLIGHT_CTRL TFT_BL
+#else
+  #define LEDC_BACKLIGHT_CTRL 0
+#endif
 #define TFT_MISO  -1
 
 // ============ BATTERY & DFPLAYER PINS ============
@@ -11084,7 +11090,7 @@ void setup() {
     bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
     drawBootScreen(bootStatusLines, ++currentLine, 15);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    ledcWrite(0, screenBrightness); // Set initial brightness
+    ledcWrite(LEDC_BACKLIGHT_CTRL, screenBrightness); // Set initial brightness
 
     // --- Init other peripherals ---
     pixels.begin();
@@ -11465,10 +11471,10 @@ void loop() {
   // Backlight smoothing logic
   if (abs(targetBrightness - currentBrightness) > 0.5) {
     currentBrightness = custom_lerp(currentBrightness, targetBrightness, 0.1);
-    ledcWrite(0, (int)currentBrightness);
+    ledcWrite(LEDC_BACKLIGHT_CTRL, (int)currentBrightness);
   } else if (currentBrightness != targetBrightness) {
     currentBrightness = targetBrightness;
-    ledcWrite(0, (int)currentBrightness);
+    ledcWrite(LEDC_BACKLIGHT_CTRL, (int)currentBrightness);
   }
 
   if (currentState == STATE_SCREENSAVER) {
