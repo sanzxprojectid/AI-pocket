@@ -22,6 +22,8 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+#include <Wire.h>
+#include <RDA5807.h>
 #define COLOR_BG        0x0000  // Pure Black
 #define COLOR_PRIMARY   0xFFFF  // White
 #define COLOR_SECONDARY 0x7BEF  // Slate Gray
@@ -210,6 +212,17 @@ typedef struct {
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 
+// ============ RADIO RDA5807M ============
+RDA5807 rx;
+uint16_t radioFrequency = 10110; // Default 101.1 MHz
+int radioVolume = 8;
+bool radioStereo = true;
+bool radioMute = false;
+bool radioBassBoost = false;
+String radioRDS = "";
+String radioRT = ""; // Radio Text
+unsigned long lastRDSUpdate = 0;
+
 // ============ NEOPIXEL ============
 #define NEOPIXEL_PIN 48
 #define NEOPIXEL_COUNT 1
@@ -304,7 +317,8 @@ enum AppState {
   STATE_QUIZ_MENU,
   STATE_QUIZ_PLAYING,
   STATE_QUIZ_RESULT,
-  STATE_QUIZ_LEADERBOARD
+  STATE_QUIZ_LEADERBOARD,
+  STATE_RADIO_FM
 };
 
 AppState currentState = STATE_BOOT;
@@ -1207,7 +1221,18 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_sonar, icon_music, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_visuals, icon_gamehub, icon_about};
+const unsigned char icon_radio[] PROGMEM = {
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x07, 0xE0, 0x00, 0x00, 0x08, 0x10, 0x00, 0x00, 0x10, 0x08, 0x00, 0x00, 0x20, 0x04, 0x00,
+0x00, 0x40, 0x02, 0x00, 0x00, 0x80, 0x01, 0x00, 0x01, 0x00, 0x00, 0x80, 0x3F, 0xFF, 0xFF, 0xFC,
+0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x7F, 0xFE, 0x04, 0x20, 0x7F, 0xFE, 0x04,
+0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x18, 0x18, 0x04, 0x20, 0x3C, 0x3C, 0x04,
+0x20, 0x3C, 0x3C, 0x04, 0x20, 0x18, 0x18, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04,
+0x3F, 0xFF, 0xFF, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_sonar, icon_music, icon_radio, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_visuals, icon_gamehub, icon_about};
 
 // ============ AI MODE SELECTION ============
 enum AIMode { MODE_SUBARU, MODE_STANDARD, MODE_LOCAL, MODE_GROQ };
@@ -8291,8 +8316,8 @@ void drawMainMenuCool() {
     canvas.fillScreen(COLOR_BG);
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "SONAR", "MUSIC", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ", "ABOUT"};
-    int numItems = 18;
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "SONAR", "MUSIC", "RADIO FM", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ", "ABOUT"};
+    int numItems = 19;
     int centerX = SCREEN_WIDTH / 2;
     int centerY = 75;
     int itemGap = 85;
@@ -10333,28 +10358,31 @@ void handleMainMenuSelect() {
     case 10: // MUSIC
       changeState(STATE_MUSIC_PLAYER);
       break;
-    case 11: // POMODORO
+    case 11: // RADIO
+      changeState(STATE_RADIO_FM);
+      break;
+    case 12: // POMODORO
       changeState(STATE_POMODORO);
       break;
-    case 12: // PRAYER
+    case 13: // PRAYER
       changeState(STATE_PRAYER_TIMES);
       break;
-    case 13: // WIKIPEDIA
+    case 14: // WIKIPEDIA
       wikiScrollOffset = 0;
       changeState(STATE_WIKI_VIEWER);
       break;
-    case 14: // EARTHQUAKE
+    case 15: // EARTHQUAKE
       changeState(STATE_EARTHQUAKE);
       break;
-    case 15: // TIC-TAC-TOE
+    case 16: // TIC-TAC-TOE
       utttMenuCursor = 0;
       changeState(STATE_UTTT_MENU);
       break;
-    case 16: // TRIVIA QUIZ
+    case 17: // TRIVIA QUIZ
       quizMenuCursor = 0;
       changeState(STATE_QUIZ_MENU);
       break;
-    case 17: // ABOUT
+    case 18: // ABOUT
       changeState(STATE_ABOUT);
       break;
   }
@@ -10948,6 +10976,9 @@ void refreshCurrentScreen() {
     case STATE_UTTT_GAMEOVER:
       drawUTTTGameOver();
       break;
+    case STATE_RADIO_FM:
+      drawRadioFM();
+      break;
     default:
       drawMainMenuCool();
       break;
@@ -10989,6 +11020,226 @@ void drawDeauthDetector() {
 
 void drawLocalAiChat() {
   drawGenericToolScreen("LOCAL AI (Coming Soon)");
+}
+
+void drawRadioFM() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.drawBitmap(10, 18, icon_radio, 32, 32, COLOR_PRIMARY);
+  canvas.setCursor(50, 20);
+  canvas.print("RADIO FM");
+
+  // Signal Strength (RSSI)
+  int rssi = rx.getRssi();
+  int bars = map(rssi, 0, 120, 0, 5);
+  bars = constrain(bars, 0, 5);
+  int barX = SCREEN_WIDTH - 45;
+  int barY = 25;
+  for (int i = 0; i < 5; i++) {
+    int h = (i + 1) * 3;
+    if (i < bars) {
+      canvas.fillRect(barX + (i * 6), barY - h, 4, h, COLOR_SUCCESS);
+    } else {
+      canvas.drawRect(barX + (i * 6), barY - h, 4, h, COLOR_DIM);
+    }
+  }
+
+  // Frequency
+  canvas.setTextSize(4);
+  canvas.setTextColor(COLOR_PRIMARY);
+  float freqMHz = radioFrequency / 100.0f;
+  String freqStr = String(freqMHz, 1);
+  int16_t x1, y1; uint16_t w, h;
+  canvas.getTextBounds(freqStr, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2 - 15, 75);
+  canvas.print(freqStr);
+  canvas.setTextSize(2);
+  canvas.setCursor(SCREEN_WIDTH/2 + w/2 - 5, 85);
+  canvas.print("MHz");
+
+  // RDS Station Name
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_ACCENT);
+  String rdsName = radioRDS;
+  if (rdsName == "") rdsName = "Searching RDS...";
+  canvas.getTextBounds(rdsName, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2, 105);
+  canvas.print(rdsName);
+
+  // Radio Text (RT) - Scrolling or Word Wrap
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_TEXT);
+  if (radioRT != "") {
+      int textW = radioRT.length() * 6;
+      if (textW > SCREEN_WIDTH - 20) {
+          // Simple scrolling for RT
+          static int rtOffset = 0;
+          String rtDisp = radioRT + "      " + radioRT;
+          canvas.setCursor(10, 125);
+          canvas.print(rtDisp.substring(rtOffset/6, rtOffset/6 + 50));
+          rtOffset += 1;
+          if (rtOffset > textW * 6) rtOffset = 0;
+      } else {
+          canvas.setCursor(SCREEN_WIDTH/2 - textW/2, 125);
+          canvas.print(radioRT);
+      }
+  }
+
+  // Stereo & Bass Boost Status
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, 145);
+  canvas.print(radioStereo ? "STEREO" : "MONO");
+  if (radioBassBoost) {
+      canvas.setCursor(60, 145);
+      canvas.print("BASS+");
+  }
+
+  // Volume Bar
+  int volBarW = 100;
+  int volBarX = SCREEN_WIDTH - volBarW - 10;
+  int volBarY = 145;
+  canvas.drawRect(volBarX, volBarY, volBarW, 8, COLOR_BORDER);
+  int volW = map(radioVolume, 0, 15, 0, volBarW - 2);
+  canvas.fillRect(volBarX + 1, volBarY + 1, volW, 6, COLOR_PRIMARY);
+  canvas.setCursor(volBarX - 30, volBarY);
+  canvas.print("VOL");
+
+  // Footer Navigation
+  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.setCursor(5, SCREEN_HEIGHT - 12);
+  canvas.print("L/R: Tune  U/D: Vol  SEL: Scan  L+R: Back");
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handleRadioFMInput() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastDebounce < 150) return;
+
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnLeft = (digitalRead(BTN_LEFT) == BTN_ACT);
+  bool btnRight = (digitalRead(BTN_RIGHT) == BTN_ACT);
+  bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
+
+  if (btnUp) {
+    if (radioVolume < 15) {
+      radioVolume++;
+      rx.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnDown) {
+    if (radioVolume > 0) {
+      radioVolume--;
+      rx.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnLeft) {
+    radioFrequency -= 10; // -0.1 MHz
+    if (radioFrequency < 8700) radioFrequency = 10800;
+    rx.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = "";
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+  if (btnRight) {
+    radioFrequency += 10; // +0.1 MHz
+    if (radioFrequency > 10800) radioFrequency = 8700;
+    rx.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = "";
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+  if (btnSelect) {
+    unsigned long pressStart = millis();
+    while(digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (millis() - pressStart > 1000) {
+            // Long Press: Toggle Bass Boost
+            radioBassBoost = !radioBassBoost;
+            rx.setBassBoost(radioBassBoost);
+            showStatus(radioBassBoost ? "Bass Boost ON" : "Bass Boost OFF", 1000);
+            ledQuickFlash();
+            lastDebounce = millis();
+            return;
+        }
+        delay(10);
+    }
+    // Short Press: Auto Scan / Seek
+    rx.seek(1, 0); // Seek up with wrap
+    delay(200);
+    radioFrequency = rx.getFrequency();
+    radioRDS = ""; radioRT = "";
+    ledSuccess();
+    lastDebounce = currentMillis;
+  }
+
+  // Toggle Stereo/Mono with Long Press UP
+  if (btnUp) {
+      unsigned long pressStart = millis();
+      while(digitalRead(BTN_UP) == BTN_ACT) {
+          if (millis() - pressStart > 1000) {
+              radioStereo = !radioStereo;
+              rx.setMono(!radioStereo);
+              showStatus(radioStereo ? "Stereo Mode" : "Mono Mode", 1000);
+              ledQuickFlash();
+              lastDebounce = millis();
+              return;
+          }
+          delay(10);
+      }
+  }
+
+  // Mute with Long Press DOWN
+  if (btnDown) {
+      unsigned long pressStart = millis();
+      while(digitalRead(BTN_DOWN) == BTN_ACT) {
+          if (millis() - pressStart > 1000) {
+              radioMute = !radioMute;
+              rx.setMute(radioMute);
+              showStatus(radioMute ? "MUTE ON" : "MUTE OFF", 1000);
+              ledQuickFlash();
+              lastDebounce = millis();
+              return;
+          }
+          delay(10);
+      }
+  }
+
+  // Let's use L+R to exit as per other screens.
+  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
+      changeState(STATE_MAIN_MENU);
+      lastDebounce = currentMillis;
+  }
+}
+
+void updateRadioRDS() {
+  if (currentState != STATE_RADIO_FM) return;
+
+  if (rx.getRdsReady()) {
+      char *rdsName = rx.getRdsStationName();
+      char *rdsText = rx.getRdsText();
+
+      if (rdsName != nullptr && strlen(rdsName) > 0) {
+          radioRDS = String(rdsName);
+          radioRDS.trim();
+      }
+      if (rdsText != nullptr && strlen(rdsText) > 0) {
+          radioRT = String(rdsText);
+          radioRT.trim();
+      }
+  }
 }
 
 void drawFileViewer() {
@@ -11040,13 +11291,14 @@ void drawFileViewer() {
 
 
 void setup() {
-    const int maxBootLines = 8;
+    const int maxBootLines = 9;
     const char* bootStatusLines[maxBootLines] = {
         "> CORE SYSTEMS.....",
         "> RENDERER.........",
         "> POWER MGMT.......",
         "> STORAGE..........",
         "> AUDIO SUBSYSTEM..",
+        "> RADIO FM.........",
         "> CONFIGS..........",
         "> NETWORK..........",
         "> BOOT COMPLETE...."
@@ -11118,7 +11370,17 @@ void setup() {
     // Init Audio
     initMusicPlayer();
     bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 60);
+    drawBootScreen(bootStatusLines, ++currentLine, 55);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    // Init Radio
+    Wire.begin(15, 16);
+    rx.setup();
+    rx.setRDS(true);
+    rx.setVolume(radioVolume);
+    rx.setFrequency(radioFrequency);
+    bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 65);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Load Configs ---
@@ -11359,6 +11621,7 @@ void loop() {
     case STATE_GAME_FLAPPY:
     case STATE_GAME_BREAKOUT:
     case STATE_GAME_RACING:
+    case STATE_RADIO_FM:
     case STATE_TOOL_SNIFFER:
     case STATE_TOOL_WIFI_SONAR:
     case STATE_TOOL_DEAUTH_ATTACK:
@@ -11487,6 +11750,11 @@ void loop() {
   if (currentState == STATE_POMODORO) {
     updatePomodoroLogic();
     screenIsDirty = true; // Keep the timer updated
+  }
+
+  // Radio RDS Update
+  if (currentState == STATE_RADIO_FM) {
+    updateRadioRDS();
   }
 
   // Prayer times background tasks
@@ -11981,7 +12249,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 17) menuSelection++;
+          if (menuSelection < 18) menuSelection++;
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
@@ -12284,6 +12552,7 @@ void loop() {
         case STATE_PRAYER_TIMES:
         case STATE_PRAYER_SETTINGS:
         case STATE_EARTHQUAKE:
+        case STATE_RADIO_FM:
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_EARTHQUAKE_DETAIL:
