@@ -2559,32 +2559,32 @@ void drawQuizPlaying() {
   QuizQuestion q = quiz.questions[quiz.currentQuestion];
 
   // Header panel
-  canvas.fillRoundRect(5, 18, SCREEN_WIDTH - 10, 20, 4, COLOR_PANEL);
+  canvas.fillRoundRect(5, 14, SCREEN_WIDTH - 10, 18, 4, COLOR_PANEL);
   canvas.setTextSize(1); canvas.setTextColor(COLOR_ACCENT);
-  canvas.setCursor(15, 24); canvas.print("QUESTION " + String(quiz.currentQuestion + 1) + " / " + String(quiz.totalQuestions));
+  canvas.setCursor(15, 19); canvas.print("QUESTION " + String(quiz.currentQuestion + 1) + " / " + String(quiz.totalQuestions));
 
   canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(130, 24); canvas.print("Score: " + String(quiz.score));
+  canvas.setCursor(130, 19); canvas.print("Score: " + String(quiz.score));
 
   if (quiz.streak > 1) {
     canvas.setTextColor(COLOR_WARN);
-    canvas.setCursor(220, 24); canvas.print("STREAK x" + String(quiz.streak));
+    canvas.setCursor(220, 19); canvas.print("STREAK x" + String(quiz.streak));
   }
 
   // Timer bar
   int timerWidth = SCREEN_WIDTH - 20;
-  canvas.drawRoundRect(10, 42, timerWidth, 6, 3, COLOR_PANEL);
+  canvas.drawRoundRect(10, 34, timerWidth, 4, 2, COLOR_PANEL);
   int progress = (int)(timerWidth * quiz.timeLeft / (float)quizSettings.timerSeconds);
   uint16_t timerColor = (quiz.timeLeft < 5) ? COLOR_ERROR : (quiz.timeLeft < 10 ? COLOR_WARN : COLOR_ACCENT);
-  if (progress > 0) canvas.fillRoundRect(10, 42, progress, 6, 3, timerColor);
+  if (progress > 0) canvas.fillRoundRect(10, 34, progress, 4, 2, timerColor);
 
   // Question Box
-  canvas.fillRoundRect(10, 55, SCREEN_WIDTH - 20, 45, 6, COLOR_PANEL);
-  canvas.drawRoundRect(10, 55, SCREEN_WIDTH - 20, 45, 6, COLOR_BORDER);
-  int qy = drawWordWrap(q.question, 20, 65, SCREEN_WIDTH - 40, COLOR_TEXT);
+  canvas.fillRoundRect(10, 40, SCREEN_WIDTH - 20, 46, 6, COLOR_PANEL);
+  canvas.drawRoundRect(10, 40, SCREEN_WIDTH - 20, 46, 6, COLOR_BORDER);
+  int qy = drawWordWrap(q.question, 20, 48, SCREEN_WIDTH - 40, COLOR_TEXT);
 
   // Answers
-  int ay = 108;
+  int ay = 90;
   for (int i = 0; i < 4; i++) {
     if (q.answers[i] == "") continue;
     uint16_t bg = COLOR_PANEL, fg = COLOR_TEXT, border = COLOR_BORDER;
@@ -2607,17 +2607,16 @@ void drawQuizPlaying() {
     if (ans.length() > 45) ans = ans.substring(0, 42) + "...";
     canvas.print(String((char)('A' + i)) + ". " + ans);
 
-    ay += 22;
+    ay += 20;
   }
 
   // Footer
   canvas.setTextSize(1); canvas.setTextColor(COLOR_DIM);
   canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  canvas.print("L=Lifeline  R=Menu  L+R=Back  50/50:" + String(quiz.lifeline5050) + " Skip:" + String(quiz.lifelineSkip));
+  canvas.print("50/50: " + String(quiz.lifeline5050) + "  Skip: " + String(quiz.lifelineSkip));
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
-
 int drawWordWrap(String text, int x, int y, int maxWidth, uint16_t color) {
   canvas.setTextColor(color);
   int curX = x;
@@ -2666,8 +2665,6 @@ void drawQuizResult() {
   canvas.print("SKIPPED: " + String(quiz.skipped) + "  MAX STREAK: x" + String(quiz.maxStreak));
 
   canvas.setTextColor(COLOR_ACCENT);
-  canvas.setCursor(70, SCREEN_HEIGHT - 25); canvas.print("Press SELECT to play again");
-  canvas.setCursor(90, SCREEN_HEIGHT - 12); canvas.print("Press L+R to Exit");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -2709,7 +2706,6 @@ void drawQuizLeaderboard() {
   }
 
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(110, SCREEN_HEIGHT - 12); canvas.print("Press SELECT to back");
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -4712,19 +4708,15 @@ void drawPlatformerGame() {
 
   // --- Draw Parallax Background ---
   for (int i = 0; i < JUMPER_MAX_STARS; i++) {
-    // Stars move down relative to camera, creating parallax
     float starScreenY = jumperStars[i].y - (jumperCameraY * jumperStars[i].speed);
-
-    // Wrap stars around
     while (starScreenY > SCREEN_HEIGHT) {
       starScreenY -= SCREEN_HEIGHT;
-      jumperStars[i].x = random(0, SCREEN_WIDTH); // Reposition X when wrapping
+      jumperStars[i].x = random(0, SCREEN_WIDTH);
     }
     while (starScreenY < 0) {
       starScreenY += SCREEN_HEIGHT;
       jumperStars[i].x = random(0, SCREEN_WIDTH);
     }
-
     canvas.fillCircle(jumperStars[i].x, (int)starScreenY, jumperStars[i].size, jumperStars[i].color);
   }
 
@@ -4733,9 +4725,9 @@ void drawPlatformerGame() {
     if (jumperPlatforms[i].active) {
       uint16_t color;
       switch(jumperPlatforms[i].type) {
-        case PLATFORM_MOVING:    color = COLOR_WARN; break; // Yellow
-        case PLATFORM_BREAKABLE: color = COLOR_ERROR; break; // Red
-        default:                 color = COLOR_SUCCESS; break; // Green
+        case PLATFORM_MOVING:    color = COLOR_WARN; break;
+        case PLATFORM_BREAKABLE: color = COLOR_ERROR; break;
+        default:                 color = COLOR_SUCCESS; break;
       }
       int screenY = jumperPlatforms[i].y - jumperCameraY;
       canvas.fillRect(jumperPlatforms[i].x, screenY, jumperPlatforms[i].width, 8, color);
@@ -4765,13 +4757,6 @@ void drawPlatformerGame() {
   canvas.setCursor(10, 28);
   canvas.print("BEST: "); canvas.print(sysConfig.jumperBest);
 
-  // Tampilkan instruksi selama permainan
-  if (jumperGameActive) {
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_DIM);
-    canvas.setCursor(10, SCREEN_HEIGHT - 12);
-  }
-
   // --- Draw Game Over Screen ---
   if (!jumperGameActive) {
     canvas.fillRoundRect(SCREEN_WIDTH/2 - 100, SCREEN_HEIGHT/2 - 40, 200, 80, 8, COLOR_PANEL);
@@ -4785,21 +4770,14 @@ void drawPlatformerGame() {
     canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 - 20);
     canvas.print("GAME OVER");
 
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_TEXT);
     String finalScore = "Score: " + String(jumperScore);
     canvas.getTextBounds(finalScore, 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2);
     canvas.print(finalScore);
-
-    canvas.getTextBounds("SELECT to Restart | L+R to Exit", 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, SCREEN_HEIGHT/2 + 20);
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
-
-
 void drawRacingGame() {
     // --- Sky & Horizon ---
     for(int y=0; y < SCREEN_HEIGHT/2; y++) {
@@ -5012,7 +4990,6 @@ void resetPongBall() {
 }
 
 void updatePongLogic() {
-  static unsigned long lastLobbyPing = 0;
   if (!pongGameActive) {
     player1.score = 0;
     player2.score = 0;
@@ -5021,16 +4998,13 @@ void updatePongLogic() {
     resetPongBall();
     pongGameActive = true;
     pongRunning = false;
-    lastLobbyPing = 0;
     // Clear particles
     for(int i=0; i<MAX_PONG_PARTICLES; i++) pongParticles[i].life = 0;
     return;
   }
 
   if (!pongRunning) {
-    if (millis() - lastLobbyPing > 500) {
-      lastLobbyPing = millis();
-    }
+    if (digitalRead(BTN_SELECT) == BTN_ACT) pongRunning = true;
     return;
   }
 
@@ -5098,9 +5072,7 @@ void updatePongLogic() {
   float targetY = pongBall.y - PADDLE_HEIGHT / 2;
   player2.y += (targetY - player2.y) * aiLerpFactor;
   player2.y = max(0.0f, min((float)(SCREEN_HEIGHT - PADDLE_HEIGHT), player2.y));
-
 }
-
 void drawPongGame() {
   canvas.fillScreen(COLOR_BG);
 
@@ -5135,14 +5107,6 @@ void drawPongGame() {
   canvas.setTextColor(COLOR_DIM);
   canvas.setTextSize(1);
 
-  if (!pongRunning) {
-      canvas.fillRoundRect(50, 60, 220, 50, 8, COLOR_PANEL);
-      canvas.drawRoundRect(50, 60, 220, 50, 8, COLOR_PRIMARY);
-      canvas.setTextColor(COLOR_PRIMARY);
-      canvas.setTextSize(2);
-      canvas.setCursor(75, 78);
-      canvas.print("Press SELECT");
-  }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -5374,17 +5338,10 @@ void drawFlappyGame() {
     canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 - 15);
     canvas.print("GAME OVER");
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_TEXT);
-    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 + 10);
-    canvas.print("SELECT to Restart");
   }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
-
-// ============ BREAKOUT GAME LOGIC ============
 void initBreakoutGame() {
   breakoutBall.x = SCREEN_WIDTH / 2;
   breakoutBall.y = SCREEN_HEIGHT - 60;
@@ -5488,11 +5445,6 @@ void drawBreakoutGame() {
     canvas.getTextBounds("GAME OVER", 0, 0, &x1, &y1, &w, &h);
     canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 - 15);
     canvas.print("GAME OVER");
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_TEXT);
-    canvas.getTextBounds("SELECT to Restart", 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor(SCREEN_WIDTH/2 - w/2, SCREEN_HEIGHT/2 + 10);
-    canvas.print("SELECT to Restart");
   }
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
@@ -8124,12 +8076,6 @@ void drawUTTTGameOver() {
   canvas.print("Total Moves: ");
   canvas.print(utttStats.totalMoves);
 
-  canvas.setTextColor(COLOR_SECONDARY);
-  canvas.setCursor(40, 135);
-  canvas.print("SEL = New Game");
-  canvas.setCursor(40, 145);
-  canvas.print("L+R = Main Menu");
-
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -8141,12 +8087,6 @@ void drawUTTTMenu() {
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_PRIMARY);
   canvas.setCursor(20, 25);
-  canvas.print("TIC-TAC-TOE");
-
-  canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_TEXT);
-
-  int y = 55;
   const char* options[] = {
     "1. vs AI (Easy)",
     "2. vs AI (Medium)",
@@ -8154,6 +8094,7 @@ void drawUTTTMenu() {
     "4. vs Human (Local)",
     "5. Back to Menu"
   };
+  int y = 55;
 
   for (int i = 0; i < 5; i++) {
     if (i == utttMenuCursor) {
@@ -9561,7 +9502,7 @@ void drawWikiViewer() {
   x = 10;
   word = "";
   String extract = currentArticle.extract;
-  if (extract.length() == 0) extract = "Press SELECT to fetch a random article.";
+  if (extract.length() == 0) extract = "No article loaded.";
 
   for (unsigned int i = 0; i < extract.length(); i++) {
     char c = extract.charAt(i);
@@ -12076,10 +12017,6 @@ void loop() {
           handleGameHubMenuSelect();
           break;
         case STATE_GAME_PONG:
-          if (!pongRunning) {
-              pongRunning = true;
-              ledSuccess();
-          }
           break;
         case STATE_TOOL_SNIFFER:
           // Toggle active/passive or just reset stats
