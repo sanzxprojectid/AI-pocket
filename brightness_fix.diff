@@ -1,0 +1,11 @@
+<<<<<<< SEARCH
+#define TFT_BL    14
+=======
+#define TFT_BL    14
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  #define LEDC_BACKLIGHT_CTRL TFT_BL
+#else
+  #define LEDC_BACKLIGHT_CTRL 0
+#endif
+>>>>>>> REPLACE
