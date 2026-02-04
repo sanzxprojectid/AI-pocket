@@ -547,7 +547,7 @@ RacePacket outgoingRacePacket;
 RacePacket incomingRacePacket;
 
 // ============ TRIVIA QUIZ GAME ============
-#define MAX_QUESTIONS 10
+#define MAX_QUESTIONS 50
 #define QUIZ_TIMER_SECONDS 10
 #define MAX_LEADERBOARD 10
 
@@ -619,21 +619,30 @@ CategoryItem quizCategories[] = {
   {-1, "Any Category"},
   {9, "General Knowledge"},
   {10, "Books"},
-  {11, "Music"},
-  {12, "Video Games"},
-  {13, "Television"},
-  {14, "Anime & Manga"},
-  {17, "Science: Nature"},
+  {11, "Film"},
+  {12, "Music"},
+  {13, "Musicals & Theatres"},
+  {14, "Television"},
+  {15, "Video Games"},
+  {16, "Board Games"},
+  {17, "Science & Nature"},
   {18, "Computers"},
   {19, "Mathematics"},
-  {20, "Geography"},
-  {21, "History"},
-  {22, "Art"},
-  {24, "Celebrities"},
-  {27, "Mythology"},
+  {20, "Mythology"},
+  {21, "Sports"},
+  {22, "Geography"},
+  {23, "History"},
+  {24, "Politics"},
+  {25, "Art"},
+  {26, "Celebrities"},
+  {27, "Animals"},
+  {28, "Vehicles"},
+  {29, "Comics"},
+  {30, "Gadgets"},
+  {31, "Anime & Manga"},
   {32, "Cartoon & Animation"}
 };
-int quizCategoryCount = 16;
+int quizCategoryCount = 25;
 
 // --- NEW V3 COLOR SPRITES (RGB565 format) ---
 // Each value is a 16-bit color, COLOR_BG is transparent
@@ -2497,16 +2506,41 @@ void loadLeaderboard() {
 void drawQuizMenu() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
+
+  // Header
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_ACCENT);
   canvas.setCursor(85, 22); canvas.print("TRIVIA QUIZ");
-  canvas.drawFastHLine(70, 42, 180, COLOR_PRIMARY);
-  String items[] = {"Start Quiz", "Category: " + quizSettings.categoryName, "Difficulty: " + getDifficultyName(quizSettings.difficulty), "Questions: " + String(quizSettings.questionCount), "Timer: " + String(quizSettings.timerSeconds) + "s", "Leaderboard", "Back"};
+  canvas.drawRoundRect(70, 18, 180, 26, 4, COLOR_BORDER);
+
+  String items[] = {
+    "START GAME",
+    "Category: " + quizSettings.categoryName,
+    "Difficulty: " + getDifficultyName(quizSettings.difficulty),
+    "Questions: " + String(quizSettings.questionCount),
+    "Timer: " + String(quizSettings.timerSeconds) + "s",
+    "Leaderboard",
+    "Back to Menu"
+  };
+
   canvas.setTextSize(1);
   for (int i = 0; i < 7; i++) {
-    if (i == quizMenuCursor) { canvas.fillRect(50, 53 + i * 16, 220, 14, COLOR_PRIMARY); canvas.setTextColor(COLOR_BG); }
-    else canvas.setTextColor(COLOR_TEXT);
-    canvas.setCursor(60, 55 + i * 16); canvas.print(items[i]);
+    int y = 53 + i * 18;
+    if (i == quizMenuCursor) {
+      canvas.fillRoundRect(30, y - 2, 260, 16, 4, COLOR_ACCENT);
+      canvas.setTextColor(COLOR_BG);
+    } else {
+      canvas.drawRoundRect(30, y - 2, 260, 16, 4, COLOR_PANEL);
+      canvas.setTextColor(COLOR_TEXT);
+    }
+
+    if (i == quizMenuCursor) {
+      canvas.setCursor(35, y + 2); canvas.print(">");
+    }
+
+    canvas.setCursor(50, y + 2);
+    canvas.print(items[i]);
   }
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -2517,28 +2551,64 @@ void drawQuizPlaying() {
   drawStatusBar();
   if (quiz.currentQuestion >= quiz.totalQuestions) return;
   QuizQuestion q = quiz.questions[quiz.currentQuestion];
-  canvas.setTextSize(1); canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(10, 20); canvas.print("Q" + String(quiz.currentQuestion + 1) + "/" + String(quiz.totalQuestions));
-  canvas.setCursor(120, 20); canvas.print("Score: " + String(quiz.score));
-  if (quiz.streak > 0) { canvas.setCursor(220, 20); canvas.print("Streak: x" + String(quiz.streak)); }
-  canvas.fillRect(10, 32, SCREEN_WIDTH - 20, 4, COLOR_PANEL);
-  canvas.fillRect(10, 32, (int)((SCREEN_WIDTH - 20) * quiz.timeLeft / quizSettings.timerSeconds), 4, COLOR_PRIMARY);
-  canvas.setTextColor(COLOR_DIM); canvas.setCursor(10, 42); canvas.print(q.category + " [" + q.difficulty + "]");
-  int qy = drawWordWrap(q.question, 10, 55, SCREEN_WIDTH - 20, COLOR_TEXT);
-  qy += 8;
+
+  // Header panel
+  canvas.fillRoundRect(5, 18, SCREEN_WIDTH - 10, 20, 4, COLOR_PANEL);
+  canvas.setTextSize(1); canvas.setTextColor(COLOR_ACCENT);
+  canvas.setCursor(15, 24); canvas.print("QUESTION " + String(quiz.currentQuestion + 1) + " / " + String(quiz.totalQuestions));
+
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.setCursor(130, 24); canvas.print("Score: " + String(quiz.score));
+
+  if (quiz.streak > 1) {
+    canvas.setTextColor(COLOR_WARN);
+    canvas.setCursor(220, 24); canvas.print("STREAK x" + String(quiz.streak));
+  }
+
+  // Timer bar
+  int timerWidth = SCREEN_WIDTH - 20;
+  canvas.drawRoundRect(10, 42, timerWidth, 6, 3, COLOR_PANEL);
+  int progress = (int)(timerWidth * quiz.timeLeft / (float)quizSettings.timerSeconds);
+  uint16_t timerColor = (quiz.timeLeft < 5) ? COLOR_ERROR : (quiz.timeLeft < 10 ? COLOR_WARN : COLOR_ACCENT);
+  if (progress > 0) canvas.fillRoundRect(10, 42, progress, 6, 3, timerColor);
+
+  // Question Box
+  canvas.fillRoundRect(10, 55, SCREEN_WIDTH - 20, 45, 6, COLOR_PANEL);
+  canvas.drawRoundRect(10, 55, SCREEN_WIDTH - 20, 45, 6, COLOR_BORDER);
+  int qy = drawWordWrap(q.question, 20, 65, SCREEN_WIDTH - 40, COLOR_TEXT);
+
+  // Answers
+  int ay = 108;
   for (int i = 0; i < 4; i++) {
     if (q.answers[i] == "") continue;
-    uint16_t bg = COLOR_PANEL, fg = COLOR_TEXT;
-    if (i == quiz.selectedAnswer && quiz.state == QUIZ_SELECTING) { bg = COLOR_PRIMARY; fg = COLOR_BG; }
-    if (quiz.state == QUIZ_ANSWERED || quiz.state == QUIZ_TIMESUP) {
-      if (i == q.correctIndex) { bg = COLOR_SUCCESS; fg = COLOR_BG; }
-      else if (i == quiz.selectedAnswer) { bg = COLOR_ERROR; fg = COLOR_BG; }
+    uint16_t bg = COLOR_PANEL, fg = COLOR_TEXT, border = COLOR_BORDER;
+
+    if (i == quiz.selectedAnswer && quiz.state == QUIZ_SELECTING) {
+      bg = COLOR_ACCENT; fg = COLOR_BG; border = COLOR_ACCENT;
     }
-    canvas.fillRect(10, qy, SCREEN_WIDTH - 20, 18, bg);
-    canvas.setTextColor(fg); canvas.setCursor(15, qy + 5); canvas.print(String((char)('A' + i)) + ". " + (q.answers[i].length() > 45 ? q.answers[i].substring(0, 42) + "..." : q.answers[i]));
-    qy += 22;
+
+    if (quiz.state == QUIZ_ANSWERED || quiz.state == QUIZ_TIMESUP) {
+      if (i == q.correctIndex) { bg = COLOR_SUCCESS; fg = COLOR_BG; border = COLOR_SUCCESS; }
+      else if (i == quiz.selectedAnswer) { bg = COLOR_ERROR; fg = COLOR_BG; border = COLOR_ERROR; }
+    }
+
+    canvas.fillRoundRect(10, ay, SCREEN_WIDTH - 20, 18, 4, bg);
+    canvas.drawRoundRect(10, ay, SCREEN_WIDTH - 20, 18, 4, border);
+
+    canvas.setTextColor(fg);
+    canvas.setCursor(20, ay + 5);
+    String ans = q.answers[i];
+    if (ans.length() > 45) ans = ans.substring(0, 42) + "...";
+    canvas.print(String((char)('A' + i)) + ". " + ans);
+
+    ay += 22;
   }
-  canvas.setTextColor(COLOR_DIM); canvas.setCursor(10, SCREEN_HEIGHT - 12); canvas.print("L=Lifeline  R=Menu  L+R=Back  50/50:" + String(quiz.lifeline5050) + " Skip:" + String(quiz.lifelineSkip));
+
+  // Footer
+  canvas.setTextSize(1); canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(10, SCREEN_HEIGHT - 12);
+  canvas.print("L=Lifeline  R=Menu  L+R=Back  50/50:" + String(quiz.lifeline5050) + " Skip:" + String(quiz.lifelineSkip));
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -2559,37 +2629,82 @@ int drawWordWrap(String text, int x, int y, int maxWidth, uint16_t color) {
 void drawQuizResult() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
-  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(100, 30); canvas.print("QUIZ OVER!");
+
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_ACCENT);
+  canvas.setCursor(95, 25); canvas.print("QUIZ RESULT");
+
+  // Main Score Box
+  canvas.fillRoundRect(60, 50, 200, 60, 8, COLOR_PANEL);
+  canvas.drawRoundRect(60, 50, 200, 60, 8, COLOR_ACCENT);
+
   canvas.setTextSize(3);
-  int16_t x1, y1; uint16_t w, h; String s = String(quiz.score);
+  String s = String(quiz.score);
+  int16_t x1, y1; uint16_t w, h;
   canvas.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor((SCREEN_WIDTH - w) / 2, 60); canvas.print(s);
+  canvas.setCursor(160 - w/2, 65); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.print(s);
+
   canvas.setTextSize(1); canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor((SCREEN_WIDTH - 40) / 2, 90); canvas.print("points");
+  canvas.setCursor(160 - 20, 95); canvas.print("POINTS");
+
+  // Stats
+  int sy = 120;
+  canvas.fillRoundRect(20, sy, 280, 35, 4, COLOR_PANEL);
   canvas.setTextColor(COLOR_TEXT);
-  canvas.setCursor(40, 110); canvas.print("Correct: " + String(quiz.correctCount) + "  Wrong: " + String(quiz.wrongCount));
-  canvas.setCursor(40, 125); canvas.print("Skipped: " + String(quiz.skipped) + "  Max Streak: " + String(quiz.maxStreak));
-  canvas.setTextColor(COLOR_PRIMARY);
-  canvas.setCursor(80, SCREEN_HEIGHT - 25); canvas.print("Press SELECT to play again");
-  canvas.setCursor(100, SCREEN_HEIGHT - 12); canvas.print("Press L+R for Menu");
+  canvas.setCursor(35, sy + 8);
+  canvas.print("CORRECT: "); canvas.setTextColor(COLOR_SUCCESS); canvas.print(quiz.correctCount);
+  canvas.setTextColor(COLOR_TEXT); canvas.print("  WRONG: "); canvas.setTextColor(COLOR_ERROR); canvas.print(quiz.wrongCount);
+
+  canvas.setCursor(35, sy + 20);
+  canvas.setTextColor(COLOR_TEXT);
+  canvas.print("SKIPPED: " + String(quiz.skipped) + "  MAX STREAK: x" + String(quiz.maxStreak));
+
+  canvas.setTextColor(COLOR_ACCENT);
+  canvas.setCursor(70, SCREEN_HEIGHT - 25); canvas.print("Press SELECT to play again");
+  canvas.setCursor(90, SCREEN_HEIGHT - 12); canvas.print("Press L+R to Exit");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void drawQuizLeaderboard() {
-  canvas.fillScreen(COLOR_BG); drawStatusBar();
-  canvas.setTextSize(2); canvas.setTextColor(COLOR_PRIMARY);
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  canvas.setTextSize(2); canvas.setTextColor(COLOR_ACCENT);
   canvas.setCursor(85, 22); canvas.print("LEADERBOARD");
-  canvas.drawFastHLine(70, 42, 180, COLOR_PRIMARY);
+  canvas.drawFastHLine(70, 42, 180, COLOR_ACCENT);
+
   canvas.setTextSize(1);
-  if (leaderboardCount == 0) { canvas.setCursor(100, 80); canvas.print("No scores yet!"); }
-  else {
-    canvas.setCursor(40, 50); canvas.print("RANK   SCORE   STREAK");
-    for (int i = 0; i < leaderboardCount; i++) {
-      canvas.setCursor(45, 65 + i * 12); canvas.print(String(i + 1) + ".      " + String(leaderboard[i].score) + "      x" + String(leaderboard[i].streak));
+  if (leaderboardCount == 0) {
+    canvas.setTextColor(COLOR_DIM);
+    canvas.setCursor(105, 90); canvas.print("No scores yet!");
+  } else {
+    // Header
+    canvas.fillRoundRect(20, 50, 280, 16, 4, COLOR_PANEL);
+    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setCursor(30, 54); canvas.print("RK   SCORE   STREAK   CATEGORY");
+
+    for (int i = 0; i < leaderboardCount && i < 8; i++) {
+      int y = 70 + i * 14;
+      if (i % 2 == 0) canvas.fillRoundRect(20, y - 2, 280, 14, 2, 0x0841);
+
+      uint16_t rankColor = (i == 0) ? COLOR_WARN : (i == 1 ? 0xC618 : (i == 2 ? 0xB4B2 : COLOR_TEXT));
+      canvas.setTextColor(rankColor);
+      canvas.setCursor(30, y); canvas.print(String(i + 1));
+
+      canvas.setTextColor(COLOR_TEXT);
+      canvas.setCursor(65, y); canvas.print(String(leaderboard[i].score));
+      canvas.setCursor(120, y); canvas.print("x" + String(leaderboard[i].streak));
+
+      String cat = leaderboard[i].category;
+      if (cat.length() > 15) cat = cat.substring(0, 12) + "...";
+      canvas.setCursor(170, y); canvas.print(cat);
     }
   }
-  canvas.setCursor(110, SCREEN_HEIGHT - 15); canvas.print("Press SELECT or L+R to Back");
+
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(110, SCREEN_HEIGHT - 12); canvas.print("Press SELECT to back");
+
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
@@ -2639,8 +2754,23 @@ void handleQuizMenuInput() {
       case 0: initQuizGame(); break;
       case 1: { static int c = 0; c = (c + 1) % quizCategoryCount; quizSettings.categoryId = quizCategories[c].id; quizSettings.categoryName = quizCategories[c].name; break; }
       case 2: quizSettings.difficulty = (quizSettings.difficulty + 1) % 4; break;
-      case 3: quizSettings.questionCount = (quizSettings.questionCount == 5 ? 10 : (quizSettings.questionCount == 10 ? 15 : 5)); break;
-      case 4: quizSettings.timerSeconds = (quizSettings.timerSeconds == 20 ? 5 : quizSettings.timerSeconds + 5); break;
+      case 3: {
+        if (quizSettings.questionCount == 5) quizSettings.questionCount = 10;
+        else if (quizSettings.questionCount == 10) quizSettings.questionCount = 20;
+        else if (quizSettings.questionCount == 20) quizSettings.questionCount = 30;
+        else if (quizSettings.questionCount == 30) quizSettings.questionCount = 50;
+        else quizSettings.questionCount = 5;
+        break;
+      }
+      case 4: {
+        if (quizSettings.timerSeconds == 10) quizSettings.timerSeconds = 15;
+        else if (quizSettings.timerSeconds == 15) quizSettings.timerSeconds = 20;
+        else if (quizSettings.timerSeconds == 20) quizSettings.timerSeconds = 30;
+        else if (quizSettings.timerSeconds == 30) quizSettings.timerSeconds = 45;
+        else if (quizSettings.timerSeconds == 45) quizSettings.timerSeconds = 60;
+        else quizSettings.timerSeconds = 10;
+        break;
+      }
       case 5: loadLeaderboard(); changeState(STATE_QUIZ_LEADERBOARD); break;
       case 6: changeState(STATE_MAIN_MENU); break;
     }
