@@ -23,7 +23,8 @@
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
 #include <Wire.h>
-#include <RDA5807.h>
+#include <radio.h>
+#include <RDA5807M.h>
 #define COLOR_BG        0x0000  // Pure Black
 #define COLOR_PRIMARY   0xFFFF  // White
 #define COLOR_SECONDARY 0x7BEF  // Slate Gray
@@ -211,9 +212,11 @@ typedef struct {
 // Pin MOSI (11) dan SCLK (12) sudah sesuai dengan default VSPI hardware
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
+#include <RDSParser.h>
 
 // ============ RADIO RDA5807M ============
-RDA5807 rx;
+RDA5807M radio;
+RDSParser rds;
 uint16_t radioFrequency = 10110; // Default 101.1 MHz
 int radioVolume = 8;
 bool radioStereo = true;
@@ -221,6 +224,24 @@ bool radioMute = false;
 bool radioBassBoost = false;
 String radioRDS = "";
 String radioRT = ""; // Radio Text
+struct RadioPreset {
+  uint16_t freq;
+  const char* name;
+};
+
+RadioPreset radioPresets[] = {
+  {8760, "Hard Rock FM"},
+  {9080, "Virgin Radio"},
+  {9510, "Kis FM"},
+  {9870, "Gen FM"},
+  {10110, "Jak FM"},
+  {10500, "Prambors"},
+  {10190, "Bahana FM"},
+  {9430, "Sonora FM"},
+  {10460, "Trijaya FM"},
+  {10770, "RRI Pro 2"}
+};
+int radioSelectedPreset = -1;
 unsigned long lastRDSUpdate = 0;
 
 // ============ NEOPIXEL ============
@@ -1675,6 +1696,9 @@ void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data,
 #else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
 #endif
+void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4);
+void DisplayServiceName(const char *name);
+void DisplayText(const char *text);
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 void onESPNowDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status);
 #else
@@ -1692,6 +1716,9 @@ void drawNetScan();
 void drawFileManager();
 void drawFileViewer();
 void drawGameHubMenu();
+void drawRadioFM();
+void handleRadioFMInput();
+void updateRadioRDS();
 void drawMainMenuCool();
 void drawStarfield();
 void drawGameOfLife();
@@ -11022,6 +11049,28 @@ void drawLocalAiChat() {
   drawGenericToolScreen("LOCAL AI (Coming Soon)");
 }
 
+void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4) {
+  rds.processData(block1, block2, block3, block4);
+}
+
+void DisplayServiceName(const char *name) {
+  String n = String(name);
+  n.trim();
+  if (n.length() > 0 && radioRDS != n) {
+    radioRDS = n;
+    screenIsDirty = true;
+  }
+}
+
+void DisplayText(const char *text) {
+  String t = String(text);
+  t.trim();
+  if (t.length() > 0 && radioRT != t) {
+    radioRT = t;
+    screenIsDirty = true;
+  }
+}
+
 void drawRadioFM() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -11030,99 +11079,131 @@ void drawRadioFM() {
   canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
   canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
   canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_PRIMARY);
-  canvas.drawBitmap(10, 18, icon_radio, 32, 32, COLOR_PRIMARY);
   canvas.setCursor(50, 20);
   canvas.print("RADIO FM");
 
-  // Signal Strength (RSSI)
-  int rssi = rx.getRssi();
-  int bars = map(rssi, 0, 120, 0, 5);
-  bars = constrain(bars, 0, 5);
-  int barX = SCREEN_WIDTH - 45;
-  int barY = 25;
-  for (int i = 0; i < 5; i++) {
-    int h = (i + 1) * 3;
-    if (i < bars) {
-      canvas.fillRect(barX + (i * 6), barY - h, 4, h, COLOR_SUCCESS);
-    } else {
-      canvas.drawRect(barX + (i * 6), barY - h, 4, h, COLOR_DIM);
-    }
+  // Frequency Dial (Visual)
+  int dialY = 55;
+  int dialH = 20;
+  canvas.drawRect(20, dialY, SCREEN_WIDTH - 40, dialH, COLOR_BORDER);
+
+  // Tick marks
+  for (int f = 87; f <= 108; f++) {
+      int x = map(f, 87, 108, 20, SCREEN_WIDTH - 40);
+      canvas.drawFastVLine(x, dialY, 5, COLOR_DIM);
+      if (f % 5 == 0) {
+          canvas.drawFastVLine(x, dialY, 10, COLOR_SECONDARY);
+          canvas.setTextSize(1);
+          canvas.setCursor(x - 5, dialY + 12);
+          canvas.print(f);
+      }
   }
 
-  // Frequency
+  // Current position indicator
+  int indicatorX = map(radioFrequency, 8700, 10800, 20, SCREEN_WIDTH - 40);
+  canvas.fillTriangle(indicatorX, dialY - 5, indicatorX - 4, dialY - 12, indicatorX + 4, dialY - 12, COLOR_ACCENT);
+  canvas.drawFastVLine(indicatorX, dialY, dialH, COLOR_ACCENT);
+
+  // Large Frequency Display
   canvas.setTextSize(4);
   canvas.setTextColor(COLOR_PRIMARY);
   float freqMHz = radioFrequency / 100.0f;
   String freqStr = String(freqMHz, 1);
   int16_t x1, y1; uint16_t w, h;
   canvas.getTextBounds(freqStr, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH/2 - w/2 - 15, 75);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2 - 15, 95);
   canvas.print(freqStr);
-  canvas.setTextSize(2);
-  canvas.setCursor(SCREEN_WIDTH/2 + w/2 - 5, 85);
-  canvas.print("MHz");
 
-  // RDS Station Name
   canvas.setTextSize(2);
   canvas.setTextColor(COLOR_ACCENT);
-  String rdsName = radioRDS;
-  if (rdsName == "") rdsName = "Searching RDS...";
-  canvas.getTextBounds(rdsName, 0, 0, &x1, &y1, &w, &h);
-  canvas.setCursor(SCREEN_WIDTH/2 - w/2, 105);
-  canvas.print(rdsName);
+  canvas.setCursor(SCREEN_WIDTH/2 + w/2 - 5, 105);
+  canvas.print("MHz");
 
-  // Radio Text (RT) - Scrolling or Word Wrap
+  // RDS Info
   canvas.setTextSize(1);
-  canvas.setTextColor(COLOR_TEXT);
+  canvas.setTextColor(COLOR_SUCCESS);
+  String rdsDisplay = radioRDS == "" ? "SCANNING RDS..." : radioRDS;
+  canvas.getTextBounds(rdsDisplay, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2, 120);
+  canvas.print(rdsDisplay);
+
   if (radioRT != "") {
-      int textW = radioRT.length() * 6;
-      if (textW > SCREEN_WIDTH - 20) {
-          // Simple scrolling for RT
-          static int rtOffset = 0;
-          String rtDisp = radioRT + "      " + radioRT;
-          canvas.setCursor(10, 125);
-          canvas.print(rtDisp.substring(rtOffset/6, rtOffset/6 + 50));
-          rtOffset += 1;
-          if (rtOffset > textW * 6) rtOffset = 0;
+      canvas.setTextColor(COLOR_TEXT);
+      int rtW = radioRT.length() * 6;
+      if (rtW > SCREEN_WIDTH - 40) {
+          static int rtScroll = 0;
+          String rtPart = radioRT.substring(rtScroll/6, min((int)radioRT.length(), rtScroll/6 + 40));
+          canvas.setCursor(20, 132);
+          canvas.print(rtPart);
+          rtScroll++;
+          if (rtScroll > (radioRT.length() - 40) * 6) rtScroll = 0;
       } else {
-          canvas.setCursor(SCREEN_WIDTH/2 - textW/2, 125);
+          canvas.setCursor(SCREEN_WIDTH/2 - rtW/2, 132);
           canvas.print(radioRT);
       }
   }
 
-  // Stereo & Bass Boost Status
+  // Footer / Status
+  int footerY = 150;
+  canvas.drawFastHLine(10, footerY - 5, SCREEN_WIDTH - 20, COLOR_BORDER);
+
+  // Signal Strength
+  RADIO_INFO info;
+  radio.getRadioInfo(&info);
+  int rssi = info.rssi;
+  int bars = map(rssi, 0, 120, 0, 5);
+  bars = constrain(bars, 0, 5);
+  for (int i = 0; i < 5; i++) {
+    int bh = (i + 1) * 2;
+    if (i < bars) canvas.fillRect(20 + (i * 4), footerY + 8 - bh, 3, bh, COLOR_ACCENT);
+    else canvas.drawRect(20 + (i * 4), footerY + 8 - bh, 3, bh, COLOR_DIM);
+  }
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_DIM);
-  canvas.setCursor(10, 145);
-  canvas.print(radioStereo ? "STEREO" : "MONO");
-  if (radioBassBoost) {
-      canvas.setCursor(60, 145);
-      canvas.print("BASS+");
+  canvas.setCursor(45, footerY);
+  canvas.print("RSSI");
+
+  // Volume
+  int volW = map(radioVolume, 0, 15, 0, 60);
+  canvas.drawRect(SCREEN_WIDTH - 80, footerY, 62, 8, COLOR_BORDER);
+  canvas.fillRect(SCREEN_WIDTH - 79, footerY + 1, volW, 6, radioMute ? COLOR_DIM : COLOR_ACCENT);
+  canvas.setCursor(SCREEN_WIDTH - 110, footerY);
+  canvas.print("VOL");
+  if (radioMute) {
+      canvas.setTextColor(COLOR_ERROR);
+      canvas.setCursor(SCREEN_WIDTH - 70, footerY - 8);
+      canvas.print("MUTE");
   }
 
-  // Volume Bar
-  int volBarW = 100;
-  int volBarX = SCREEN_WIDTH - volBarW - 10;
-  int volBarY = 145;
-  canvas.drawRect(volBarX, volBarY, volBarW, 8, COLOR_BORDER);
-  int volW = map(radioVolume, 0, 15, 0, volBarW - 2);
-  canvas.fillRect(volBarX + 1, volBarY + 1, volW, 6, COLOR_PRIMARY);
-  canvas.setCursor(volBarX - 30, volBarY);
-  canvas.print("VOL");
+  // Stereo/Bass
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(SCREEN_WIDTH/2 - 30, footerY);
+  canvas.print(radioStereo ? "STEREO" : "MONO");
+  if (radioBassBoost) {
+      canvas.setTextColor(COLOR_WARN);
+      canvas.setCursor(SCREEN_WIDTH/2 + 15, footerY);
+      canvas.print("BASS");
+  }
 
-  // Footer Navigation
-  canvas.drawFastHLine(0, SCREEN_HEIGHT - 15, SCREEN_WIDTH, COLOR_BORDER);
-  canvas.setCursor(5, SCREEN_HEIGHT - 12);
-  canvas.print("L/R: Tune  U/D: Vol  SEL: Scan  L+R: Back");
+  // Preset Info
+  if (radioSelectedPreset != -1) {
+      canvas.setTextColor(COLOR_ACCENT);
+      canvas.setTextSize(1);
+      String pStr = "P" + String(radioSelectedPreset + 1) + ": " + String(radioPresets[radioSelectedPreset].name);
+      canvas.getTextBounds(pStr, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor(SCREEN_WIDTH/2 - w/2, 160);
+      canvas.print(pStr);
+  }
 
   tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
 void handleRadioFMInput() {
   unsigned long currentMillis = millis();
-  if (currentMillis - lastDebounce < 150) return;
+  if (currentMillis - lastDebounce < 200) return;
 
   bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
   bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
@@ -11130,10 +11211,16 @@ void handleRadioFMInput() {
   bool btnRight = (digitalRead(BTN_RIGHT) == BTN_ACT);
   bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
 
+  if (btnLeft && btnRight) {
+      changeState(STATE_MAIN_MENU);
+      delay(200);
+      return;
+  }
+
   if (btnUp) {
     if (radioVolume < 15) {
       radioVolume++;
-      rx.setVolume(radioVolume);
+      radio.setVolume(radioVolume);
       ledQuickFlash();
     }
     lastDebounce = currentMillis;
@@ -11141,107 +11228,69 @@ void handleRadioFMInput() {
   if (btnDown) {
     if (radioVolume > 0) {
       radioVolume--;
-      rx.setVolume(radioVolume);
+      radio.setVolume(radioVolume);
       ledQuickFlash();
     }
     lastDebounce = currentMillis;
   }
   if (btnLeft) {
-    radioFrequency -= 10; // -0.1 MHz
+    radioFrequency -= 10;
     if (radioFrequency < 8700) radioFrequency = 10800;
-    rx.setFrequency(radioFrequency);
-    radioRDS = ""; radioRT = "";
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
     ledQuickFlash();
     lastDebounce = currentMillis;
   }
   if (btnRight) {
-    radioFrequency += 10; // +0.1 MHz
+    radioFrequency += 10;
     if (radioFrequency > 10800) radioFrequency = 8700;
-    rx.setFrequency(radioFrequency);
-    radioRDS = ""; radioRT = "";
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
     ledQuickFlash();
     lastDebounce = currentMillis;
   }
+
   if (btnSelect) {
     unsigned long pressStart = millis();
     while(digitalRead(BTN_SELECT) == BTN_ACT) {
-        if (millis() - pressStart > 1000) {
-            // Long Press: Toggle Bass Boost
-            radioBassBoost = !radioBassBoost;
-            rx.setBassBoost(radioBassBoost);
-            showStatus(radioBassBoost ? "Bass Boost ON" : "Bass Boost OFF", 1000);
-            ledQuickFlash();
+        if (millis() - pressStart > 800) {
+            showStatus("Seeking Up...", 1000);
+            radio.seekUp(true);
+            delay(300);
+            radioFrequency = radio.getFrequency();
+            radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+            rds.init();
+            ledSuccess();
             lastDebounce = millis();
             return;
         }
         delay(10);
     }
-    // Short Press: Auto Scan / Seek
-    rx.seek(1, 0); // Seek up with wrap
-    delay(200);
-    radioFrequency = rx.getFrequency();
+    radioSelectedPreset = (radioSelectedPreset + 1) % 10;
+    radioFrequency = radioPresets[radioSelectedPreset].freq;
+    radio.setFrequency(radioFrequency);
     radioRDS = ""; radioRT = "";
-    ledSuccess();
+    rds.init();
+    showStatus(radioPresets[radioSelectedPreset].name, 1000);
+    ledQuickFlash();
     lastDebounce = currentMillis;
   }
 
-  // Toggle Stereo/Mono with Long Press UP
-  if (btnUp) {
-      unsigned long pressStart = millis();
-      while(digitalRead(BTN_UP) == BTN_ACT) {
-          if (millis() - pressStart > 1000) {
-              radioStereo = !radioStereo;
-              rx.setMono(!radioStereo);
-              showStatus(radioStereo ? "Stereo Mode" : "Mono Mode", 1000);
-              ledQuickFlash();
-              lastDebounce = millis();
-              return;
-          }
-          delay(10);
-      }
-  }
-
-  // Mute with Long Press DOWN
-  if (btnDown) {
-      unsigned long pressStart = millis();
-      while(digitalRead(BTN_DOWN) == BTN_ACT) {
-          if (millis() - pressStart > 1000) {
-              radioMute = !radioMute;
-              rx.setMute(radioMute);
-              showStatus(radioMute ? "MUTE ON" : "MUTE OFF", 1000);
-              ledQuickFlash();
-              lastDebounce = millis();
-              return;
-          }
-          delay(10);
-      }
-  }
-
-  // Let's use L+R to exit as per other screens.
-  if (digitalRead(BTN_LEFT) == BTN_ACT && digitalRead(BTN_RIGHT) == BTN_ACT) {
-      changeState(STATE_MAIN_MENU);
-      lastDebounce = currentMillis;
+  if (btnUp && btnSelect) {
+      radioMute = !radioMute;
+      radio.setMute(radioMute);
+      showStatus(radioMute ? "Muted" : "Unmuted", 1000);
+      ledQuickFlash();
+      lastDebounce = currentMillis + 200;
   }
 }
 
 void updateRadioRDS() {
   if (currentState != STATE_RADIO_FM) return;
-
-  if (rx.getRdsReady()) {
-      char *rdsName = rx.getRdsStationName();
-      char *rdsText = rx.getRdsText();
-
-      if (rdsName != nullptr && strlen(rdsName) > 0) {
-          radioRDS = String(rdsName);
-          radioRDS.trim();
-      }
-      if (rdsText != nullptr && strlen(rdsText) > 0) {
-          radioRT = String(rdsText);
-          radioRT.trim();
-      }
-  }
+  radio.checkRDS();
 }
-
 void drawFileViewer() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -11375,10 +11424,13 @@ void setup() {
 
     // Init Radio
     Wire.begin(15, 16);
-    rx.setup();
-    rx.setRDS(true);
-    rx.setVolume(radioVolume);
-    rx.setFrequency(radioFrequency);
+    radio.init();
+    radio.setBand(RADIO_BAND_FM);
+    radio.attachReceiveRDS(RDS_process);
+    rds.attachServiceNameCallback(DisplayServiceName);
+    rds.attachTextCallback(DisplayText);
+    radio.setVolume(radioVolume);
+    radio.setFrequency(radioFrequency);
     bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
     drawBootScreen(bootStatusLines, ++currentLine, 65);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
