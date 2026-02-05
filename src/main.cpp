@@ -1268,6 +1268,9 @@ AIMode currentAIMode = MODE_SUBARU;
 bool isSelectingMode = false;
 
 // ============ GROQ API CONFIG ============
+bool lateInitDone = false;
+int lateInitPhase = 0;
+unsigned long lateInitStart = 0;
 String groqApiKey = "";
 int selectedGroqModel = 0;
 const char* groqModels[] = {"llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"};
@@ -1756,7 +1759,6 @@ void updatePlatformerLogic();
 void drawPlatformerGame();
 bool beginSD();
 void endSD();
-void loadMusicMetadata();
 void initMusicPlayer();
 void drawEnhancedMusicPlayer();
 void drawEQIcon(int x, int y, uint8_t eqMode);
@@ -3003,7 +3005,6 @@ void initMusicPlayer() {
         totalTracks = myDFPlayer.readFileCounts();
 
         // Load metadata after getting track count
-        loadMusicMetadata();
 
         // --- Load Last Session ---
         int lastTrack = sysConfig.lastTrack;
@@ -11433,6 +11434,70 @@ void drawFileViewer() {
 }
 
 
+
+void updateLateInit() {
+    if (lateInitDone) return;
+    if (lateInitStart == 0) lateInitStart = millis();
+
+    switch(lateInitPhase) {
+        case 0: // Check WiFi
+            if (WiFi.status() == WL_CONNECTED) {
+                configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
+                lateInitPhase = 1;
+                Serial.println(F("Late Init: WiFi Connected."));
+            } else if (millis() - lateInitStart > 10000) { // Timeout 10s
+                lateInitPhase = 1; // Proceed anyway
+                Serial.println(F("Late Init: WiFi Timeout."));
+            }
+            break;
+        case 1: // Fetch location/prayer
+            if (WiFi.status() == WL_CONNECTED) {
+                loadPrayerConfig();
+                if (!userLocation.isValid || prayerSettings.autoLocation) {
+                    fetchUserLocation();
+                } else {
+                    fetchPrayerTimes();
+                }
+            }
+            lateInitPhase = 2;
+            break;
+        case 2: // Earthquake
+            if (WiFi.status() == WL_CONNECTED) {
+                loadEQConfig();
+                fetchEarthquakeData();
+            }
+            lateInitPhase = 3;
+            break;
+        case 3: // Stats & Leaderboards
+            preferences.begin("uttt-stats", true);
+            utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
+            utttStats.gamesWon = preferences.getInt("utttWon", 0);
+            utttStats.gamesLost = preferences.getInt("utttLost", 0);
+            utttStats.gamesTied = preferences.getInt("utttTied", 0);
+            preferences.end();
+            utttStats.totalMoves = 0;
+
+            preferences.begin("quiz-settings", true);
+            quizSettings.categoryId = preferences.getInt("quizCatId", -1);
+            quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
+            quizSettings.difficulty = preferences.getInt("quizDiff", 1);
+            quizSettings.questionCount = preferences.getInt("quizCount", 10);
+            quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
+            quizSettings.soundEnabled = preferences.getBool("quizSound", true);
+            preferences.end();
+            loadLeaderboard();
+            lateInitPhase = 4;
+            break;
+        case 4: // Metadata
+            if (sdCardMounted) {
+                loadMusicMetadata();
+            }
+            lateInitDone = true;
+            Serial.println(F("Late Init: Complete."));
+            break;
+    }
+}
+
 void setup() {
     // --- Init Core Systems ---
     Serial.begin(115200);
@@ -11572,70 +11637,16 @@ void setup() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
 
-    // --- Connect to WiFi (Shorter Timeout) ---
-    Serial.println(F("Connecting to WiFi..."));
+    // --- Connect to WiFi (Non-blocking) ---
+    Serial.println(F("Starting WiFi..."));
     String savedSSID = sysConfig.ssid;
     if (savedSSID.length() > 0) {
         WiFi.mode(WIFI_STA);
         WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
-        int attempts = 0;
-        // Wait max 2 seconds
-        while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-            delay(200);
-            attempts++;
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
-            if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
-            Serial.println(F("> NETWORK: ONLINE"));
-
-            // Initial location/prayer times fetch
-            Serial.println(F("Initializing Prayer Times system..."));
-            loadPrayerConfig();
-            if (!userLocation.isValid || prayerSettings.autoLocation) {
-              fetchUserLocation();
-            } else {
-              fetchPrayerTimes();
-            }
-
-            // ===== EARTHQUAKE MONITOR INITIALIZATION =====
-            Serial.println(F("Initializing Earthquake Monitor..."));
-            loadEQConfig();
-            fetchEarthquakeData();
-            Serial.println(F("Earthquake Monitor ready"));
-
-            // ===== ULTIMATE TIC-TAC-TOE INITIALIZATION =====
-            Serial.println(F("Initializing Ultimate Tic-Tac-Toe..."));
-            preferences.begin("uttt-stats", true);
-            utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
-            utttStats.gamesWon = preferences.getInt("utttWon", 0);
-            utttStats.gamesLost = preferences.getInt("utttLost", 0);
-            utttStats.gamesTied = preferences.getInt("utttTied", 0);
-            preferences.end();
-            utttStats.totalMoves = 0;
-            Serial.println(F("Ultimate Tic-Tac-Toe ready"));
-
-            Serial.println(F("Initializing Trivia Quiz..."));
-            preferences.begin("quiz-settings", true);
-            quizSettings.categoryId = preferences.getInt("quizCatId", -1);
-            quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
-            quizSettings.difficulty = preferences.getInt("quizDiff", 1);
-            quizSettings.questionCount = preferences.getInt("quizCount", 10);
-            quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
-            quizSettings.soundEnabled = preferences.getBool("quizSound", true);
-            preferences.end();
-            loadLeaderboard();
-            Serial.println(F("Trivia Quiz ready"));
-
-        } else {
-            if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
-            Serial.println(F("> NETWORK: OFFLINE"));
-        }
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [STARTING]";
     } else {
         if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
-        Serial.println(F("> NETWORK: SKIPPED"));
     }
-
     if (currentLine < maxBootLines) {
         drawBootScreen(bootStatusLines, currentLine + 1, 90);
         currentLine++;
@@ -11669,6 +11680,7 @@ void setup() {
 
     menuSelection = 0;
     lastInputTime = millis();
+    screenIsDirty = true;
     refreshCurrentScreen();
 }
 
@@ -11690,6 +11702,7 @@ void updateMusicPlayerState() {
 
 // ============ LOOP ============
 void loop() {
+  updateLateInit();
   static bool firstLoop = true;
   if (firstLoop) {
     Serial.println(F("=== MAIN LOOP STARTED ==="));
