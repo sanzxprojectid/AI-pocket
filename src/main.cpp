@@ -2952,6 +2952,7 @@ void loadMusicMetadata() {
       musicPlaylist.push_back({"Unknown Track", "Unknown Artist"});
 
       while (file.available()) {
+        yield();
         String line = file.readStringUntil('\n');
         line.trim();
         if (line.length() == 0) continue;
@@ -2986,6 +2987,7 @@ void loadMusicMetadata() {
 }
 
 void initMusicPlayer() {
+    Serial.println(F("--- Music Player Init Start ---"));
     // Memulai Serial2 di Pin 4 dan 5
     Serial2.begin(9600, SERIAL_8N1, DF_RX, DF_TX);
 
@@ -2995,8 +2997,8 @@ void initMusicPlayer() {
         isDFPlayerAvailable = true;
         // Ambil volume terakhir dari sysConfig agar tidak mengejutkan
         musicVol = sysConfig.musicVol;
-  radioFrequency = sysConfig.radioFreq;
-  radioVolume = sysConfig.radioVol;
+        radioFrequency = sysConfig.radioFreq;
+        radioVolume = sysConfig.radioVol;
         myDFPlayer.volume(musicVol);
 
         // Hitung total lagu di SD Card
@@ -3022,10 +3024,11 @@ void initMusicPlayer() {
           currentTrackIdx = 1; // Default to first track if saved data is invalid
         }
 
-        Serial.printf("Music Engine Ready. Total: %d tracks\n", totalTracks);
+        Serial.printf("Music Engine Ready. Total: %d tracks.\n", totalTracks);
     } else {
         Serial.println(F("DFPlayer Error: SD Card missing or wiring wrong."));
     }
+    Serial.println(F("--- Music Player Init End ---"));
 }
 
 void updateAndDrawSmokeVisualizer() {
@@ -11525,6 +11528,7 @@ void setup() {
     // --- Load Configs ---
     Serial.println(F("Loading Configs..."));
     loadConfig();
+    delay(10);
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
@@ -11539,7 +11543,9 @@ void setup() {
 
     // Init Audio
     Serial.println(F("Initializing Audio..."));
+    Serial.printf("Free Heap before Audio: %d\n", ESP.getFreeHeap());
     initMusicPlayer();
+    delay(10);
     if (currentLine < maxBootLines) {
         bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
         drawBootScreen(bootStatusLines, currentLine + 1, 55);
@@ -11550,12 +11556,21 @@ void setup() {
 
     // Init Radio
     Serial.println(F("Initializing Radio FM..."));
+    Serial.printf("Free Heap before Radio: %d\n", ESP.getFreeHeap());
+    delay(100);
     Wire.begin(1, 2);
+    delay(50);
     if (radio.init()) {
         radio.setBand(RADIO_BAND_FM);
         radio.attachReceiveRDS(RDS_process);
         rds.attachServiceNameCallback(DisplayServiceName);
         rds.attachTextCallback(DisplayText);
+
+        // Robustness check for frequency
+        if (radioFrequency < 8700 || radioFrequency > 10850) {
+            radioFrequency = 10110;
+        }
+
         radio.setVolume(radioVolume);
         radio.setFrequency(radioFrequency);
         if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
@@ -11566,6 +11581,7 @@ void setup() {
     }
 
     if (currentLine < maxBootLines) {
+        Serial.printf("Free Heap at 65%%: %d\n", ESP.getFreeHeap());
         drawBootScreen(bootStatusLines, currentLine + 1, 65);
         currentLine++;
     }
