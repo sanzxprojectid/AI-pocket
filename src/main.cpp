@@ -1,8 +1,4 @@
-#include <Wire.h>
-#include <radio.h>
-#include <RDA5807M.h>
 #include <Arduino.h>
-#include <RDSParser.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
@@ -26,6 +22,9 @@
 #include <vector>
 #include "secrets.h"
 #include "DFRobotDFPlayerMini.h"
+#include <Wire.h>
+#include <radio.h>
+#include <RDA5807M.h>
 #define COLOR_BG        0x0000  // Pure Black
 #define COLOR_PRIMARY   0xFFFF  // White
 #define COLOR_SECONDARY 0x7BEF  // Slate Gray
@@ -213,6 +212,37 @@ typedef struct {
 // Pin MOSI (11) dan SCLK (12) sudah sesuai dengan default VSPI hardware
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
+#include <RDSParser.h>
+
+// ============ RADIO RDA5807M ============
+RDA5807M radio;
+RDSParser rds;
+uint16_t radioFrequency = 10110; // Default 101.1 MHz
+int radioVolume = 8;
+bool radioStereo = true;
+bool radioMute = false;
+bool radioBassBoost = false;
+String radioRDS = "";
+String radioRT = ""; // Radio Text
+struct RadioPreset {
+  uint16_t freq;
+  const char* name;
+};
+
+RadioPreset radioPresets[] = {
+  {8760, "Hard Rock FM"},
+  {9080, "Virgin Radio"},
+  {9510, "Kis FM"},
+  {9870, "Gen FM"},
+  {10110, "Jak FM"},
+  {10500, "Prambors"},
+  {10190, "Bahana FM"},
+  {9430, "Sonora FM"},
+  {10460, "Trijaya FM"},
+  {10770, "RRI Pro 2"}
+};
+int radioSelectedPreset = -1;
+unsigned long lastRDSUpdate = 0;
 
 // ============ NEOPIXEL ============
 #define NEOPIXEL_PIN 48
@@ -309,7 +339,7 @@ enum AppState {
   STATE_QUIZ_PLAYING,
   STATE_QUIZ_RESULT,
   STATE_QUIZ_LEADERBOARD,
-  STATE_RADIO_PLAYER
+  STATE_RADIO_FM
 };
 
 AppState currentState = STATE_BOOT;
@@ -354,11 +384,9 @@ struct SystemConfig {
   int jumperBest;
   int flappyBest;
   int breakoutBest;
-  int radioFreq;
-  int radioVol;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 0, 0, 0, 0, 0, 0, 10700, 10};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 0, 0, 0, 0, 0, 0};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -1214,26 +1242,17 @@ const unsigned char icon_wikipedia[] PROGMEM = {
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-
 const unsigned char icon_radio[] PROGMEM = {
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x3F, 0xFC, 0x00,
-0x00, 0x7F, 0xFE, 0x00, 0x01, 0xFF, 0xFF, 0x80, 0x03, 0xFF, 0xFF, 0xC0, 0x07, 0xFF, 0xFF, 0xE0,
-0x0F, 0xFF, 0xFF, 0xF0, 0x1F, 0xFF, 0xFF, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x3F, 0xFC, 0xF8,
-0x1F, 0x7F, 0xFE, 0xF8, 0x1F, 0x7F, 0xFE, 0xF8, 0x1F, 0x7F, 0xFE, 0xF8, 0x1F, 0x3F, 0xFC, 0xF8,
-0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x1F, 0xF8, 0xF8, 0x1F, 0x3F, 0xFC, 0xF8, 0x1F, 0x3F, 0xFC, 0xF8,
-0x1F, 0x1F, 0xF8, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x1F, 0x00, 0x00, 0xF8, 0x1F, 0xFF, 0xFF, 0xF8,
-0x1F, 0xFF, 0xFF, 0xF8, 0x0F, 0xFF, 0xFF, 0xF0, 0x07, 0xFF, 0xFF, 0xE0, 0x03, 0xFF, 0xFF, 0xC0,
-0x01, 0xFF, 0xFF, 0x80, 0x00, 0x7F, 0xFE, 0x00, 0x00, 0x1F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x07, 0xE0, 0x00, 0x00, 0x08, 0x10, 0x00, 0x00, 0x10, 0x08, 0x00, 0x00, 0x20, 0x04, 0x00,
+0x00, 0x40, 0x02, 0x00, 0x00, 0x80, 0x01, 0x00, 0x01, 0x00, 0x00, 0x80, 0x3F, 0xFF, 0xFF, 0xFC,
+0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x7F, 0xFE, 0x04, 0x20, 0x7F, 0xFE, 0x04,
+0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x18, 0x18, 0x04, 0x20, 0x3C, 0x3C, 0x04,
+0x20, 0x3C, 0x3C, 0x04, 0x20, 0x18, 0x18, 0x04, 0x20, 0x00, 0x00, 0x04, 0x20, 0x00, 0x00, 0x04,
+0x3F, 0xFF, 0xFF, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-RDA5807M radio;
-RDSParser rds;
-String radioRDSName = "";
-String radioRDSText = "";
-int radioRSSI = 0;
-bool radioIsStereo = false;
-bool radioIsMuted = false;
-bool radioVolumeMode = false;
 const unsigned char* menuIcons[] = {icon_chat, icon_wifi, icon_espnow, icon_courier, icon_system, icon_pet, icon_hacker, icon_files, icon_gamehub, icon_sonar, icon_music, icon_radio, icon_pomodoro, icon_prayer, icon_wikipedia, icon_earthquake, icon_visuals, icon_gamehub, icon_about};
 
 // ============ AI MODE SELECTION ============
@@ -1677,6 +1696,9 @@ void onESPNowDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data,
 #else
 void onESPNowDataRecv(const uint8_t *mac, const uint8_t *data, int len);
 #endif
+void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4);
+void DisplayServiceName(const char *name);
+void DisplayText(const char *text);
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 void onESPNowDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status);
 #else
@@ -1694,14 +1716,12 @@ void drawNetScan();
 void drawFileManager();
 void drawFileViewer();
 void drawGameHubMenu();
+void drawRadioFM();
+void handleRadioFMInput();
+void updateRadioRDS();
 void drawMainMenuCool();
 void drawStarfield();
 void drawGameOfLife();
-void drawRadioPlayer();
-void handleRadioInput();
-void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4);
-void DisplayServiceName(const char *name);
-void DisplayText(const char *text);
 void drawFireEffect();
 void drawPongGame();
 void updatePongLogic();
@@ -6555,8 +6575,6 @@ void loadConfig() {
     sysConfig.jumperBest = doc["scores"]["jumper"] | 0;
     sysConfig.flappyBest = doc["scores"]["flappy"] | 0;
     sysConfig.breakoutBest = doc["scores"]["breakout"] | 0;
-    sysConfig.radioFreq = doc["radio"]["freq"] | 10700;
-    sysConfig.radioVol = doc["radio"]["vol"] | 10;
     Serial.println("Config loaded from JSON");
   } else {
     // Fallback to NVS
@@ -6576,8 +6594,6 @@ void loadConfig() {
     sysConfig.jumperBest = preferences.getInt("jumperBest", 0);
     sysConfig.flappyBest = preferences.getInt("flappyBest", 0);
     sysConfig.breakoutBest = preferences.getInt("breakoutBest", 0);
-    sysConfig.radioFreq = preferences.getInt("radioFreq", 10700);
-    sysConfig.radioVol = preferences.getInt("radioVol", 10);
     preferences.end();
 
     preferences.begin("pet-data", true);
@@ -6737,8 +6753,6 @@ void saveConfig() {
   doc["scores"]["jumper"] = sysConfig.jumperBest;
   doc["scores"]["flappy"] = sysConfig.flappyBest;
   doc["scores"]["breakout"] = sysConfig.breakoutBest;
-  doc["radio"]["freq"] = sysConfig.radioFreq;
-  doc["radio"]["vol"] = sysConfig.radioVol;
 
   saveToJSON(CONFIG_FILE, doc);
 
@@ -6759,8 +6773,6 @@ void saveConfig() {
   preferences.putInt("jumperBest", sysConfig.jumperBest);
   preferences.putInt("flappyBest", sysConfig.flappyBest);
   preferences.putInt("breakoutBest", sysConfig.breakoutBest);
-  preferences.putInt("radioFreq", sysConfig.radioFreq);
-  preferences.putInt("radioVol", sysConfig.radioVol);
   preferences.end();
 
   preferences.begin("pet-data", false);
@@ -8331,7 +8343,7 @@ void drawMainMenuCool() {
     canvas.fillScreen(COLOR_BG);
     drawStatusBar();
 
-    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "SONAR", "MUSIC", "FM RADIO", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ", "ABOUT"};
+    const char* items[] = {"AI CHAT", "WIFI MGR", "ESP-NOW", "COURIER", "SYSTEM", "V-PET", "HACKER", "FILES", "GAME HUB", "SONAR", "MUSIC", "RADIO FM", "POMODORO", "PRAYER", "WIKIPEDIA", "EARTHQUAKE", "TIC-TAC-TOE", "TRIVIA QUIZ", "ABOUT"};
     int numItems = 19;
     int centerX = SCREEN_WIDTH / 2;
     int centerY = 75;
@@ -10373,8 +10385,8 @@ void handleMainMenuSelect() {
     case 10: // MUSIC
       changeState(STATE_MUSIC_PLAYER);
       break;
-    case 11: // FM RADIO
-      changeState(STATE_RADIO_PLAYER);
+    case 11: // RADIO
+      changeState(STATE_RADIO_FM);
       break;
     case 12: // POMODORO
       changeState(STATE_POMODORO);
@@ -10982,7 +10994,6 @@ void refreshCurrentScreen() {
     case STATE_QUIZ_PLAYING: drawQuizPlaying(); break;
     case STATE_QUIZ_RESULT: drawQuizResult(); break;
     case STATE_QUIZ_LEADERBOARD: drawQuizLeaderboard(); break;
-    case STATE_RADIO_PLAYER: drawRadioPlayer(); break;
     case STATE_UTTT:
       drawUTTT();
       break;
@@ -10991,6 +11002,9 @@ void refreshCurrentScreen() {
       break;
     case STATE_UTTT_GAMEOVER:
       drawUTTTGameOver();
+      break;
+    case STATE_RADIO_FM:
+      drawRadioFM();
       break;
     default:
       drawMainMenuCool();
@@ -11035,6 +11049,248 @@ void drawLocalAiChat() {
   drawGenericToolScreen("LOCAL AI (Coming Soon)");
 }
 
+void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4) {
+  rds.processData(block1, block2, block3, block4);
+}
+
+void DisplayServiceName(const char *name) {
+  String n = String(name);
+  n.trim();
+  if (n.length() > 0 && radioRDS != n) {
+    radioRDS = n;
+    screenIsDirty = true;
+  }
+}
+
+void DisplayText(const char *text) {
+  String t = String(text);
+  t.trim();
+  if (t.length() > 0 && radioRT != t) {
+    radioRT = t;
+    screenIsDirty = true;
+  }
+}
+
+void drawRadioFM() {
+  canvas.fillScreen(COLOR_BG);
+  drawStatusBar();
+
+  // Header
+  canvas.fillRect(0, 15, SCREEN_WIDTH, 25, COLOR_PANEL);
+  canvas.drawFastHLine(0, 15, SCREEN_WIDTH, COLOR_BORDER);
+  canvas.drawFastHLine(0, 40, SCREEN_WIDTH, COLOR_BORDER);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_PRIMARY);
+  canvas.setCursor(50, 20);
+  canvas.print("RADIO FM");
+
+  // Frequency Dial (Visual)
+  int dialY = 55;
+  int dialH = 20;
+  canvas.drawRect(20, dialY, SCREEN_WIDTH - 40, dialH, COLOR_BORDER);
+
+  // Tick marks
+  for (int f = 87; f <= 108; f++) {
+      int x = map(f, 87, 108, 20, SCREEN_WIDTH - 40);
+      canvas.drawFastVLine(x, dialY, 5, COLOR_DIM);
+      if (f % 5 == 0) {
+          canvas.drawFastVLine(x, dialY, 10, COLOR_SECONDARY);
+          canvas.setTextSize(1);
+          canvas.setCursor(x - 5, dialY + 12);
+          canvas.print(f);
+      }
+  }
+
+  // Current position indicator
+  int indicatorX = map(radioFrequency, 8700, 10800, 20, SCREEN_WIDTH - 40);
+  canvas.fillTriangle(indicatorX, dialY - 5, indicatorX - 4, dialY - 12, indicatorX + 4, dialY - 12, COLOR_ACCENT);
+  canvas.drawFastVLine(indicatorX, dialY, dialH, COLOR_ACCENT);
+
+  // Large Frequency Display
+  canvas.setTextSize(4);
+  canvas.setTextColor(COLOR_PRIMARY);
+  float freqMHz = radioFrequency / 100.0f;
+  String freqStr = String(freqMHz, 1);
+  int16_t x1, y1; uint16_t w, h;
+  canvas.getTextBounds(freqStr, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2 - 15, 95);
+  canvas.print(freqStr);
+
+  canvas.setTextSize(2);
+  canvas.setTextColor(COLOR_ACCENT);
+  canvas.setCursor(SCREEN_WIDTH/2 + w/2 - 5, 105);
+  canvas.print("MHz");
+
+  // RDS Info
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_SUCCESS);
+  String rdsDisplay = radioRDS == "" ? "SCANNING RDS..." : radioRDS;
+  canvas.getTextBounds(rdsDisplay, 0, 0, &x1, &y1, &w, &h);
+  canvas.setCursor(SCREEN_WIDTH/2 - w/2, 120);
+  canvas.print(rdsDisplay);
+
+  if (radioRT != "") {
+      canvas.setTextColor(COLOR_TEXT);
+      int rtW = radioRT.length() * 6;
+      if (rtW > SCREEN_WIDTH - 40) {
+          static int rtScroll = 0;
+          String rtPart = radioRT.substring(rtScroll/6, min((int)radioRT.length(), rtScroll/6 + 40));
+          canvas.setCursor(20, 132);
+          canvas.print(rtPart);
+          rtScroll++;
+          if (rtScroll > (radioRT.length() - 40) * 6) rtScroll = 0;
+      } else {
+          canvas.setCursor(SCREEN_WIDTH/2 - rtW/2, 132);
+          canvas.print(radioRT);
+      }
+  }
+
+  // Footer / Status
+  int footerY = 150;
+  canvas.drawFastHLine(10, footerY - 5, SCREEN_WIDTH - 20, COLOR_BORDER);
+
+  // Signal Strength
+  RADIO_INFO info;
+  radio.getRadioInfo(&info);
+  int rssi = info.rssi;
+  int bars = map(rssi, 0, 120, 0, 5);
+  bars = constrain(bars, 0, 5);
+  for (int i = 0; i < 5; i++) {
+    int bh = (i + 1) * 2;
+    if (i < bars) canvas.fillRect(20 + (i * 4), footerY + 8 - bh, 3, bh, COLOR_ACCENT);
+    else canvas.drawRect(20 + (i * 4), footerY + 8 - bh, 3, bh, COLOR_DIM);
+  }
+  canvas.setTextSize(1);
+  canvas.setTextColor(COLOR_DIM);
+  canvas.setCursor(45, footerY);
+  canvas.print("RSSI");
+
+  // Volume
+  int volW = map(radioVolume, 0, 15, 0, 60);
+  canvas.drawRect(SCREEN_WIDTH - 80, footerY, 62, 8, COLOR_BORDER);
+  canvas.fillRect(SCREEN_WIDTH - 79, footerY + 1, volW, 6, radioMute ? COLOR_DIM : COLOR_ACCENT);
+  canvas.setCursor(SCREEN_WIDTH - 110, footerY);
+  canvas.print("VOL");
+  if (radioMute) {
+      canvas.setTextColor(COLOR_ERROR);
+      canvas.setCursor(SCREEN_WIDTH - 70, footerY - 8);
+      canvas.print("MUTE");
+  }
+
+  // Stereo/Bass
+  canvas.setTextColor(COLOR_SECONDARY);
+  canvas.setCursor(SCREEN_WIDTH/2 - 30, footerY);
+  canvas.print(radioStereo ? "STEREO" : "MONO");
+  if (radioBassBoost) {
+      canvas.setTextColor(COLOR_WARN);
+      canvas.setCursor(SCREEN_WIDTH/2 + 15, footerY);
+      canvas.print("BASS");
+  }
+
+  // Preset Info
+  if (radioSelectedPreset != -1) {
+      canvas.setTextColor(COLOR_ACCENT);
+      canvas.setTextSize(1);
+      String pStr = "P" + String(radioSelectedPreset + 1) + ": " + String(radioPresets[radioSelectedPreset].name);
+      canvas.getTextBounds(pStr, 0, 0, &x1, &y1, &w, &h);
+      canvas.setCursor(SCREEN_WIDTH/2 - w/2, 160);
+      canvas.print(pStr);
+  }
+
+  tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
+void handleRadioFMInput() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastDebounce < 200) return;
+
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnLeft = (digitalRead(BTN_LEFT) == BTN_ACT);
+  bool btnRight = (digitalRead(BTN_RIGHT) == BTN_ACT);
+  bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
+
+  if (btnLeft && btnRight) {
+      changeState(STATE_MAIN_MENU);
+      delay(200);
+      return;
+  }
+
+  if (btnUp) {
+    if (radioVolume < 15) {
+      radioVolume++;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnDown) {
+    if (radioVolume > 0) {
+      radioVolume--;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnLeft) {
+    radioFrequency -= 10;
+    if (radioFrequency < 8700) radioFrequency = 10800;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+  if (btnRight) {
+    radioFrequency += 10;
+    if (radioFrequency > 10800) radioFrequency = 8700;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+
+  if (btnSelect) {
+    unsigned long pressStart = millis();
+    while(digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (millis() - pressStart > 800) {
+            showStatus("Seeking Up...", 1000);
+            radio.seekUp(true);
+            delay(300);
+            radioFrequency = radio.getFrequency();
+            radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+            rds.init();
+            ledSuccess();
+            lastDebounce = millis();
+            return;
+        }
+        delay(10);
+    }
+    radioSelectedPreset = (radioSelectedPreset + 1) % 10;
+    radioFrequency = radioPresets[radioSelectedPreset].freq;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = "";
+    rds.init();
+    showStatus(radioPresets[radioSelectedPreset].name, 1000);
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+
+  if (btnUp && btnSelect) {
+      radioMute = !radioMute;
+      radio.setMute(radioMute);
+      showStatus(radioMute ? "Muted" : "Unmuted", 1000);
+      ledQuickFlash();
+      lastDebounce = currentMillis + 200;
+  }
+}
+
+void updateRadioRDS() {
+  if (currentState != STATE_RADIO_FM) return;
+  radio.checkRDS();
+}
 void drawFileViewer() {
   canvas.fillScreen(COLOR_BG);
   drawStatusBar();
@@ -11083,173 +11339,15 @@ void drawFileViewer() {
 }
 
 
-void RDS_process(uint16_t block1, uint16_t block2, uint16_t block3, uint16_t block4) {
-  rds.processData(block1, block2, block3, block4);
-}
-
-void DisplayServiceName(const char *name) {
-  String n = String(name);
-  n.trim();
-  if (n != radioRDSName) {
-    radioRDSName = n;
-    screenIsDirty = true;
-  }
-}
-
-void DisplayText(const char *text) {
-  String t = String(text);
-  t.trim();
-  if (t != radioRDSText) {
-    radioRDSText = t;
-    screenIsDirty = true;
-  }
-}
-
-void drawRadioPlayer() {
-    canvas.fillScreen(COLOR_BG);
-    drawStatusBar();
-
-    // Frequency
-    float freq = radio.getFrequency() / 100.0f;
-    String freqStr = String(freq, 1);
-
-    canvas.setTextSize(6);
-    canvas.setTextColor(COLOR_ACCENT);
-    int16_t x1, y1;
-    uint16_t w, h;
-    canvas.getTextBounds(freqStr, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2 - 20, 70);
-    canvas.print(freqStr);
-
-    canvas.setTextSize(2);
-    canvas.setTextColor(COLOR_TEXT);
-    canvas.setCursor(canvas.getCursorX() + 5, 70 + h - 20);
-    canvas.print("MHz");
-
-    // RDS Info
-    canvas.setTextSize(2);
-    canvas.setTextColor(COLOR_TEXT);
-    String stationName = radioRDSName;
-    if (stationName == "") stationName = "FM RADIO";
-    canvas.getTextBounds(stationName, 0, 0, &x1, &y1, &w, &h);
-    canvas.setCursor((SCREEN_WIDTH - w) / 2, 110);
-    canvas.print(stationName);
-
-    canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_SECONDARY);
-    String info = radioRDSText;
-    canvas.getTextBounds(info, 0, 0, &x1, &y1, &w, &h);
-    if (w > SCREEN_WIDTH - 20) {
-        canvas.setCursor(10, 130);
-    } else {
-        canvas.setCursor((SCREEN_WIDTH - w) / 2, 130);
-    }
-    canvas.print(info);
-
-    // Indicators (Stereo, RSSI)
-    RADIO_INFO infoRadio;
-    radio.getRadioInfo(&infoRadio);
-    radioRSSI = infoRadio.rssi;
-    radioIsStereo = infoRadio.stereo;
-
-    // RSSI Bar
-    int rssiX = 20;
-    int rssiY = 155;
-    for (int i = 0; i < 5; i++) {
-        uint16_t color = (radioRSSI > (i * 3)) ? COLOR_ACCENT : COLOR_DIM;
-        canvas.fillRect(rssiX + (i * 6), rssiY - (i * 3) - 2, 4, (i * 3) + 4, color);
-    }
-
-    // Stereo indicator
-    canvas.setTextSize(1);
-    if (radioIsStereo) {
-        canvas.setTextColor(COLOR_SUCCESS);
-        canvas.setCursor(60, 150);
-        canvas.print("STEREO");
-    } else {
-        canvas.setTextColor(COLOR_DIM);
-        canvas.setCursor(60, 150);
-        canvas.print("MONO");
-    }
-
-    // Volume
-    String volText = "VOL: " + String(sysConfig.radioVol);
-    if (radioIsMuted) volText = "MUTED";
-    canvas.setTextColor(radioVolumeMode ? COLOR_ACCENT : COLOR_TEXT);
-    canvas.setCursor(SCREEN_WIDTH - 80, 150);
-    canvas.print(volText);
-
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-}
-
-void handleRadioInput() {
-    if (millis() - lastDebounce < debounceDelay) return;
-
-    if (digitalRead(BTN_UP) == BTN_ACT) {
-        if (radioVolumeMode) {
-            if (sysConfig.radioVol < 15) sysConfig.radioVol++;
-            radio.setVolume(sysConfig.radioVol);
-        } else {
-            uint16_t f = radio.getFrequency();
-            f += 10;
-            if (f > 10800) f = 8750;
-            radio.setFrequency(f);
-            sysConfig.radioFreq = f;
-            radioRDSName = "";
-            radioRDSText = "";
-        }
-        lastDebounce = millis();
-        screenIsDirty = true;
-    }
-    if (digitalRead(BTN_DOWN) == BTN_ACT) {
-        if (radioVolumeMode) {
-            if (sysConfig.radioVol > 0) sysConfig.radioVol--;
-            radio.setVolume(sysConfig.radioVol);
-        } else {
-            uint16_t f = radio.getFrequency();
-            f -= 10;
-            if (f < 8750) f = 10800;
-            radio.setFrequency(f);
-            sysConfig.radioFreq = f;
-            radioRDSName = "";
-            radioRDSText = "";
-        }
-        lastDebounce = millis();
-        screenIsDirty = true;
-    }
-    if (digitalRead(BTN_LEFT) == BTN_ACT) {
-        radio.seekDown();
-        radioRDSName = "";
-        radioRDSText = "";
-        lastDebounce = millis();
-        screenIsDirty = true;
-    }
-    if (digitalRead(BTN_RIGHT) == BTN_ACT) {
-        radio.seekUp();
-        radioRDSName = "";
-        radioRDSText = "";
-        lastDebounce = millis();
-        screenIsDirty = true;
-    }
-    if (digitalRead(BTN_SELECT) == BTN_ACT) {
-        radioVolumeMode = !radioVolumeMode;
-        lastDebounce = millis();
-        screenIsDirty = true;
-    }
-    if (digitalRead(BTN_BACK) == BTN_ACT) {
-        saveConfig();
-        changeState(STATE_MAIN_MENU);
-        lastDebounce = millis();
-    }
-}
 void setup() {
-    const int maxBootLines = 8;
+    const int maxBootLines = 9;
     const char* bootStatusLines[maxBootLines] = {
         "> CORE SYSTEMS.....",
         "> RENDERER.........",
         "> POWER MGMT.......",
         "> STORAGE..........",
         "> AUDIO SUBSYSTEM..",
+        "> RADIO FM.........",
         "> CONFIGS..........",
         "> NETWORK..........",
         "> BOOT COMPLETE...."
@@ -11321,22 +11419,24 @@ void setup() {
     // Init Audio
     initMusicPlayer();
     bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 60);
+    drawBootScreen(bootStatusLines, ++currentLine, 55);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+
+    // Init Radio
+    Wire.begin(15, 16);
+    radio.init();
+    radio.setBand(RADIO_BAND_FM);
+    radio.attachReceiveRDS(RDS_process);
+    rds.attachServiceNameCallback(DisplayServiceName);
+    rds.attachTextCallback(DisplayText);
+    radio.setVolume(radioVolume);
+    radio.setFrequency(radioFrequency);
+    bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
+    drawBootScreen(bootStatusLines, ++currentLine, 65);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Load Configs ---
     loadConfig();
-    // --- Init Radio ---
-    Wire.begin(15, 16);
-    radio.init();
-    radio.setBand(RADIO_BAND_FM);
-    radio.setFrequency(sysConfig.radioFreq);
-    radio.setVolume(sysConfig.radioVol);
-    radio.setMono(false);
-    radio.setMute(false);
-    radio.attachReceiveRDS(RDS_process);
-    rds.attachServiceNameCallback(DisplayServiceName);
-    rds.attachTextCallback(DisplayText);
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
@@ -11454,9 +11554,6 @@ void updateMusicPlayerState() {
 
 // ============ LOOP ============
 void loop() {
-  if (currentState == STATE_RADIO_PLAYER) {
-    radio.checkRDS();
-  }
   unsigned long currentMillis = millis();
   perfLoopCount++;
   if (currentMillis - perfLastTime >= 1000) {
@@ -11576,11 +11673,11 @@ void loop() {
     case STATE_GAME_FLAPPY:
     case STATE_GAME_BREAKOUT:
     case STATE_GAME_RACING:
+    case STATE_RADIO_FM:
     case STATE_TOOL_SNIFFER:
     case STATE_TOOL_WIFI_SONAR:
     case STATE_TOOL_DEAUTH_ATTACK:
     case STATE_MUSIC_PLAYER: // For visualizer
-    case STATE_RADIO_PLAYER:
     case STATE_WIKI_VIEWER:
     case STATE_SYSTEM_MONITOR:
     case STATE_PRAYER_SETTINGS:
@@ -11681,9 +11778,7 @@ void loop() {
     else if (currentState == STATE_QUIZ_MENU) { handleQuizMenuInput(); }
     else if (currentState == STATE_QUIZ_PLAYING) { handleQuizPlayingInput(); }
     else if (currentState == STATE_QUIZ_RESULT) { handleQuizResultInput(); }
-    else if (currentState == STATE_QUIZ_LEADERBOARD,
-  STATE_RADIO_PLAYER) { handleQuizLeaderboardInput(); }
-    else if (currentState == STATE_RADIO_PLAYER) { handleRadioInput(); }
+    else if (currentState == STATE_QUIZ_LEADERBOARD) { handleQuizLeaderboardInput(); }
     else if (currentState == STATE_EARTHQUAKE_MAP) {
       handleEarthquakeMapInput();
     }
@@ -11707,6 +11802,11 @@ void loop() {
   if (currentState == STATE_POMODORO) {
     updatePomodoroLogic();
     screenIsDirty = true; // Keep the timer updated
+  }
+
+  // Radio RDS Update
+  if (currentState == STATE_RADIO_FM) {
+    updateRadioRDS();
   }
 
   // Prayer times background tasks
@@ -12201,7 +12301,7 @@ void loop() {
     if (digitalRead(BTN_RIGHT) == BTN_ACT) {
       switch(currentState) {
         case STATE_MAIN_MENU:
-          if (menuSelection < 17) menuSelection++;
+          if (menuSelection < 18) menuSelection++;
           break;
         case STATE_PIN_LOCK:
         case STATE_CHANGE_PIN:
@@ -12504,6 +12604,7 @@ void loop() {
         case STATE_PRAYER_TIMES:
         case STATE_PRAYER_SETTINGS:
         case STATE_EARTHQUAKE:
+        case STATE_RADIO_FM:
           changeState(STATE_MAIN_MENU);
           break;
         case STATE_EARTHQUAKE_DETAIL:
