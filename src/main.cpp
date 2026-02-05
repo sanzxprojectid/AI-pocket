@@ -415,6 +415,11 @@ unsigned long emergencyEnd = 0;
 
 // ============ UI ANIMATION PHYSICS ============
 bool screenIsDirty = true; // Flag to request a screen redraw
+const int maxBootLines = 16;
+String bootStatusLines[maxBootLines];
+int bootStatusCount = 0;
+int bootProgress = 0;
+unsigned long lastBootAction = 0;
 float menuScrollCurrent = 0.0f;
 float menuScrollTarget = 0.0f;
 float menuVelocity = 0.0f;
@@ -1775,6 +1780,7 @@ void drawPomodoroTimer();
 void updatePomodoroLogic();
 void fetchPomodoroQuote();
 void updateAndDrawSmokeVisualizer();
+void addBootStatus(String line, int progress);
 void drawGroqModelSelect();
 void sendToGroq();
 void fetchRandomWiki();
@@ -10849,6 +10855,13 @@ void refreshCurrentScreen() {
   }
   
   switch(currentState) {
+    case STATE_BOOT:
+      {
+        const char* linesPtr[maxBootLines];
+        for (int i = 0; i < bootStatusCount; i++) linesPtr[i] = bootStatusLines[i].c_str();
+        drawBootScreen(linesPtr, bootStatusCount, bootProgress);
+      }
+      break;
     case STATE_MAIN_MENU:
       drawMainMenuCool();
       break;
@@ -11440,17 +11453,95 @@ void updateLateInit() {
     if (lateInitStart == 0) lateInitStart = millis();
 
     switch(lateInitPhase) {
-        case 0: // Check WiFi
+        case 1: // Storage
+            if (beginSD()) {
+                sdCardMounted = true;
+                addBootStatus("> STORAGE.......... [SD OK]", 20);
+            } else {
+                sdCardMounted = false;
+                addBootStatus("> STORAGE.......... [NO SD]", 20);
+            }
+            if (LittleFS.begin(true)) {
+                addBootStatus("> FILESYSTEM....... [OK]", 30);
+            } else {
+                addBootStatus("> FILESYSTEM....... [FAIL]", 30);
+            }
+            lateInitPhase = 2;
+            break;
+        case 2: // Config
+            loadConfig();
+            ledcWrite(0, screenBrightness);
+            if (sdCardMounted) {
+                loadApiKeys();
+                loadChatHistoryFromSD();
+            }
+            addBootStatus("> CONFIGS.......... [LOADED]", 45);
+            lateInitPhase = 3;
+            break;
+        case 3: // Audio
+            initMusicPlayer();
+            addBootStatus("> AUDIO SUBSYSTEM.. [OK]", 60);
+            lateInitPhase = 4;
+            break;
+        case 4: // Radio
+            Wire.begin(1, 2);
+            if (radio.init()) {
+                radio.setBand(RADIO_BAND_FM);
+                radio.attachReceiveRDS(RDS_process);
+                rds.attachServiceNameCallback(DisplayServiceName);
+                rds.attachTextCallback(DisplayText);
+                radio.setVolume(radioVolume);
+                radio.setFrequency(radioFrequency);
+                addBootStatus("> RADIO FM......... [OK]", 75);
+            } else {
+                addBootStatus("> RADIO FM......... [FAIL]", 75);
+            }
+            lateInitPhase = 5;
+            break;
+        case 5: // WiFi Start
+            {
+                String savedSSID = sysConfig.ssid;
+                if (savedSSID.length() > 0) {
+                    WiFi.mode(WIFI_STA);
+                    WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
+                    addBootStatus("> NETWORK.......... [STARTING]", 90);
+                } else {
+                    addBootStatus("> NETWORK.......... [SKIPPED]", 90);
+                }
+            }
+            lateInitPhase = 6;
+            lastBootAction = millis();
+            break;
+        case 6: // Boot Transition
+            if (bootProgress < 100) {
+                addBootStatus("> BOOT COMPLETE....", 100);
+                lastBootAction = millis();
+            }
+            if (millis() - lastBootAction > 500) {
+                if (pinLockEnabled) {
+                    currentState = STATE_PIN_LOCK;
+                    stateAfterUnlock = STATE_MAIN_MENU;
+                    pinInput = "";
+                    cursorX = 0; cursorY = 0;
+                } else {
+                    currentState = STATE_MAIN_MENU;
+                }
+                screenIsDirty = true;
+                lateInitPhase = 7;
+                Serial.println(F("Late Init: Boot sequence complete. Transitioning to menu."));
+            }
+            break;
+        case 7: // Check WiFi (Existing 0)
             if (WiFi.status() == WL_CONNECTED) {
                 configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
-                lateInitPhase = 1;
+                lateInitPhase = 8;
                 Serial.println(F("Late Init: WiFi Connected."));
-            } else if (millis() - lateInitStart > 10000) { // Timeout 10s
-                lateInitPhase = 1; // Proceed anyway
+            } else if (millis() - lateInitStart > 15000) { // Timeout 15s
+                lateInitPhase = 8;
                 Serial.println(F("Late Init: WiFi Timeout."));
             }
             break;
-        case 1: // Fetch location/prayer
+        case 8: // Fetch location/prayer (Existing 1)
             if (WiFi.status() == WL_CONNECTED) {
                 loadPrayerConfig();
                 if (!userLocation.isValid || prayerSettings.autoLocation) {
@@ -11459,16 +11550,16 @@ void updateLateInit() {
                     fetchPrayerTimes();
                 }
             }
-            lateInitPhase = 2;
+            lateInitPhase = 9;
             break;
-        case 2: // Earthquake
+        case 9: // Earthquake (Existing 2)
             if (WiFi.status() == WL_CONNECTED) {
                 loadEQConfig();
                 fetchEarthquakeData();
             }
-            lateInitPhase = 3;
+            lateInitPhase = 10;
             break;
-        case 3: // Stats & Leaderboards
+        case 10: // Stats & Leaderboards (Existing 3)
             preferences.begin("uttt-stats", true);
             utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
             utttStats.gamesWon = preferences.getInt("utttWon", 0);
@@ -11486,9 +11577,9 @@ void updateLateInit() {
             quizSettings.soundEnabled = preferences.getBool("quizSound", true);
             preferences.end();
             loadLeaderboard();
-            lateInitPhase = 4;
+            lateInitPhase = 11;
             break;
-        case 4: // Metadata
+        case 11: // Metadata (Existing 4)
             if (sdCardMounted) {
                 loadMusicMetadata();
             }
@@ -11498,24 +11589,32 @@ void updateLateInit() {
     }
 }
 
+void addBootStatus(String line, int progress) {
+    if (bootStatusCount < maxBootLines) {
+        bootStatusLines[bootStatusCount++] = line;
+    } else {
+        for (int i = 0; i < maxBootLines - 1; i++) {
+            bootStatusLines[i] = bootStatusLines[i+1];
+        }
+        bootStatusLines[maxBootLines - 1] = line;
+    }
+    bootProgress = progress;
+    Serial.println(line);
+    screenIsDirty = true;
+}
+
 void setup() {
     // --- Init Core Systems ---
     Serial.begin(115200);
     delay(500); // Wait for Serial Monitor
     Serial.println(F("\n=== AI-POCKET S3 BOOTING ==="));
 
-    const int maxBootLines = 16;
-    const char* bootStatusLines[maxBootLines];
-    for (int i = 0; i < maxBootLines; i++) bootStatusLines[i] = "";
-    int currentLine = 0;
-
-    setCpuFrequencyMhz(CPU_FREQ); // Start at full speed
+    setCpuFrequencyMhz(CPU_FREQ);
 
     // Init Pins
     pinMode(TFT_BL, OUTPUT);
-    digitalWrite(TFT_BL, LOW); // Backlight off
+    digitalWrite(TFT_BL, LOW);
 
-    // Konfigurasi PWM untuk lampu latar
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     ledcAttach(TFT_BL, 5000, 8);
     #else
@@ -11534,154 +11633,34 @@ void setup() {
     analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
 
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
-        currentLine++;
-    }
-    Serial.println(F("> CORE SYSTEMS: OK"));
-
-    // --- Init TFT first to show boot screen ---
+    // --- Init TFT ---
     tft.init(170, 320);
     tft.setRotation(3);
     canvas.setTextWrap(false);
+    ledcWrite(0, 255); // Default brightness
 
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
-        drawBootScreen(bootStatusLines, currentLine + 1, 15);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    ledcWrite(LEDC_BACKLIGHT_CTRL, screenBrightness);
-    Serial.println(F("> RENDERER: ONLINE"));
-
-    // --- Init other peripherals ---
+    // --- Init Pixels ---
     pixels.begin();
     pixels.setBrightness(50);
     pixels.setPixelColor(0, pixels.Color(0, 0, 20));
     pixels.show();
 
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
-        drawBootScreen(bootStatusLines, currentLine + 1, 30);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.println(F("> POWER MGMT: OK"));
+    // Start Boot Sequence
+    bootStatusCount = 0;
+    addBootStatus("> CORE SYSTEMS..... [OK]", 10);
+    addBootStatus("> RENDERER......... [OK]", 15);
 
-    // Init Storage
-    Serial.println(F("Initializing Storage..."));
-    if (!LittleFS.begin(true)) {
-      Serial.println(F("⚠ LittleFS Mount Failed"));
-    }
-    if (beginSD()) {
-        sdCardMounted = true;
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> STORAGE.......... [SD OK]";
-    } else {
-        sdCardMounted = false;
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
-    }
-    if (currentLine < maxBootLines) {
-        drawBootScreen(bootStatusLines, currentLine + 1, 45);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.println(sdCardMounted ? F("> STORAGE: SD OK") : F("> STORAGE: NO SD"));
-
-    // --- Load Configs ---
-    Serial.println(F("Loading Configs..."));
-    loadConfig();
-    if (sdCardMounted) {
-        loadApiKeys();
-        loadChatHistoryFromSD();
-    }
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
-        drawBootScreen(bootStatusLines, currentLine + 1, 48);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.println(F("> CONFIGS: LOADED"));
-
-    // Init Audio
-    Serial.println(F("Initializing Audio..."));
-    initMusicPlayer();
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
-        drawBootScreen(bootStatusLines, currentLine + 1, 55);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.println(F("> AUDIO SUBSYSTEM: OK"));
-
-    // Init Radio
-    Serial.println(F("Initializing Radio FM..."));
-    Wire.begin(1, 2);
-    if (radio.init()) {
-        radio.setBand(RADIO_BAND_FM);
-        radio.attachReceiveRDS(RDS_process);
-        rds.attachServiceNameCallback(DisplayServiceName);
-        rds.attachTextCallback(DisplayText);
-        radio.setVolume(radioVolume);
-        radio.setFrequency(radioFrequency);
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
-        Serial.println(F("> RADIO FM: OK"));
-    } else {
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> RADIO FM......... [FAIL]";
-        Serial.println(F("> RADIO FM: FAILED (Not Found)"));
-    }
-
-    if (currentLine < maxBootLines) {
-        drawBootScreen(bootStatusLines, currentLine + 1, 65);
-        currentLine++;
-    }
+    // Initial render
+    const char* linesPtr[maxBootLines];
+    for (int i = 0; i < bootStatusCount; i++) linesPtr[i] = bootStatusLines[i].c_str();
+    drawBootScreen(linesPtr, bootStatusCount, bootProgress);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
-
-    // --- Connect to WiFi (Non-blocking) ---
-    Serial.println(F("Starting WiFi..."));
-    String savedSSID = sysConfig.ssid;
-    if (savedSSID.length() > 0) {
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(savedSSID.c_str(), sysConfig.password.c_str());
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [STARTING]";
-    } else {
-        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
-    }
-    if (currentLine < maxBootLines) {
-        drawBootScreen(bootStatusLines, currentLine + 1, 90);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-
-    // --- Finalize ---
-    pixels.setPixelColor(0, pixels.Color(0, 20, 0)); // Green light for success
-    pixels.show();
-    if (currentLine < maxBootLines) {
-        bootStatusLines[currentLine] = "> BOOT COMPLETE....";
-        drawBootScreen(bootStatusLines, currentLine + 1, 100);
-        currentLine++;
-    }
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.println(F("=== BOOT COMPLETE ==="));
-    Serial.println(F("Transitioning to Main Loop..."));
-    delay(500);
-
-
-    // --- Go to Main State ---
-    if (pinLockEnabled) {
-        currentState = STATE_PIN_LOCK;
-        stateAfterUnlock = STATE_MAIN_MENU;
-        pinInput = "";
-        cursorX = 0;
-        cursorY = 0;
-    } else {
-        currentState = STATE_MAIN_MENU;
-    }
-
-    menuSelection = 0;
+    // Set state to start phased initialization
+    currentState = STATE_BOOT;
+    lateInitPhase = 1;
     lastInputTime = millis();
     screenIsDirty = true;
-    refreshCurrentScreen();
 }
 
 void updateMusicPlayerState() {
@@ -11815,6 +11794,7 @@ void loop() {
 
   // Force redraw for states that are always animating
   switch (currentState) {
+    case STATE_BOOT:
     case STATE_MAIN_MENU: // For smooth scrolling
     case STATE_EARTHQUAKE: // For scrolling text
     case STATE_EARTHQUAKE_SETTINGS: // For smooth scrolling
