@@ -242,6 +242,9 @@ RadioPreset radioPresets[] = {
   {10770, "RRI Pro 2"}
 };
 int radioSelectedPreset = -1;
+bool isRadioSeeking = false;
+bool isRadioScanning = false;
+String radioStatusMsg = "";
 unsigned long lastRDSUpdate = 0;
 
 // ============ NEOPIXEL ============
@@ -382,11 +385,13 @@ struct SystemConfig {
   int pongBest;
   int snakeBest;
   int jumperBest;
+  int radioFreq;
+  int radioVol;
   int flappyBest;
   int breakoutBest;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 0, 0, 0, 0, 0, 0};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 10110, 8, 0, 0, 0, 0, 0, 0};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -1719,6 +1724,7 @@ void drawGameHubMenu();
 void drawRadioFM();
 void handleRadioFMInput();
 void updateRadioRDS();
+void radioScan();
 void drawMainMenuCool();
 void drawStarfield();
 void drawGameOfLife();
@@ -2977,6 +2983,8 @@ void initMusicPlayer() {
         isDFPlayerAvailable = true;
         // Ambil volume terakhir dari sysConfig agar tidak mengejutkan
         musicVol = sysConfig.musicVol;
+  radioFrequency = sysConfig.radioFreq;
+  radioVolume = sysConfig.radioVol;
         myDFPlayer.volume(musicVol);
 
         // Hitung total lagu di SD Card
@@ -6569,6 +6577,8 @@ void loadConfig() {
     sysConfig.musicVol = doc["music"]["vol"] | 15;
     sysConfig.lastTrack = doc["music"]["track"] | 1;
     sysConfig.lastTime = doc["music"]["time"] | 0;
+    sysConfig.radioFreq = doc["radio"]["freq"] | 10110;
+    sysConfig.radioVol = doc["radio"]["vol"] | 8;
     sysConfig.racingBest = doc["scores"]["racing"] | 0;
     sysConfig.pongBest = doc["scores"]["pong"] | 0;
     sysConfig.snakeBest = doc["scores"]["snake"] | 0;
@@ -6588,6 +6598,8 @@ void loadConfig() {
     sysConfig.musicVol = preferences.getInt("musicVol", 15);
     sysConfig.lastTrack = preferences.getInt("musicTrack", 1);
     sysConfig.lastTime = preferences.getInt("musicTime", 0);
+    sysConfig.radioFreq = preferences.getInt("radioFreq", 10110);
+    sysConfig.radioVol = preferences.getInt("radioVol", 8);
     sysConfig.racingBest = preferences.getInt("racingBest", 0);
     sysConfig.pongBest = preferences.getInt("pongBest", 0);
     sysConfig.snakeBest = preferences.getInt("snakeBest", 0);
@@ -6618,6 +6630,8 @@ void loadConfig() {
   pinLockEnabled = sysConfig.pinLockEnabled;
   currentPin = sysConfig.currentPin;
   musicVol = sysConfig.musicVol;
+  radioFrequency = sysConfig.radioFreq;
+  radioVolume = sysConfig.radioVol;
 }
 
 void savePrayerConfig() {
@@ -6730,6 +6744,8 @@ void saveConfig() {
   sysConfig.pinLockEnabled = pinLockEnabled;
   sysConfig.currentPin = currentPin;
   sysConfig.musicVol = musicVol;
+  sysConfig.radioFreq = radioFrequency;
+  sysConfig.radioVol = radioVolume;
   // ssid/pass are updated directly
 
   JsonDocument doc;
@@ -6747,6 +6763,8 @@ void saveConfig() {
   doc["music"]["vol"] = sysConfig.musicVol;
   doc["music"]["track"] = sysConfig.lastTrack;
   doc["music"]["time"] = sysConfig.lastTime;
+  doc["radio"]["freq"] = sysConfig.radioFreq;
+  doc["radio"]["vol"] = sysConfig.radioVol;
   doc["scores"]["racing"] = sysConfig.racingBest;
   doc["scores"]["pong"] = sysConfig.pongBest;
   doc["scores"]["snake"] = sysConfig.snakeBest;
@@ -6767,6 +6785,8 @@ void saveConfig() {
   preferences.putInt("musicVol", sysConfig.musicVol);
   preferences.putInt("musicTrack", sysConfig.lastTrack);
   preferences.putInt("musicTime", sysConfig.lastTime);
+  preferences.putInt("radioFreq", sysConfig.radioFreq);
+  preferences.putInt("radioVol", sysConfig.radioVol);
   preferences.putInt("racingBest", sysConfig.racingBest);
   preferences.putInt("pongBest", sysConfig.pongBest);
   preferences.putInt("snakeBest", sysConfig.snakeBest);
@@ -11122,6 +11142,18 @@ void drawRadioFM() {
   canvas.setCursor(SCREEN_WIDTH/2 + w/2 - 5, 105);
   canvas.print("MHz");
 
+  // Status Overlay
+  if (isRadioSeeking || isRadioScanning) {
+    canvas.fillRect(40, 70, SCREEN_WIDTH - 80, 50, COLOR_PANEL);
+    canvas.drawRect(40, 70, SCREEN_WIDTH - 80, 50, COLOR_ACCENT);
+    canvas.setTextSize(2);
+    canvas.setTextColor(COLOR_TEXT);
+    String s = isRadioSeeking ? "SEEKING..." : "SCANNING...";
+    canvas.getTextBounds(s, 0, 0, &x1, &y1, &w, &h);
+    canvas.setCursor(SCREEN_WIDTH/2 - w/2, 95);
+    canvas.print(s);
+  }
+
   // RDS Info
   canvas.setTextSize(1);
   canvas.setTextColor(COLOR_SUCCESS);
@@ -11181,8 +11213,8 @@ void drawRadioFM() {
   // Stereo/Bass
   canvas.setTextColor(COLOR_SECONDARY);
   canvas.setCursor(SCREEN_WIDTH/2 - 30, footerY);
-  canvas.print(radioStereo ? "STEREO" : "MONO");
-  if (radioBassBoost) {
+  canvas.print(info.stereo ? "STEREO" : "MONO");
+  if (radio.getBassBoost()) {
       canvas.setTextColor(COLOR_WARN);
       canvas.setCursor(SCREEN_WIDTH/2 + 15, footerY);
       canvas.print("BASS");
@@ -11212,12 +11244,13 @@ void handleRadioFMInput() {
   bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
 
   if (btnLeft && btnRight) {
+      saveConfig();
       changeState(STATE_MAIN_MENU);
       delay(200);
       return;
   }
 
-  if (btnUp) {
+  if (btnUp && !btnSelect) {
     if (radioVolume < 15) {
       radioVolume++;
       radio.setVolume(radioVolume);
@@ -11225,7 +11258,7 @@ void handleRadioFMInput() {
     }
     lastDebounce = currentMillis;
   }
-  if (btnDown) {
+  if (btnDown && !btnSelect) {
     if (radioVolume > 0) {
       radioVolume--;
       radio.setVolume(radioVolume);
@@ -11233,60 +11266,109 @@ void handleRadioFMInput() {
     }
     lastDebounce = currentMillis;
   }
+
   if (btnLeft) {
+    unsigned long start = millis();
+    while(digitalRead(BTN_LEFT) == BTN_ACT) {
+      if (millis() - start > 800) {
+        isRadioSeeking = true;
+        drawRadioFM();
+        radio.seekDown(true);
+        delay(300);
+        radioFrequency = radio.getFrequency();
+        radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+        rds.init();
+        isRadioSeeking = false;
+        ledSuccess();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
+    }
     radioFrequency -= 10;
     if (radioFrequency < 8700) radioFrequency = 10800;
     radio.setFrequency(radioFrequency);
     radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
     rds.init();
     ledQuickFlash();
-    lastDebounce = currentMillis;
+    lastDebounce = millis();
   }
+
   if (btnRight) {
+    unsigned long start = millis();
+    while(digitalRead(BTN_RIGHT) == BTN_ACT) {
+      if (millis() - start > 800) {
+        isRadioSeeking = true;
+        drawRadioFM();
+        radio.seekUp(true);
+        delay(300);
+        radioFrequency = radio.getFrequency();
+        radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+        rds.init();
+        isRadioSeeking = false;
+        ledSuccess();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
+    }
     radioFrequency += 10;
     if (radioFrequency > 10800) radioFrequency = 8700;
     radio.setFrequency(radioFrequency);
     radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
     rds.init();
     ledQuickFlash();
-    lastDebounce = currentMillis;
+    lastDebounce = millis();
   }
 
   if (btnSelect) {
-    unsigned long pressStart = millis();
+    unsigned long start = millis();
     while(digitalRead(BTN_SELECT) == BTN_ACT) {
-        if (millis() - pressStart > 800) {
-            showStatus("Seeking Up...", 1000);
-            radio.seekUp(true);
-            delay(300);
-            radioFrequency = radio.getFrequency();
-            radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
-            rds.init();
-            ledSuccess();
-            lastDebounce = millis();
-            return;
-        }
-        delay(10);
+      if (millis() - start > 1500) {
+        radioScan();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
     }
-    radioSelectedPreset = (radioSelectedPreset + 1) % 10;
-    radioFrequency = radioPresets[radioSelectedPreset].freq;
-    radio.setFrequency(radioFrequency);
-    radioRDS = ""; radioRT = "";
-    rds.init();
-    showStatus(radioPresets[radioSelectedPreset].name, 1000);
-    ledQuickFlash();
-    lastDebounce = currentMillis;
-  }
 
-  if (btnUp && btnSelect) {
+    if (digitalRead(BTN_UP) == BTN_ACT) {
+      radioBassBoost = !radioBassBoost;
+      radio.setBassBoost(radioBassBoost);
+      showStatus(radioBassBoost ? "Bass ON" : "Bass OFF", 1000);
+    } else if (digitalRead(BTN_DOWN) == BTN_ACT) {
       radioMute = !radioMute;
       radio.setMute(radioMute);
       showStatus(radioMute ? "Muted" : "Unmuted", 1000);
-      ledQuickFlash();
-      lastDebounce = currentMillis + 200;
+    } else {
+      radioSelectedPreset = (radioSelectedPreset + 1) % 10;
+      radioFrequency = radioPresets[radioSelectedPreset].freq;
+      radio.setFrequency(radioFrequency);
+      radioRDS = ""; radioRT = "";
+      rds.init();
+      showStatus(radioPresets[radioSelectedPreset].name, 1000);
+    }
+    ledQuickFlash();
+    lastDebounce = millis();
   }
 }
 
+void radioScan() {
+  isRadioScanning = true;
+  showStatus("Scanning Band...", 2000);
+  RADIO_FREQ originalFreq = radioFrequency;
+
+  // Basic scan: jump to next stations and show them
+  for(int i=0; i<5; i++) {
+    radio.seekUp(true);
+    delay(500);
+    radioFrequency = radio.getFrequency();
+    drawRadioFM();
+  }
+
+  isRadioScanning = false;
+  showStatus("Scan Complete", 1000);
+}
 void updateRadioRDS() {
   if (currentState != STATE_RADIO_FM) return;
   radio.checkRDS();
@@ -11401,6 +11483,16 @@ void setup() {
     bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
     drawBootScreen(bootStatusLines, ++currentLine, 30);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    // --- Load Configs ---
+    loadConfig();
+    if (sdCardMounted) {
+        loadApiKeys();
+        loadChatHistoryFromSD();
+    }
+    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
+    drawBootScreen(bootStatusLines, ++currentLine, 48);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+
 
     // Init Storage
     if (!LittleFS.begin(true)) {
@@ -11435,15 +11527,6 @@ void setup() {
     drawBootScreen(bootStatusLines, ++currentLine, 65);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // --- Load Configs ---
-    loadConfig();
-    if (sdCardMounted) {
-        loadApiKeys();
-        loadChatHistoryFromSD();
-    }
-    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
-    drawBootScreen(bootStatusLines, ++currentLine, 75);
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Connect to WiFi (Shorter Timeout) ---
     String savedSSID = sysConfig.ssid;
