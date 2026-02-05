@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#define SCREEN_WIDTH  320
+#define SCREEN_HEIGHT 170
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
@@ -98,10 +100,12 @@ void fillRectAlpha(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, u
   uint16_t b2 = color & 0x1F;
 
   for (int16_t j = y; j < y + h; j++) {
-    if (j < 0 || j >= 240) continue;
+    if (j < 0 || j >= SCREEN_HEIGHT) continue;
     for (int16_t i = x; i < x + w; i++) {
-      if (i < 0 || i >= 320) continue;
-      uint16_t color1 = buf[j * 320 + i];
+      if (i < 0 || i >= SCREEN_WIDTH) continue;
+      int32_t idx = (int32_t)j * SCREEN_WIDTH + i;
+      if (idx < 0 || idx >= (SCREEN_WIDTH * SCREEN_HEIGHT)) continue;
+      uint16_t color1 = buf[idx];
       uint16_t r1 = (color1 >> 11) & 0x1F;
       uint16_t g1 = (color1 >> 5) & 0x3F;
       uint16_t b1 = color1 & 0x1F;
@@ -110,7 +114,7 @@ void fillRectAlpha(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, u
       uint16_t g = (g1 * (255 - alpha) + g2 * alpha) >> 8;
       uint16_t b = (b1 * (255 - alpha) + b2 * alpha) >> 8;
 
-      buf[j * 320 + i] = (r << 11) | (g << 5) | b;
+      buf[idx] = (r << 11) | (g << 5) | b;
     }
   }
 }
@@ -205,8 +209,6 @@ typedef struct {
 #define BATTERY_PIN 7
 #define DFPLAYER_BUSY_PIN 6
 
-#define SCREEN_WIDTH  320
-#define SCREEN_HEIGHT 170
 
 // Gunakan Hardware SPI untuk TFT untuk Performa Maksimal
 // Pin MOSI (11) dan SCLK (12) sudah sesuai dengan default VSPI hardware
@@ -391,7 +393,7 @@ struct SystemConfig {
   int breakoutBest;
 };
 
-SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 10110, 8, 0, 0, 0, 0, 0, 0};
+SystemConfig sysConfig = {"", "", "ESP32", true, 80.0f, 80.0f, 80.0f, false, 255, false, "1234", 15, 1, 0, 0, 0, 0, 0, 10110, 8, 0, 0};
 
 // ============ GLOBAL VARIABLES ============
 int screenBrightness = 255;
@@ -2214,9 +2216,14 @@ void fetchBMKGData() {
         eq.depth = depthStr.substring(0, depthStr.indexOf(' ')).toFloat();
 
         // Parse DateTime: 2026-02-01T13:29:11+00:00
-        struct tm tm_struct;
-        strptime(item["DateTime"].as<const char*>(), "%Y-%m-%dT%H:%M:%S%z", &tm_struct);
-        eq.time = (uint64_t)mktime(&tm_struct) * 1000;
+        struct tm tm_struct = {0};
+        const char* dtStr = item["DateTime"].as<const char*>();
+        if (dtStr) {
+          strptime(dtStr, "%Y-%m-%dT%H:%M:%S%z", &tm_struct);
+          eq.time = (uint64_t)mktime(&tm_struct) * 1000;
+        } else {
+          eq.time = (uint64_t)millis();
+        }
 
         eq.tsunami = 0;
         eq.magType = "M";
@@ -2545,25 +2552,30 @@ void updateLeaderboard(int score, String category, String difficulty, int streak
 }
 
 void saveLeaderboard() {
+  preferences.begin("quiz-stats", false);
   String data = "";
   for (int i = 0; i < leaderboardCount; i++) data += String(leaderboard[i].score) + "," + String(leaderboard[i].streak) + ";";
   preferences.putString("quizLeaderboard", data);
+  preferences.end();
 }
 
 void loadLeaderboard() {
+  preferences.begin("quiz-stats", true);
   String data = preferences.getString("quizLeaderboard", "");
   leaderboardCount = 0;
-  if (data.length() == 0) return;
-  int idx = 0;
-  while (idx < data.length() && leaderboardCount < MAX_LEADERBOARD) {
-    int comma = data.indexOf(",", idx), semi = data.indexOf(";", idx);
-    if (comma == -1 || semi == -1) break;
-    leaderboard[leaderboardCount].score = data.substring(idx, comma).toInt();
-    leaderboard[leaderboardCount].streak = data.substring(comma + 1, semi).toInt();
-    leaderboard[leaderboardCount].name = "Player";
-    leaderboardCount++;
-    idx = semi + 1;
+  if (data.length() > 0) {
+    int idx = 0;
+    while (idx < data.length() && leaderboardCount < MAX_LEADERBOARD) {
+      int comma = data.indexOf(",", idx), semi = data.indexOf(";", idx);
+      if (comma == -1 || semi == -1) break;
+      leaderboard[leaderboardCount].score = data.substring(idx, comma).toInt();
+      leaderboard[leaderboardCount].streak = data.substring(comma + 1, semi).toInt();
+      leaderboard[leaderboardCount].name = "Player";
+      leaderboardCount++;
+      idx = semi + 1;
+    }
   }
+  preferences.end();
 }
 
 // ===== DRAW QUIZ UI (SIMPLE) =====
@@ -11594,20 +11606,24 @@ void setup() {
 
             // ===== ULTIMATE TIC-TAC-TOE INITIALIZATION =====
             Serial.println(F("Initializing Ultimate Tic-Tac-Toe..."));
+            preferences.begin("uttt-stats", true);
             utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
             utttStats.gamesWon = preferences.getInt("utttWon", 0);
             utttStats.gamesLost = preferences.getInt("utttLost", 0);
             utttStats.gamesTied = preferences.getInt("utttTied", 0);
+            preferences.end();
             utttStats.totalMoves = 0;
             Serial.println(F("Ultimate Tic-Tac-Toe ready"));
 
             Serial.println(F("Initializing Trivia Quiz..."));
+            preferences.begin("quiz-settings", true);
             quizSettings.categoryId = preferences.getInt("quizCatId", -1);
             quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
             quizSettings.difficulty = preferences.getInt("quizDiff", 1);
             quizSettings.questionCount = preferences.getInt("quizCount", 10);
             quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
             quizSettings.soundEnabled = preferences.getBool("quizSound", true);
+            preferences.end();
             loadLeaderboard();
             Serial.println(F("Trivia Quiz ready"));
 
@@ -11636,6 +11652,7 @@ void setup() {
     }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
     Serial.println(F("=== BOOT COMPLETE ==="));
+    Serial.println(F("Transitioning to Main Loop..."));
     delay(500);
 
 
@@ -11673,6 +11690,11 @@ void updateMusicPlayerState() {
 
 // ============ LOOP ============
 void loop() {
+  static bool firstLoop = true;
+  if (firstLoop) {
+    Serial.println(F("=== MAIN LOOP STARTED ==="));
+    firstLoop = false;
+  }
   unsigned long currentMillis = millis();
   perfLoopCount++;
   if (currentMillis - perfLastTime >= 1000) {
