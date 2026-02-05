@@ -11422,22 +11422,16 @@ void drawFileViewer() {
 
 
 void setup() {
-    const int maxBootLines = 12;
-    const char* bootStatusLines[maxBootLines] = {
-        "> CORE SYSTEMS.....",
-        "> RENDERER.........",
-        "> POWER MGMT.......",
-        "> STORAGE..........",
-        "> AUDIO SUBSYSTEM..",
-        "> RADIO FM.........",
-        "> CONFIGS..........",
-        "> NETWORK..........",
-        "> BOOT COMPLETE...."
-    };
-    int currentLine = 0;
-
     // --- Init Core Systems ---
     Serial.begin(115200);
+    delay(500); // Wait for Serial Monitor
+    Serial.println(F("\n=== AI-POCKET S3 BOOTING ==="));
+
+    const int maxBootLines = 16;
+    const char* bootStatusLines[maxBootLines];
+    for (int i = 0; i < maxBootLines; i++) bootStatusLines[i] = "";
+    int currentLine = 0;
+
     setCpuFrequencyMhz(CPU_FREQ); // Start at full speed
 
     // Init Pins
@@ -11446,11 +11440,10 @@ void setup() {
 
     // Konfigurasi PWM untuk lampu latar
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-    // ledcSetup(0, 5000, 8); // ledcSetup is deprecated in ESP32 Arduino Core 3.x
-    ledcAttach(TFT_BL, 5000, 8); // Attach TFT_BL pin to a new channel with frequency and resolution
+    ledcAttach(TFT_BL, 5000, 8);
     #else
-    ledcSetup(0, 5000, 8); // Channel 0, 5kHz, 8-bit resolution
-    ledcAttachPin(TFT_BL, 0); // Attach TFT_BL pin to channel 0
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(TFT_BL, 0);
     #endif
 
     pinMode(LED_BUILTIN, OUTPUT);
@@ -11461,74 +11454,114 @@ void setup() {
     pinMode(BTN_RIGHT, INPUT);
     pinMode(BTN_BACK, INPUT);
     pinMode(BATTERY_PIN, INPUT);
-    analogSetPinAttenuation(BATTERY_PIN, ADC_11db); // Set attenuation for accurate battery reading
+    analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
     pinMode(DFPLAYER_BUSY_PIN, INPUT_PULLUP);
-    bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
-    currentLine++;
+
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> CORE SYSTEMS..... [OK]";
+        currentLine++;
+    }
+    Serial.println(F("> CORE SYSTEMS: OK"));
 
     // --- Init TFT first to show boot screen ---
     tft.init(170, 320);
     tft.setRotation(3);
     canvas.setTextWrap(false);
-    bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
-    drawBootScreen(bootStatusLines, ++currentLine, 15);
+
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> RENDERER......... [ONLINE]";
+        drawBootScreen(bootStatusLines, currentLine + 1, 15);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    ledcWrite(LEDC_BACKLIGHT_CTRL, screenBrightness); // Set initial brightness
+    ledcWrite(LEDC_BACKLIGHT_CTRL, screenBrightness);
+    Serial.println(F("> RENDERER: ONLINE"));
 
     // --- Init other peripherals ---
     pixels.begin();
     pixels.setBrightness(50);
-    pixels.setPixelColor(0, pixels.Color(0, 0, 20)); // Blue light for booting
+    pixels.setPixelColor(0, pixels.Color(0, 0, 20));
     pixels.show();
-    bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 30);
+
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
+        drawBootScreen(bootStatusLines, currentLine + 1, 30);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    Serial.println(F("> POWER MGMT: OK"));
+
     // Init Storage
+    Serial.println(F("Initializing Storage..."));
     if (!LittleFS.begin(true)) {
-      Serial.println("⚠ LittleFS Mount Failed");
+      Serial.println(F("⚠ LittleFS Mount Failed"));
     }
     if (beginSD()) {
         sdCardMounted = true;
-        bootStatusLines[currentLine] = "> STORAGE.......... [SD OK]";
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> STORAGE.......... [SD OK]";
     } else {
         sdCardMounted = false;
-        bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> STORAGE.......... [NO SD]";
     }
-    drawBootScreen(bootStatusLines, ++currentLine, 45);
+    if (currentLine < maxBootLines) {
+        drawBootScreen(bootStatusLines, currentLine + 1, 45);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    Serial.println(sdCardMounted ? F("> STORAGE: SD OK") : F("> STORAGE: NO SD"));
 
     // --- Load Configs ---
+    Serial.println(F("Loading Configs..."));
     loadConfig();
     if (sdCardMounted) {
         loadApiKeys();
         loadChatHistoryFromSD();
     }
-    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
-    drawBootScreen(bootStatusLines, ++currentLine, 48);
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
+        drawBootScreen(bootStatusLines, currentLine + 1, 48);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-
+    Serial.println(F("> CONFIGS: LOADED"));
 
     // Init Audio
+    Serial.println(F("Initializing Audio..."));
     initMusicPlayer();
-    bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 55);
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
+        drawBootScreen(bootStatusLines, currentLine + 1, 55);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+    Serial.println(F("> AUDIO SUBSYSTEM: OK"));
 
     // Init Radio
+    Serial.println(F("Initializing Radio FM..."));
     Wire.begin(1, 2);
-    radio.init();
-    radio.setBand(RADIO_BAND_FM);
-    radio.attachReceiveRDS(RDS_process);
-    rds.attachServiceNameCallback(DisplayServiceName);
-    rds.attachTextCallback(DisplayText);
-    radio.setVolume(radioVolume);
-    radio.setFrequency(radioFrequency);
-    bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
-    drawBootScreen(bootStatusLines, ++currentLine, 65);
+    if (radio.init()) {
+        radio.setBand(RADIO_BAND_FM);
+        radio.attachReceiveRDS(RDS_process);
+        rds.attachServiceNameCallback(DisplayServiceName);
+        rds.attachTextCallback(DisplayText);
+        radio.setVolume(radioVolume);
+        radio.setFrequency(radioFrequency);
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> RADIO FM......... [OK]";
+        Serial.println(F("> RADIO FM: OK"));
+    } else {
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> RADIO FM......... [FAIL]";
+        Serial.println(F("> RADIO FM: FAILED (Not Found)"));
+    }
+
+    if (currentLine < maxBootLines) {
+        drawBootScreen(bootStatusLines, currentLine + 1, 65);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
 
     // --- Connect to WiFi (Shorter Timeout) ---
+    Serial.println(F("Connecting to WiFi..."));
     String savedSSID = sysConfig.ssid;
     if (savedSSID.length() > 0) {
         WiFi.mode(WIFI_STA);
@@ -11541,66 +11574,69 @@ void setup() {
         }
         if (WiFi.status() == WL_CONNECTED) {
             configTime(25200, 0, "pool.ntp.org", "time.nist.gov");
-            bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
+            if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [ONLINE]";
+            Serial.println(F("> NETWORK: ONLINE"));
 
-        // Initial location/prayer times fetch
-        Serial.println("Initializing Prayer Times system...");
+            // Initial location/prayer times fetch
+            Serial.println(F("Initializing Prayer Times system..."));
+            loadPrayerConfig();
+            if (!userLocation.isValid || prayerSettings.autoLocation) {
+              fetchUserLocation();
+            } else {
+              fetchPrayerTimes();
+            }
 
-        // Load settings from JSON storage (SD/LittleFS)
-        loadPrayerConfig();
+            // ===== EARTHQUAKE MONITOR INITIALIZATION =====
+            Serial.println(F("Initializing Earthquake Monitor..."));
+            loadEQConfig();
+            fetchEarthquakeData();
+            Serial.println(F("Earthquake Monitor ready"));
 
-        if (!userLocation.isValid || prayerSettings.autoLocation) {
-          fetchUserLocation();
-        } else {
-          fetchPrayerTimes();
-        }
+            // ===== ULTIMATE TIC-TAC-TOE INITIALIZATION =====
+            Serial.println(F("Initializing Ultimate Tic-Tac-Toe..."));
+            utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
+            utttStats.gamesWon = preferences.getInt("utttWon", 0);
+            utttStats.gamesLost = preferences.getInt("utttLost", 0);
+            utttStats.gamesTied = preferences.getInt("utttTied", 0);
+            utttStats.totalMoves = 0;
+            Serial.println(F("Ultimate Tic-Tac-Toe ready"));
 
-        // ===== EARTHQUAKE MONITOR INITIALIZATION =====
-        Serial.println("Initializing Earthquake Monitor...");
-
-        // Load settings
-        loadEQConfig();
-
-        // Initial data fetch
-        fetchEarthquakeData();
-
-        Serial.println("Earthquake Monitor ready");
-
-        // ===== ULTIMATE TIC-TAC-TOE INITIALIZATION =====
-        Serial.println("Initializing Ultimate Tic-Tac-Toe...");
-        utttStats.gamesPlayed = preferences.getInt("utttPlayed", 0);
-        utttStats.gamesWon = preferences.getInt("utttWon", 0);
-        utttStats.gamesLost = preferences.getInt("utttLost", 0);
-        utttStats.gamesTied = preferences.getInt("utttTied", 0);
-        utttStats.totalMoves = 0;
-        Serial.println("Ultimate Tic-Tac-Toe ready");
-
-        Serial.println("Initializing Trivia Quiz...");
-        quizSettings.categoryId = preferences.getInt("quizCatId", -1);
-        quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
-        quizSettings.difficulty = preferences.getInt("quizDiff", 1);
-        quizSettings.questionCount = preferences.getInt("quizCount", 10);
-        quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
-        quizSettings.soundEnabled = preferences.getBool("quizSound", true);
-        loadLeaderboard();
-        Serial.println("Trivia Quiz ready");
+            Serial.println(F("Initializing Trivia Quiz..."));
+            quizSettings.categoryId = preferences.getInt("quizCatId", -1);
+            quizSettings.categoryName = preferences.getString("quizCatName", "Any Category");
+            quizSettings.difficulty = preferences.getInt("quizDiff", 1);
+            quizSettings.questionCount = preferences.getInt("quizCount", 10);
+            quizSettings.timerSeconds = preferences.getInt("quizTimer", 10);
+            quizSettings.soundEnabled = preferences.getBool("quizSound", true);
+            loadLeaderboard();
+            Serial.println(F("Trivia Quiz ready"));
 
         } else {
-            bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
+            if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [OFFLINE]";
+            Serial.println(F("> NETWORK: OFFLINE"));
         }
     } else {
-        bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
+        if (currentLine < maxBootLines) bootStatusLines[currentLine] = "> NETWORK.......... [SKIPPED]";
+        Serial.println(F("> NETWORK: SKIPPED"));
     }
-    drawBootScreen(bootStatusLines, ++currentLine, 90);
+
+    if (currentLine < maxBootLines) {
+        drawBootScreen(bootStatusLines, currentLine + 1, 90);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // --- Finalize ---
     pixels.setPixelColor(0, pixels.Color(0, 20, 0)); // Green light for success
     pixels.show();
-    bootStatusLines[currentLine] = "> BOOT COMPLETE....";
-    drawBootScreen(bootStatusLines, ++currentLine, 100);
+    if (currentLine < maxBootLines) {
+        bootStatusLines[currentLine] = "> BOOT COMPLETE....";
+        drawBootScreen(bootStatusLines, currentLine + 1, 100);
+        currentLine++;
+    }
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    delay(500); // Short delay to see the complete message
+    Serial.println(F("=== BOOT COMPLETE ==="));
+    delay(500);
 
 
     // --- Go to Main State ---
