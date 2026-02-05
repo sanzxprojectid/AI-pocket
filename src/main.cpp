@@ -3271,7 +3271,6 @@ const uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // New helper functions to manage SPI bus between TFT and SD Card
 bool beginSD() {
   // Gunakan bus SPI khusus untuk SD Card
-  spiSD.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, -1);
   if (SD.begin(SDCARD_CS, spiSD)) {
     return true;
   }
@@ -6009,6 +6008,7 @@ void drawFileManager() {
   }
 
   if (fileListCount == 0) {
+            delay(100);
     if (beginSD()) {
       File root = SD.open("/");
       File file = root.openNextFile();
@@ -6476,6 +6476,7 @@ void clearChatHistory() {
     return;
   }
   
+            delay(100);
   if (beginSD()) {
     if (SD.exists(CHAT_HISTORY_FILE)) {
       if (SD.remove(CHAT_HISTORY_FILE)) {
@@ -9576,6 +9577,7 @@ void saveWikiBookmark() {
     return;
   }
 
+            delay(100);
   if (beginSD()) {
     File file = SD.open("/wiki_bookmarks.txt", FILE_APPEND);
     if (file) {
@@ -11313,6 +11315,7 @@ void handleRadioFMInput() {
     }
     radioFrequency -= 10;
     if (radioFrequency < 8700) radioFrequency = 10800;
+                if (radioFrequency < 8700 || radioFrequency > 10850) radioFrequency = 10110;
     radio.setFrequency(radioFrequency);
     radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
     rds.init();
@@ -11340,6 +11343,7 @@ void handleRadioFMInput() {
     }
     radioFrequency += 10;
     if (radioFrequency > 10800) radioFrequency = 8700;
+                if (radioFrequency < 8700 || radioFrequency > 10850) radioFrequency = 10110;
     radio.setFrequency(radioFrequency);
     radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
     rds.init();
@@ -11369,6 +11373,7 @@ void handleRadioFMInput() {
     } else {
       radioSelectedPreset = (radioSelectedPreset + 1) % 10;
       radioFrequency = radioPresets[radioSelectedPreset].freq;
+                if (radioFrequency < 8700 || radioFrequency > 10850) radioFrequency = 10110;
       radio.setFrequency(radioFrequency);
       radioRDS = ""; radioRT = "";
       rds.init();
@@ -11454,6 +11459,7 @@ void updateLateInit() {
 
     switch(lateInitPhase) {
         case 1: // Storage
+            delay(100);
             if (beginSD()) {
                 sdCardMounted = true;
                 addBootStatus("> STORAGE.......... [SD OK]", 20);
@@ -11461,6 +11467,7 @@ void updateLateInit() {
                 sdCardMounted = false;
                 addBootStatus("> STORAGE.......... [NO SD]", 20);
             }
+            yield();
             if (LittleFS.begin(true)) {
                 addBootStatus("> FILESYSTEM....... [OK]", 30);
             } else {
@@ -11470,7 +11477,7 @@ void updateLateInit() {
             break;
         case 2: // Config
             loadConfig();
-            ledcWrite(0, screenBrightness);
+            ledcWrite(LEDC_BACKLIGHT_CTRL, screenBrightness);
             if (sdCardMounted) {
                 loadApiKeys();
                 loadChatHistoryFromSD();
@@ -11484,13 +11491,13 @@ void updateLateInit() {
             lateInitPhase = 4;
             break;
         case 4: // Radio
-            Wire.begin(1, 2);
             if (radio.init()) {
                 radio.setBand(RADIO_BAND_FM);
                 radio.attachReceiveRDS(RDS_process);
                 rds.attachServiceNameCallback(DisplayServiceName);
                 rds.attachTextCallback(DisplayText);
                 radio.setVolume(radioVolume);
+                if (radioFrequency < 8700 || radioFrequency > 10850) radioFrequency = 10110;
                 radio.setFrequency(radioFrequency);
                 addBootStatus("> RADIO FM......... [OK]", 75);
             } else {
@@ -11637,7 +11644,7 @@ void setup() {
     tft.init(170, 320);
     tft.setRotation(3);
     canvas.setTextWrap(false);
-    ledcWrite(0, 255); // Default brightness
+    ledcWrite(LEDC_BACKLIGHT_CTRL, 255); // Default brightness
 
     // --- Init Pixels ---
     pixels.begin();
@@ -11658,6 +11665,11 @@ void setup() {
 
     // Set state to start phased initialization
     currentState = STATE_BOOT;
+    // Init I2C for Radio
+    Wire.begin(1, 2);
+
+    // Init SPI for SD
+    spiSD.begin(SDCARD_SCK, SDCARD_MISO, SDCARD_MOSI, -1);
     lateInitPhase = 1;
     lastInputTime = millis();
     screenIsDirty = true;
@@ -12548,6 +12560,7 @@ void loop() {
           if (fileListCount > 0) {
             String selectedFile = fileList[fileListSelection].name;
             showStatus("Opening " + selectedFile, 500);
+            delay(100);
             if (beginSD()) {
               File file = SD.open("/" + selectedFile, FILE_READ);
               if (file) {
