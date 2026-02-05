@@ -1,0 +1,207 @@
+<<<<<<< SEARCH
+void handleRadioFMInput() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastDebounce < 200) return;
+
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnLeft = (digitalRead(BTN_LEFT) == BTN_ACT);
+  bool btnRight = (digitalRead(BTN_RIGHT) == BTN_ACT);
+  bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
+
+  if (btnLeft && btnRight) {
+      changeState(STATE_MAIN_MENU);
+      delay(200);
+      return;
+  }
+
+  if (btnUp) {
+    if (radioVolume < 15) {
+      radioVolume++;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnDown) {
+    if (radioVolume > 0) {
+      radioVolume--;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnLeft) {
+    radioFrequency -= 10;
+    if (radioFrequency < 8700) radioFrequency = 10800;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+  if (btnRight) {
+    radioFrequency += 10;
+    if (radioFrequency > 10800) radioFrequency = 8700;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+
+  if (btnSelect) {
+    unsigned long pressStart = millis();
+    while(digitalRead(BTN_SELECT) == BTN_ACT) {
+        if (millis() - pressStart > 800) {
+            showStatus("Seeking Up...", 1000);
+            radio.seekUp(true);
+            delay(300);
+            radioFrequency = radio.getFrequency();
+            radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+            rds.init();
+            ledSuccess();
+            lastDebounce = millis();
+            return;
+        }
+        delay(10);
+    }
+    radioSelectedPreset = (radioSelectedPreset + 1) % 10;
+    radioFrequency = radioPresets[radioSelectedPreset].freq;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = "";
+    rds.init();
+    showStatus(radioPresets[radioSelectedPreset].name, 1000);
+    ledQuickFlash();
+    lastDebounce = currentMillis;
+  }
+
+  if (btnUp && btnSelect) {
+      radioMute = !radioMute;
+      radio.setMute(radioMute);
+      showStatus(radioMute ? "Muted" : "Unmuted", 1000);
+      ledQuickFlash();
+      lastDebounce = currentMillis + 200;
+  }
+}
+=======
+void handleRadioFMInput() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastDebounce < 200) return;
+
+  bool btnUp = (digitalRead(BTN_UP) == BTN_ACT);
+  bool btnDown = (digitalRead(BTN_DOWN) == BTN_ACT);
+  bool btnLeft = (digitalRead(BTN_LEFT) == BTN_ACT);
+  bool btnRight = (digitalRead(BTN_RIGHT) == BTN_ACT);
+  bool btnSelect = (digitalRead(BTN_SELECT) == BTN_ACT);
+
+  if (btnLeft && btnRight) {
+      saveConfig();
+      changeState(STATE_MAIN_MENU);
+      delay(200);
+      return;
+  }
+
+  if (btnUp && !btnSelect) {
+    if (radioVolume < 15) {
+      radioVolume++;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+  if (btnDown && !btnSelect) {
+    if (radioVolume > 0) {
+      radioVolume--;
+      radio.setVolume(radioVolume);
+      ledQuickFlash();
+    }
+    lastDebounce = currentMillis;
+  }
+
+  if (btnLeft) {
+    unsigned long start = millis();
+    while(digitalRead(BTN_LEFT) == BTN_ACT) {
+      if (millis() - start > 800) {
+        isRadioSeeking = true;
+        drawRadioFM();
+        radio.seekDown(true);
+        delay(300);
+        radioFrequency = radio.getFrequency();
+        radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+        rds.init();
+        isRadioSeeking = false;
+        ledSuccess();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
+    }
+    radioFrequency -= 10;
+    if (radioFrequency < 8700) radioFrequency = 10800;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = millis();
+  }
+
+  if (btnRight) {
+    unsigned long start = millis();
+    while(digitalRead(BTN_RIGHT) == BTN_ACT) {
+      if (millis() - start > 800) {
+        isRadioSeeking = true;
+        drawRadioFM();
+        radio.seekUp(true);
+        delay(300);
+        radioFrequency = radio.getFrequency();
+        radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+        rds.init();
+        isRadioSeeking = false;
+        ledSuccess();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
+    }
+    radioFrequency += 10;
+    if (radioFrequency > 10800) radioFrequency = 8700;
+    radio.setFrequency(radioFrequency);
+    radioRDS = ""; radioRT = ""; radioSelectedPreset = -1;
+    rds.init();
+    ledQuickFlash();
+    lastDebounce = millis();
+  }
+
+  if (btnSelect) {
+    unsigned long start = millis();
+    while(digitalRead(BTN_SELECT) == BTN_ACT) {
+      if (millis() - start > 1500) {
+        radioScan();
+        lastDebounce = millis();
+        return;
+      }
+      delay(10);
+    }
+
+    if (digitalRead(BTN_UP) == BTN_ACT) {
+      radioBassBoost = !radioBassBoost;
+      radio.setBassBoost(radioBassBoost);
+      showStatus(radioBassBoost ? "Bass ON" : "Bass OFF", 1000);
+    } else if (digitalRead(BTN_DOWN) == BTN_ACT) {
+      radioMute = !radioMute;
+      radio.setMute(radioMute);
+      showStatus(radioMute ? "Muted" : "Unmuted", 1000);
+    } else {
+      radioSelectedPreset = (radioSelectedPreset + 1) % 10;
+      radioFrequency = radioPresets[radioSelectedPreset].freq;
+      radio.setFrequency(radioFrequency);
+      radioRDS = ""; radioRT = "";
+      rds.init();
+      showStatus(radioPresets[radioSelectedPreset].name, 1000);
+    }
+    ledQuickFlash();
+    lastDebounce = millis();
+  }
+}
+>>>>>>> REPLACE
