@@ -11422,7 +11422,7 @@ void drawFileViewer() {
 
 
 void setup() {
-    const int maxBootLines = 9;
+    const int maxBootLines = 12;
     const char* bootStatusLines[maxBootLines] = {
         "> CORE SYSTEMS.....",
         "> RENDERER.........",
@@ -11483,17 +11483,6 @@ void setup() {
     bootStatusLines[currentLine] = "> POWER MGMT....... [OK]";
     drawBootScreen(bootStatusLines, ++currentLine, 30);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-    // --- Load Configs ---
-    loadConfig();
-    if (sdCardMounted) {
-        loadApiKeys();
-        loadChatHistoryFromSD();
-    }
-    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
-    drawBootScreen(bootStatusLines, ++currentLine, 48);
-    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-
-
     // Init Storage
     if (!LittleFS.begin(true)) {
       Serial.println("⚠ LittleFS Mount Failed");
@@ -11508,6 +11497,17 @@ void setup() {
     drawBootScreen(bootStatusLines, ++currentLine, 45);
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
+    // --- Load Configs ---
+    loadConfig();
+    if (sdCardMounted) {
+        loadApiKeys();
+        loadChatHistoryFromSD();
+    }
+    bootStatusLines[currentLine] = "> CONFIGS.......... [LOADED]";
+    drawBootScreen(bootStatusLines, ++currentLine, 48);
+    tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
+
+
     // Init Audio
     initMusicPlayer();
     bootStatusLines[currentLine] = "> AUDIO SUBSYSTEM.. [OK]";
@@ -11515,7 +11515,7 @@ void setup() {
     tft.drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 
     // Init Radio
-    Wire.begin(15, 16);
+    Wire.begin(1, 2);
     radio.init();
     radio.setBand(RADIO_BAND_FM);
     radio.attachReceiveRDS(RDS_process);
